@@ -324,7 +324,7 @@ const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
 
 function banner() {
-  if (opts.stdio) return stdioSend('ready', { version: VERSION, models: Object.entries(AGENTS).map(([id, name]) => ({ id, name })), modes: MODES.map(m => ({ id: m, name: MODE_NAME[m], desc: MODE_DESC[m] })), commands: SLASH.map(x => x.trim()), cwd: S.cwd, chatId: S.chatId || null, title: S.title || '' });
+  if (opts.stdio) return stdioSend('ready', { version: VERSION, shell: sysEnv.shellName, models: Object.entries(AGENTS).map(([id, name]) => ({ id, name })), modes: MODES.map(m => ({ id: m, name: MODE_NAME[m], desc: MODE_DESC[m] })), commands: SLASH.map(x => x.trim()), cwd: S.cwd, chatId: S.chatId || null, title: S.title || '' });
   const sess = S.chatId ? c.dim(S.chatId.slice(0, 8)) : c.dim('nouvelle');
   ui.box([
     `${c.bold(c.accent('FS-CLI'))} ${c.dim('v' + VERSION + ' · France Student AI')}`,

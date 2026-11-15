@@ -19,12 +19,13 @@ window.acquireVsCodeApi = () => ({ postMessage: m => window.sent.push(m), setSta
 <script>
 const E = ev => window.postMessage({ type: 'event', ev }, '*');
 const steps = [
-  () => E({ type: 'ready', models: [{ id: '-2003', name: 'Claude Sonnet 5.5' }, { id: '-2001', name: 'Claude Opus 5.5' }], modes: [{ id: 'auto' }, { id: 'edits' }, { id: 'ask' }, { id: 'plan' }], commands: ['/new', '/plan', '/changes'] }),
+  () => E({ type: 'ready', shell: 'Windows PowerShell 5.1', models: [{ id: '-2003', name: 'Claude Sonnet 5.5' }, { id: '-2001', name: 'Claude Opus 5.5' }], modes: [{ id: 'auto' }, { id: 'edits' }, { id: 'ask' }, { id: 'plan' }], commands: ['/new', '/plan', '/changes'] }),
   () => E({ type: 'status', model: 'Claude Sonnet 5.5', modelId: -2003, mode: 'edits', cwd: 'C:\\Users\\moi\\monsite', ctx: 12, title: 'Ajoute un formulaire de contact' }),
   () => window.postMessage({ type: 'context', ctx: { rel: 'src/app.js', start: 12, end: 20, lines: 9 }, enabled: true }, '*'),
   () => { document.querySelector('textarea').value = 'Ajoute un formulaire de contact'; document.querySelector('.send').click(); },
   () => E({ type: 'busy', busy: true }),
   () => E({ type: 'spinner', label: 'Élaboration…' }),
+  () => E({ type: 'thinking', delta: "Je dois d'abord regarder la structure du site." }),
   () => E({ type: 'tool', name: 'list_dir', tag: '▤', label: 'Lister', detail: '.', explore: true }),
   () => E({ type: 'toolDone', ok: true }),
   () => E({ type: 'tool', name: 'read_file', tag: '◇', label: 'Lire', detail: 'index.html', explore: true }),
@@ -35,7 +36,7 @@ const steps = [
   () => E({ type: 'tool', name: 'edit_file', tag: '✎', label: 'Modifier', detail: 'index.html', explore: false }),
   () => E({ type: 'toolDone', ok: true }),
   () => E({ type: 'diff', added: 3, removed: 1, lines: [{ t: ' ', n: 11, line: '  <main>' }, { t: '-', n: 12, line: '    <p>Bientôt</p>' }, { t: '+', n: 12, line: '    <form id="contact">' }, { t: '+', n: 13, line: '      <input name="email" type="email">' }, { t: '+', n: 14, line: '    </form>' }, { t: ' ', n: 15, line: '  </main>' }] }),
-  () => E({ type: 'tool', name: 'shell', tag: '>_', label: 'Commande', detail: 'npm test', explore: false }),
+  () => E({ type: 'tool', name: 'shell', tag: '>_', label: 'Commande', detail: 'npm test', raw: 'cd monsite\nnpm test -- --reporter dot', explore: false }),
   () => E({ type: 'select', id: 1, title: 'Lancer cette commande ? npm test', detail: 'npm test\n(dossier : C:\\Users\\moi\\monsite)', options: ['Oui', 'Oui, et ne plus demander pour les commandes', 'Non'], defaultIndex: 0 }),
   () => { document.querySelector('.ask .opt').click(); },
   () => E({ type: 'toolLive', line: '> monsite@1.0.0 test' }),

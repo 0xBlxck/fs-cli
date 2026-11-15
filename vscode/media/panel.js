@@ -188,8 +188,8 @@
     toBottom();
   }
   function aiText(delta) {
-    endExplore();
-    if (!S.ai) { S.ai = { el: add(h('div', 'msg-ai')), text: '' }; S.tool = null; }
+    thinkEnd();
+    if (!S.ai) { S.ai = { el: add(h('div', 'tl msg-ai')), text: '' }; S.tool = null; }
     S.ai.text += delta;
     if (!raf) raf = requestAnimationFrame(() => renderAI(false));
   }
@@ -200,73 +200,86 @@
     S.ai = null;
   }
 
-  // ── actions de l'agent ──
-  const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
+  // ── actions de l'agent : style « fil » (puce + nom de l'outil en gras + boîte IN / OUT), comme Claude Code ──
+  const TOOL_NAME = { python: 'Python', read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List', grep: 'Grep', glob: 'Glob', fetch_url: 'Fetch', web_search: 'Search' };
+  const PATH_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_dir']);
+  const IN_TOOLS = new Set(['shell', 'python']);
   function firstPath(detail) { const m = String(detail || '').match(/^"([^"]+)"|^(\S+)/); return m ? (m[1] || m[2]) : ''; }
-  function toolStart(ev) {
-    aiEnd();
-    if (ev.explore) {
-      if (S.explore && S.explore.el === lastContent()) { exploreAdd(ev); return; }
-      const el = h('div', 'tool running');
-      const row = h('div', 'row'); row.append(h('span', 'dot'), h('span', 'label', 'Exploration…'));
-      const sub = h('div', 'sub'); el.append(row, sub);
-      row.onclick = () => sub.hidden = !sub.hidden;
-      S.explore = { el, row, sub, n: 0, err: false }; S.tool = null;
-      add(el); exploreAdd(ev); return;
-    }
-    endExplore();
-    const el = h('div', 'tool running');
-    const row = h('div', 'row');
-    row.append(h('span', 'dot'));
-    if (ev.tag && ev.tag.length <= 4) row.append(h('span', 'tag', ev.tag));
-    row.append(h('span', 'label', ev.label));
-    const det = h('span', 'detail', ev.detail || ''); row.append(det);
-    const p = FILE_TOOLS.has(ev.name) ? firstPath(ev.detail) : '';
-    if (p) { det.title = 'Ouvrir ' + p; det.onclick = e => { e.stopPropagation(); post({ type: 'openFile', path: p }); }; det.style.cursor = 'pointer'; }
-    el.append(row);
-    row.onclick = () => el.classList.toggle('collapsed');
-    S.tool = { el, row, out: null, path: p, lines: 0 };
-    add(el);
-  }
-  function exploreAdd(ev) {
-    const x = S.explore; x.n++;
-    const it = h('div', 'item'); it.textContent = `${ev.label} ${ev.detail || ''}`; it.title = ev.detail || '';
-    const p = firstPath(ev.detail);
-    if (p && ev.name === 'read_file') { it.style.cursor = 'pointer'; it.onclick = () => post({ type: 'openFile', path: p }); }
-    x.sub.append(it); x.last = it; toBottom();
-  }
-  function endExplore() {
-    const x = S.explore; if (!x) return;
-    x.el.classList.remove('running'); x.el.classList.add(x.err ? 'err' : 'ok');
-    x.row.querySelector('.label').textContent = `Exploré · ${x.n} action${x.n > 1 ? 's' : ''}`;
-    if (x.n > 3) x.sub.hidden = true;
-    S.explore = null;
-  }
+  function shellName() { const s = String(S.shell || ''); return /powershell|pwsh/i.test(s) ? 'PowerShell' : /bash|zsh|sh\b/i.test(s) ? 'Bash' : /cmd/i.test(s) ? 'Cmd' : 'Shell'; }
   function lastContent() { let el = log.lastElementChild; if (S.spin && el === S.spin.el) el = el.previousElementSibling; return el; }
+
+  /** boîte IN / OUT : texte replié sur 3 lignes avec fondu, clic pour tout voir */
+  function ioBox(t) {
+    if (!t.box) { t.box = h('div', 'io'); t.el.append(t.box); }
+    return t.box;
+  }
+  function ioRow(t, kind) {
+    const box = ioBox(t);
+    let row = box.querySelector(`.io-row.${kind}`);
+    if (!row) {
+      row = h('div', 'io-row ' + kind);
+      const pre = h('pre', 'io-text');
+      row.append(h('span', 'io-k', kind === 'in' ? 'IN' : 'OUT'), pre);
+      row.onclick = () => { if (pre.scrollHeight > pre.clientHeight + 2 || row.classList.contains('open')) row.classList.toggle('open'); };
+      if (kind === 'in') box.prepend(row); else box.append(row);
+    }
+    return row;
+  }
+  function setIo(t, kind, text, { append = false, error = false } = {}) {
+    const row = ioRow(t, kind), pre = row.querySelector('pre');
+    if (append) pre.textContent += (pre.textContent ? '\n' : '') + text; else pre.textContent = text;
+    if (error) row.classList.add('error');
+    row.classList.toggle('long', pre.textContent.split('\n').length > 3 || pre.textContent.length > 400);
+    toBottom();
+  }
+
+  function toolStart(ev) {
+    aiEnd(); thinkEnd();
+    const el = h('div', 'tl tool running');
+    const head = h('div', 'th');
+    const mcp = ev.tag === 'MCP';
+    const name = mcp ? 'MCP' : ev.name === 'shell' ? shellName() : (TOOL_NAME[ev.name] || ev.label || ev.name);
+    head.append(h('b', null, name));
+    const p = PATH_TOOLS.has(ev.name) ? firstPath(ev.detail) : '';
+    if (p) {
+      const a = h('a', 'tp', p); a.title = 'Ouvrir ' + p;
+      a.onclick = e => { e.stopPropagation(); post({ type: 'openFile', path: p }); };
+      head.append(' ', a);
+      const rest = String(ev.detail || '').slice(String(ev.detail || '').indexOf(p) + p.length).trim();
+      if (rest) head.append(' ', h('span', 'td', rest));
+    } else if (mcp) head.append(' ', h('span', 'td', ev.label));
+    else if (!IN_TOOLS.has(ev.name) && ev.detail) head.append(' ', h('span', 'td', ev.detail));
+    el.append(head);
+    const t = { el, name: ev.name, path: p, box: null };
+    S.tool = t;
+    add(el);
+    const input = mcp ? ev.detail : IN_TOOLS.has(ev.name) ? (ev.raw || ev.detail) : '';
+    if (input) setIo(t, 'in', input);
+  }
   function toolOut(text, error, append) {
-    const t = S.tool; if (!t) { const p = h('div', 'print'); p.textContent = text; add(p); return; }
-    if (!t.out) { t.out = h('pre', 'out'); t.el.append(t.out); }
-    if (error) t.out.classList.add('error');
-    if (append) t.out.textContent += (t.out.textContent ? '\n' : '') + text; else if (!t.out.textContent || error) t.out.textContent = text;
-    t.out.scrollTop = t.out.scrollHeight; toBottom();
+    const t = S.tool;
+    if (!t) { const p = h('div', 'print'); p.textContent = text; add(p); return; }
+    const row = t.box?.querySelector('.io-row.out');
+    if (!append && row && row.querySelector('pre').textContent && !error) return;     // sortie déjà affichée en direct
+    setIo(t, 'out', text, { append, error });
   }
   function toolDone(ok) {
-    if (S.explore && !S.tool) { if (!ok) { S.explore.err = true; S.explore.last?.classList.add('err'); } return; }
     const t = S.tool; if (!t) return;
     t.el.classList.remove('running'); t.el.classList.add(ok ? 'ok' : 'err');
-    if (t.out && t.out.textContent.split('\n').length > 6 && ok) t.el.classList.add('collapsed');
   }
   function note(text, kind) {
-    const t = S.tool || null;
-    const n = h('div', 'note ' + (kind || ''), '⎿ ' + text);
-    if (t) { t.el.append(n); toBottom(); } else { const w = h('div', 'tool'); w.append(n); add(w); }
+    const t = S.tool;
+    if (t && t.box && !t.box.querySelector('.io-row.out') && kind !== 'red' && kind !== 'yellow' && IN_TOOLS.has(t.name)) { setIo(t, 'out', text); return; }
+    if (t && (kind === 'dim' || !kind) && !IN_TOOLS.has(t.name)) { t.el.querySelector('.th').append(' ', h('span', 'td', '· ' + text)); return; }
+    const n = h('div', 'tnote ' + (kind || ''), text);
+    if (t) { t.el.append(n); toBottom(); } else { const w = h('div', 'tl'); w.append(n); add(w); }
   }
   function diff(ev) {
+    const t = S.tool;
     const d = h('div', 'diff');
     const dh = h('div', 'dh');
     dh.append(h('span', 'a', `+${ev.added}`), ' ', h('span', 'r', `−${ev.removed}`));
-    const t = S.tool;
-    if (t && t.path) { const a = h('a', null, '  · ouvrir le diff dans l\'éditeur'); a.onclick = () => post({ type: 'openDiff', path: t.path }); dh.append(a); }
+    if (t && t.path) { const a = h('a', null, 'ouvrir le diff dans l\'éditeur'); a.onclick = () => post({ type: 'openDiff', path: t.path }); dh.append(h('span', 'sp'), a); }
     const body = h('div', 'body');
     for (const l of ev.lines || []) {
       if (!l) { body.append(h('div', 'gap', '⋮')); continue; }
@@ -275,15 +288,40 @@
       body.append(row);
     }
     d.append(dh, body);
-    if (t) { t.el.append(d); toBottom(); } else add(d);
+    if (t) { t.el.append(d); toBottom(); } else { const w = h('div', 'tl'); w.append(d); add(w); }
   }
+
+  // ── raisonnement du modèle : « Thinking… » puis « Thought for 12s » (clic pour le lire) ──
+  function thinking(delta) {
+    if (!S.think) {
+      aiEnd();
+      const el = h('div', 'tl think running');
+      const head = h('div', 'th'); const lab = h('span', null, 'Thinking…');
+      head.append(lab);
+      const body = h('pre', 'think-body'); body.hidden = true;
+      head.onclick = () => { body.hidden = !body.hidden; toBottom(); };
+      el.append(head, body);
+      S.think = { el, lab, body, t0: Date.now() };
+      add(el);
+    }
+    S.think.body.textContent += delta;
+  }
+  function thinkEnd() {
+    const k = S.think; if (!k) return;
+    S.think = null;
+    k.el.classList.remove('running');
+    const s = Math.max(1, Math.round((Date.now() - k.t0) / 1000));
+    k.lab.textContent = `Thought for ${s}s`;
+  }
+
+  function endExplore() { thinkEnd(); }
 
   // ── bilan des fichiers ──
   function changes(files) {
     aiEnd(); endExplore();
-    const el = h('div', 'changes');
+    const el = h('div', 'tl ok changes');
     const add_ = files.reduce((n, f) => n + (f.added || 0), 0), rem = files.reduce((n, f) => n + (f.removed || 0), 0);
-    const ch = h('div', 'ch'); ch.append(h('span', 'dot'), h('span', null, `Fichiers modifiés · ${files.length}`), h('span', 'a', add_ ? `+${add_}` : ''), h('span', 'r', rem ? `−${rem}` : ''));
+    const ch = h('div', 'ch'); ch.append(h('span', null, `Fichiers modifiés · ${files.length}`), h('span', 'a', add_ ? `+${add_}` : ''), h('span', 'r', rem ? `−${rem}` : ''));
     el.append(ch);
     for (const f of files) {
       const row = h('div', 'f'); row.dataset.path = f.path;
@@ -313,7 +351,7 @@
       if (S.ask !== card) return;
       S.ask = null;
       post({ type: 'select', id: ev.id, index: i == null ? -1 : i });
-      el.className = 'ask done'; el.textContent = i == null ? '✗ refusé' : `✓ ${ev.options[i]}`;
+      el.className = 'tl answered'; el.textContent = i == null ? '✗ refusé' : `✓ ${ev.options[i]}`;
       ta.focus();
     };
     const card = { el, key: e => {
@@ -332,7 +370,7 @@
     const el = h('div', 'ask');
     el.append(h('div', 'q', ev.label || 'Réponse :'));
     const inp = h('input'); el.append(inp);
-    const done = v => { if (S.ask !== card) return; S.ask = null; post({ type: 'ask', id: ev.id, text: v }); el.className = 'ask done'; el.textContent = `✓ ${v || '(vide)'}`; ta.focus(); };
+    const done = v => { if (S.ask !== card) return; S.ask = null; post({ type: 'ask', id: ev.id, text: v }); el.className = 'tl answered'; el.textContent = `✓ ${v || '(vide)'}`; ta.focus(); };
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); done(inp.value); } else if (e.key === 'Escape') { e.preventDefault(); done(''); } };
     const card = { el, key: () => false };
     S.ask = card; add(el); inp.focus();
@@ -346,7 +384,7 @@
   function spinner(label) {
     if (!label) { if (S.spin) { clearInterval(S.spin.timer); S.spin.el.remove(); S.spin = null; } return; }
     if (!S.spin) {
-      const el = h('div', 'spin'); const f = h('span', null, '✻'); const l = h('span'); const t = h('span', 't');
+      const el = h('div', 'tl spin'); const f = h('span', 'f', '✻'); const l = h('b'); const t = h('span', 't');
       el.append(f, l, t);
       S.spin = { el, f, l, t, i: 0, t0: S.spinT0 || Date.now() };
       S.spin.timer = setInterval(() => { const s = S.spin; if (!s) return; s.f.textContent = FRAMES[Math.floor(s.i++ / 1.5) % FRAMES.length]; const sec = Math.floor((Date.now() - s.t0) / 1000); s.t.textContent = `${sec < 60 ? sec + ' s' : Math.floor(sec / 60) + ' min ' + (sec % 60) + ' s'} · Échap pour interrompre`; }, 90);
@@ -384,7 +422,7 @@
     S.busy = b;
     bSend.innerHTML = b ? ICON.stop : ICON.send; bSend.title = b ? 'Interrompre (Échap)' : 'Envoyer (Entrée)';
     if (b) { S.spinT0 = Date.now(); const q = log.querySelector('.msg-user.queued'); if (q) q.classList.remove('queued'); }
-    else { spinner(null); aiEnd(); endExplore(); S.tool = null; }
+    else { spinner(null); aiEnd(); thinkEnd(); S.tool = null; }
   }
   let flashT = 0;
   function showFlash(text) { flash.textContent = text; flash.style.opacity = '1'; clearTimeout(flashT); flashT = setTimeout(() => { flash.style.opacity = '0'; }, 3500); }
@@ -456,7 +494,9 @@
     const el = h('div', 'msg-user' + (S.busy ? ' queued' : ''), text);
     if (S.ctxOn && S.ctx && !/^\s*[/!]/.test(text)) el.append(h('div', 'ctx', '⧉ ' + chipText(S.ctx)));
     aiEnd(); endExplore(); S.tool = null;
-    stick = true; add(el);
+    stick = true;
+    add(h('div', 'when', new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })));
+    add(el);
     post({ type: 'send', text });
     ta.value = ''; autosize();
   }
@@ -529,7 +569,8 @@
     if (m.type !== 'event') return;
     const ev = m.ev;
     switch (ev.type) {
-      case 'ready': S.models = ev.models || []; S.modes = ev.modes || []; S.commands = ev.commands || []; S.started = true; if (!log.querySelector('.msg-user, .msg-ai')) showWelcome(); break;
+      case 'thinking': thinking(ev.delta || ''); break;
+      case 'ready': S.shell = ev.shell || ''; S.models = ev.models || []; S.modes = ev.modes || []; S.commands = ev.commands || []; S.started = true; if (!log.querySelector('.msg-user, .msg-ai')) showWelcome(); break;
       case 'status': Object.assign(S.status, ev); renderStatus(); break;
       case 'busy': setBusy(!!ev.busy); break;
       case 'spinner': spinner(ev.label); break;
@@ -553,7 +594,7 @@
       case 'ask': askCard(ev); break;
       case 'flash': showFlash(ev.text); break;
       case 'insert': insert(ev.text); break;
-      case 'clear': S.ai = null; S.tool = null; S.explore = null; showWelcome(); break;
+      case 'clear': S.ai = null; S.tool = null; S.think = null; showWelcome(); break;
       case 'print': {
         const text = String(ev.text || '');
         if (!text.replace(/\x1b\[[0-9;]*m/g, '').trim()) break;

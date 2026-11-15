@@ -315,7 +315,7 @@ const EXPLORE = new Set(['read_file', 'list_dir', 'grep', 'glob']);
 const expandable = [];                                               // [{ title, lines }] : contenus coupés à l'écran, gardés en entier
 let thinking = '';
 function remember(title, lines) { expandable.push({ title, lines }); if (expandable.length > 20) expandable.shift(); }
-export function rememberThinking(d) { thinking += d; if (thinking.length > 200_000) thinking = thinking.slice(-200_000); }
+export function rememberThinking(d) { if (sink?.event && d) sink.event('thinking', { delta: sanitize(d) }); thinking += d; if (thinking.length > 200_000) thinking = thinking.slice(-200_000); }
 export function resetThinking() { thinking = ''; }
 export const thinkingLength = () => thinking.trim().length;
 /** Affiche en entier ce qui a été résumé depuis le dernier Ctrl+O (et la pensée du modèle). */
@@ -381,7 +381,7 @@ export function commitAction() {
 
 export function toolHeader(name, summary = '') {
   const { tag, label, detail } = describeAction(name, summary);
-  if (sink?.event) { lastExplore = EXPLORE.has(name); sink.event('tool', { name, tag, label, detail: sanitize(detail), explore: lastExplore }); return; }
+  if (sink?.event) { lastExplore = EXPLORE.has(name); sink.event('tool', { name, tag, label, detail: sanitize(detail), raw: sanitize(String(summary || '')).slice(0, 8000), explore: lastExplore }); return; }
   if (!sink) { println(); println(headLine(c.green('●'), tag, label, detail)); return; }     // sans interface plein écran : direct
   const explore = EXPLORE.has(name);
   if (explore && cell?.kind === 'explore') { cell.items.push({ label, detail }); showActive(); return; }
