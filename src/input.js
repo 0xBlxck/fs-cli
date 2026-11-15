@@ -98,5 +98,5 @@ export function createInput({ interactive, history, onHistory, suggester, comple
 
 /** branche le texte et le spinner du CLI sur la zone d'affichage de l'interface */
 export function attachScreen(input) {
-  ui.attachSink({ print: t => input.print(t), spinner: s => input.spinner(s) });
+  ui.attachSink({ print: t => input.print(t), spinner: s => input.spinner(s), setActive: l => input.setActive?.(l) });
 }

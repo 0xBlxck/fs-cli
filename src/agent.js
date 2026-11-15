@@ -207,7 +207,8 @@ export async function execCall(S, call, { signal, ask, root = null }) {
   ui.spinner.stop();
   if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
 
-  // affichage du résultat
+  // affichage du résultat : l'action passe dans l'historique avec sa couleur (puce verte / rouge) ; exploration réussie = rien de plus
+  if (!ui.toolDone(res.ok)) return { name: call.name, ok: res.ok, output: res.output };
   if (res.diff) { ui.diffView(res.diff[0], res.diff[1]); ui.toolNote(res.display, 'dim'); }
   else if (res.silent) { if (res.display) ui.toolNote(res.display, res.ok ? 'dim' : 'red'); }
   else if (!res.ok) ui.toolBody(res.display || res.output, { error: true, max: 4 });

@@ -60,7 +60,10 @@ export function sanitize(s) {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '');
 }
 export function out(s) {
-  if (sink) { if (sp && /^réflexion/.test(sp.label)) sp.label = 'rédaction…'; sink.print(s); return; }
+  if (sink) {
+    if (cell && !committing) commitAction();                         // autre texte (réponse du modèle…) : l'action en cours passe d'abord dans l'historique
+    sink.print(s); return;
+  }
   spinner.stop(); process.stdout.write(s);
 }
 export function println(s = '') { out(s + '\n'); }
@@ -289,14 +292,77 @@ export function describeAction(name, summary = '') {
   const a = ACTIONS[name];
   return a ? { tag: a[0], label: a[1], detail: s } : { tag: '', label: name, detail: s };
 }
-export function toolHeader(name, summary = '') {
-  println();
-  const { tag, label, detail } = describeAction(name, summary);
-  const head = `${tag ? c.accent(c.bold(tag)) + ' ' : ''}${c.bold(label)}`;
-  const room = cols() - stripLen(head) - 8;
-  println(`  ${c.green('●')} ${head}${detail ? '  ' + c.dim(clip(detail, Math.max(10, room))) : ''}`);
-}
 const stripLen = s => s.replace(/\x1b\[[0-9;]*m/g, '').length;
+const EXPLORE = new Set(['read_file', 'list_dir', 'grep', 'glob']);
+
+// ── Action en cours (inspiré de Codex) ─────────────────────────────────────────
+// Avec l'interface plein écran, l'action en cours est affichée dans la zone du bas (avec sa sortie en direct),
+// puis écrite dans l'historique UNE FOIS TERMINÉE, puce verte (réussie) ou rouge (échec).
+// Les lectures / recherches successives sont regroupées en un seul bloc « Exploré ».
+let cell = null, committing = false;
+function headLine(bullet, tag, label, detail) {
+  const head = `${tag ? c.accent(c.bold(tag)) + ' ' : ''}${c.bold(label)}`;
+  return `  ${bullet} ${head}${detail ? '  ' + c.dim(clip(detail, Math.max(10, cols() - stripLen(head) - 8))) : ''}`;
+}
+function exploreLines(items) {                                       // « Lire a.js, b.js » : actions identiques successives fusionnées
+  const rows = [];
+  for (const it of items) {
+    const last = rows[rows.length - 1];
+    if (last && last.label === it.label && it.detail && rows.length) last.details.push(it.detail);
+    else rows.push({ label: it.label, details: it.detail ? [it.detail] : [], err: it.err });
+    if (it.err) rows[rows.length - 1].err = true;
+  }
+  return rows.map((r, i) => `  ${i === 0 ? c.dim('  └') : '   '} ${(r.err ? c.red : c.bold)(r.label)} ${c.dim(clip(r.details.join(', '), cols() - 16))}`);
+}
+function cellLines(final) {
+  if (!cell) return [];
+  if (cell.kind === 'explore') {
+    const err = cell.items.some(i => i.err);
+    const bullet = final ? (err ? c.red('●') : c.green('●')) : c.dim('◦');
+    return [`  ${bullet} ${c.bold(final ? 'Exploré' : 'Exploration…')}`, ...exploreLines(cell.items)];
+  }
+  const bullet = final ? (cell.ok === false ? c.red('●') : c.green('●')) : c.dim('◦');
+  const out = [headLine(bullet, cell.tag, cell.label, cell.detail)];
+  const live = cell.live;
+  if (live.length) {
+    const show = final ? (live.length > 8 ? [...live.slice(0, 5), null, ...live.slice(-2)] : live) : live.slice(-4);
+    show.forEach((l, i) => out.push(l === null ? `     ${c.dim(`… +${live.length - 7} lignes`)}` : `  ${i === 0 ? c.dim('⎿') : ' '}  ${(cell.ok === false && final ? c.red : c.dim)(clip(l, cols() - 6))}`));
+  }
+  return out;
+}
+function showActive() { sink?.setActive?.(cell ? cellLines(false) : []); }
+/** Écrit l'action en cours dans l'historique (avec sa couleur finale) et vide la zone du bas. */
+export function commitAction() {
+  if (!cell || committing) return;
+  committing = true;
+  const lines = cellLines(true);
+  cell = null;
+  sink?.setActive?.([]);
+  try { out('\n' + lines.join('\n') + '\n'); } finally { committing = false; }
+}
+
+export function toolHeader(name, summary = '') {
+  const { tag, label, detail } = describeAction(name, summary);
+  if (!sink) { println(); println(headLine(c.green('●'), tag, label, detail)); return; }     // sans interface plein écran : direct
+  const explore = EXPLORE.has(name);
+  if (explore && cell?.kind === 'explore') { cell.items.push({ label, detail }); showActive(); return; }
+  commitAction();
+  cell = explore ? { kind: 'explore', items: [{ label, detail }] } : { kind: 'action', tag, label, detail, live: [], ok: undefined };
+  showActive();
+}
+
+/** Fin d'exécution de l'action en cours : couleur de la puce. Renvoie false si son résultat doit rester masqué (exploration réussie). */
+export function toolDone(ok) {
+  if (!cell) return true;
+  if (cell.kind === 'explore') {
+    if (!ok) cell.items[cell.items.length - 1].err = true;
+    showActive();
+    return !ok;                                                      // exploration réussie : rien de plus à afficher (comme Codex)
+  }
+  cell.ok = !!ok;
+  commitAction();
+  return true;
+}
 
 export function toolBody(text, { max = 8, error = false } = {}) {
   const lines = sanitize(text).replace(/\r/g, '').split('\n');
@@ -316,6 +382,10 @@ export function toolNote(text, kind = 'dim') {
 export function createLive(maxLines = 24) {
   let carry = '', shown = 0, hidden = 0;
   const emitLine = (l) => {
+    if (cell && cell.kind === 'action' && sink) {                     // action en cours : sortie dans la zone du bas, résumée à la fin
+      cell.live.push(l); if (cell.live.length > 400) cell.live.splice(5, cell.live.length - 400);
+      showActive(); shown++; return;
+    }
     if (shown < maxLines) {
       println(`  ${shown === 0 ? c.dim('⎿') : ' '}  ${c.dim(clip(l, cols() - 6))}`);
       shown++;

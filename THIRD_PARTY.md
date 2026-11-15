@@ -7,6 +7,8 @@ FS-CLI n'a **aucune dépendance npm** : rien n'est téléchargé à l'installati
 | `skills.json` (compétences « Fullstack », « GLua », « Sécurité », « DevOps », « Python AI ») | adapté du projet CLI-FS / `clifs-x3vren` (« France Student Developer CLI ») | MIT |
 | Presets MCP (`src/mcp.js`) | noms et commandes de serveurs MCP publics (`@modelcontextprotocol/*`, `@playwright/mcp`, `blender-mcp`, `mcp-server-fetch`…). Ils ne sont **pas** installés par FS-CLI : `npx` / `uvx` les télécharge seulement si tu les actives. | licences de leurs auteurs |
 
+| Présentation des actions (actions en cours, bloc « Exploré », puce verte/rouge) | inspirée de l'interface de [OpenAI Codex CLI](https://github.com/openai/codex) (idées de design, code réécrit) | Apache-2.0 |
+
 FS-CLI n'est affilié ni à France Student ni à Anthropic ni à OpenAI. Les noms de produits appartiennent à leurs propriétaires.
 
 ## Licence du projet dont `skills.json` est adapté (MIT)

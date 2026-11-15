@@ -128,3 +128,21 @@ test('actions lisibles : les appels fs-mcp sont décodés, les outils ont un typ
   assert.equal(ui.describeAction('edit_file', 'a.css').label, 'Modifier');
   assert.equal(ui.describeAction('mcp blender.get_scene', '{}').tag, 'MCP');
 });
+
+test('actions façon Codex : explorations regroupées, commande écrite à la fin avec puce verte ou rouge', async () => {
+  const { fakeStreams } = await import('./term-sim.js');
+  const f = fakeStreams(90, 30);
+  const tui = new Tui({ stdin: f.stdin, stdout: f.stdout, history: [] });
+  tui.start();
+  ui.attachSink({ print: t => tui.print(t), spinner: s => tui.spinner(s), setActive: l => tui.setActive(l) });
+  for (const [n, s] of [['read_file', 'a.js'], ['read_file', 'b.js'], ['grep', 'TODO']]) { ui.toolHeader(n, s); assert.equal(ui.toolDone(true), false, 'exploration réussie : résultat masqué'); }
+  ui.toolHeader('shell', 'npm run build');
+  assert.ok(tui.active.some(l => /◦/.test(l) && /npm run build/.test(l)), 'commande en cours dans la zone du bas');
+  ui.toolDone(false);
+  await new Promise(r => setTimeout(r, 30));
+  const all = f.sim.lines().join('\n');
+  assert.match(all, /Exploré\n\s+└ Lire a\.js, b\.js\n\s+Chercher TODO/);
+  assert.match(all, /npm run build/);
+  assert.equal(tui.active.length, 0, 'zone du bas vidée une fois l\'action terminée');
+  ui.attachSink(null); tui.stop();
+});

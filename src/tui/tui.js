@@ -3,7 +3,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { KeyParser } from './keys.js';
 import { Screen } from './screen.js';
 import { PinnedScreen } from './pinned.js';
-import { layoutInput, indexAt, strWidth, padAnsi, stripAnsi } from './layout.js';
+import { layoutInput, indexAt, strWidth, padAnsi, stripAnsi, clipAnsi } from './layout.js';
 import { c } from '../ui.js';
 
 // astuces affichées dans la zone de saisie vide (une nouvelle à chaque demande)
@@ -77,6 +77,8 @@ export class Tui {
   }
   setStatus(s) { Object.assign(this.status, s); this.render(); }
   setTasks(list) { this.tasks = Array.isArray(list) ? list : []; this.render(); }
+  /** Action en cours (affichée au-dessus de la saisie jusqu'à ce qu'elle soit terminée). */
+  setActive(lines) { this.active = Array.isArray(lines) ? lines : []; this.render(); }
   flash(text, ms = 2200) {
     this.flashText = text; clearTimeout(this.flashTimer);
     this.flashTimer = setTimeout(() => { this.flashText = ''; this.render(); }, ms);
@@ -127,6 +129,13 @@ export class Tui {
     const lines = [];
 
     for (const q of this.queue.slice(-3)) lines.push('  ' + c.dim('⧗ en file : ' + q.replace(/\s+/g, ' ').slice(0, Math.max(10, W - 20))));
+
+    // action en cours (comme Codex) : visible ici pendant qu'elle tourne, écrite dans l'historique quand elle est finie
+    if (this.active?.length) {
+      const a = this.active.length > 8 ? [...this.active.slice(0, 3), ...this.active.slice(-5)] : this.active;
+      for (const l of a) lines.push(clipAnsi(l, W - 1));
+      lines.push('');
+    }
 
     // liste de tâches du modèle, épinglée : on voit où il en est sur les longues tâches
     if (this.tasks.length) {
