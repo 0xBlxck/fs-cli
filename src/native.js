@@ -55,8 +55,7 @@ async function execNative(S, call, io) {
 }
 
 /** Tour complet : message → (appels d'outils → résultats)* → réponse finale */
-export async function runNative(S, userText, { signal, ask, stream = streamChat, ctxPct = contextPercent, retried = false }) {
-  const freshChat = !S.chatId;                                       // conversation neuve : un refus ne vient alors pas d'un vieux message
+export async function runNative(S, userText, { signal, ask, stream = streamChat, ctxPct = contextPercent }) {
   let content = userText;
   if (S.notes.length) { content = `[${S.notes.join(' ')}]\n${content}`; S.notes = []; }
   S.sid ||= newSid();
@@ -117,20 +116,13 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
   }
   if (visible) S.lastResponse = visible;
   if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; cfg.toolRefusals = r; saveCfg(); }
-  // Le modèle dit ne pas avoir d'outils alors qu'ils lui sont fournis : en général un ancien message de la conversation l'affirmait
-  // et il reste cohérent avec lui. On lui rétablit le fait UNE fois ; s'il refuse encore, on n'insiste pas (refus respecté).
+  // Le modèle refuse de travailler pour FS-CLI (consigne de France Student : « pas de moteur pour un agent externe »).
+  // Ce refus est respecté : pas de relance, pas de reformulation pour le contourner. On le dit clairement et on le retient pour ce modèle.
   const refused = !nTools && cfg.mode !== 'plan' && looksLikeToolRefusal(visible);
-  if (refused && !retried && !signal.aborted) {
-    ui.println(c.dim('  ↻ le modèle croit ne pas avoir d\'outils (souvent à cause d\'un ancien message de la conversation) : FS-CLI lui précise qu\'ils sont disponibles et relance'));
-    const note = '[Info de FS-CLI : dans cette conversation, tes outils list_directory, read_file, search_files, edit_file, write_file et run_command te sont bien fournis comme fonctions. '
-      + 'Si un message plus haut dit le contraire, il n\'est plus à jour. Reprends la dernière demande de l\'utilisateur en les utilisant si tu le peux.]';
-    const again = await runNative(S, note, { signal, ask, stream, ctxPct, retried: true });
-    return { hitLimit: again.hitLimit || hitLimit, nReq: nReq + again.nReq };
-  }
-  if (refused && retried) {
-    if (freshChat) { cfg.toolRefusals = { ...(cfg.toolRefusals || {}), [String(S.agentId)]: Date.now() }; saveCfg(); }   // refus dès une conversation neuve : on le retient pour ce modèle
-    ui.println('\n' + c.yellow('  ⚠ Le modèle refuse toujours d\'utiliser les outils de FS-CLI.'));
-    ui.println(c.dim('    Une conversation neuve règle souvent le problème : ') + c.accent('/new') + c.dim(freshChat ? ' — sinon essaie un autre modèle : ' : '') + (freshChat ? c.accent('/model opus') : ''));
+  if (refused) {
+    cfg.toolRefusals = { ...(cfg.toolRefusals || {}), [String(S.agentId)]: Date.now() }; saveCfg();
+    ui.println('\n' + c.yellow('  ⚠ Ce modèle refuse de travailler avec les outils de FS-CLI (consigne de France Student) : il peut discuter, mais pas lire ni modifier tes fichiers.'));
+    ui.println(c.dim('    Les modèles Claude acceptent dans nos essais : ') + c.accent('/model sonnet') + c.dim(' ou ') + c.accent('/model opus'));
   }
 
   const secs = (Date.now() - t0) / 1000;

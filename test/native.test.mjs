@@ -133,25 +133,10 @@ test('interruption : le signal annule la boucle sans renvoyer de résultats', as
   assert.equal(f.st.reqs.length, 1);
 });
 
-test('le modèle croit ne pas avoir d\'outils : FS-CLI le lui précise UNE fois et relance', async () => {
-  const { dir, S } = mk({ chatId: 'conv-ancienne' });
-  fs.writeFileSync(path.join(dir, 'index.html'), '<h1>a</h1>');
-  const f = fakeFs([
-    { text: "Le chat France Student ne peut pas servir de moteur à FS-CLI. Colle ici le contenu de index.html." },
-    { calls: [{ callId: 'r1', name: 'read_file', arguments: { path: 'index.html' } }] },
-    { text: 'Lu : un titre h1.' },
-  ]);
+test('modèle qui refuse de travailler pour FS-CLI : refus respecté (aucune relance), modèle retenu', async () => {
+  const { S } = mk({ chatId: 'conv-x', agentId: -1004 });
+  const f = fakeFs([{ text: 'Le chat France Student ne peut pas servir de moteur à FS-CLI. Colle ici le contenu de index.html.' }, { text: 'ne doit jamais être demandé' }]);
   await runNative(S, 'améliore mon site', { ...io(), stream: f.stream });
-  assert.equal(f.st.reqs.length, 3);
-  assert.match(f.st.reqs[1].content, /te sont bien fournis comme fonctions/);     // relance avec le fait rétabli
-  assert.ok(f.st.reqs[1].clientTools.includes('write_file'));                     // les outils sont bien envoyés
-  assert.match(f.st.reqs[2].toolResults[0].output, /<h1>a<\/h1>/);               // l'outil a vraiment servi
-});
-
-test('refus répété : pas d\'insistance (une seule relance)', async () => {
-  const { S } = mk({ chatId: 'conv-x' });
-  const refus = { text: "Je n'ai pas accès à tes fichiers, colle ici le contenu." };
-  const f = fakeFs([refus, refus, refus]);
-  await runNative(S, 'modifie index.html', { ...io(), stream: f.stream });
-  assert.equal(f.st.reqs.length, 2);                                             // 1 demande + 1 relance, pas plus
+  assert.equal(f.st.reqs.length, 1);                                             // pas d'insistance après un refus de principe
+  assert.ok(cfg.toolRefusals['-1004']);                                          // signalé ensuite dans /models et au choix du modèle
 });
