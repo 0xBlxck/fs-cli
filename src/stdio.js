@@ -11,7 +11,7 @@ export function send(type, data = {}) {
 export class StdioInput {
   constructor() {
     this.kind = 'stdio';
-    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [], setMode: [], setModel: [], diffBefore: [], undoFile: [] };
+    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [], setMode: [], setModel: [], diffBefore: [], undoFile: [], mcpAction: [] };
     this.queue = []; this.busy = false; this.pending = new Map(); this.seq = 0;
     this.rl = readline.createInterface({ input: process.stdin, terminal: false });
     this.rl.on('line', line => this.onLine(line));
@@ -44,6 +44,7 @@ export class StdioInput {
       case 'expand': return this.emit('expand');
       case 'diffBefore': return this.emit('diffBefore', m.id, String(m.path || ''));
       case 'undoFile': return this.emit('undoFile', String(m.path || ''));
+      case 'mcpAction': return this.emit('mcpAction', String(m.action || ''), String(m.name || ''));
       case 'quit': return this.emit('quit');
     }
   }

@@ -10,6 +10,7 @@ import { removeRule, clearRules, describeRules } from './permissions.js';
 import { runTeam } from './team.js';
 import { newSid, tag, forSession, unregister, createdToday, lastReset, DAILY_LIMIT } from './chats.js';
 import { getMcp } from './mcp-runtime.js';
+import { mcpOverview, connectAll } from './mcp-status.js';
 import { approveServer } from './pseudo.js';
 import { isImportApproved } from './approvals.js';
 import { TOOLS, resolveP, scanProject } from './tools.js';
@@ -157,16 +158,35 @@ async function mcpCommand(arg, env) {
     if (sv && !(await approveServer(S, nm, sv, { ask: env.ask, signal: undefined }))) return println(c.dim('  non autorisé'));
   }
   switch (sub.toLowerCase()) {
-    case 'list': case 'ls': {
-      const list = await mgr.list(), cfgMcp = loadMcpConfig(cwd);
-      println();
-      if (!list.length) println(c.dim('  aucun serveur MCP — /mcp presets · /mcp preset <nom> · /mcp add <nom> <commande…>'));
-      for (const s of list) {
-        const st = s.disabled ? c.dim('○ désactivé') : s.connected ? c.green(`● connecté · ${s.toolCount} outils`) : c.yellow('◌ non démarré');
-        println(`  ${st}  ${c.bold(s.name)} ${c.dim('· ' + s.transport + ' · ' + (s.scope || ''))}  ${c.dim(ui.clip(s.description || '', 50))}`);
+    case 'list': case 'ls': {                                         // comme la fenêtre « MCP servers » de Claude Code : groupes + état réel (connexion en parallèle)
+      if (env.mcpPanel) return env.mcpPanel();                        // panneau VS Code : fenêtre dédiée
+      const ov = await mcpOverview(cwd, mgr);
+      if (!ov.servers.length) println(c.dim('\n  aucun serveur MCP — /mcp presets · /mcp preset <nom> · /mcp add <nom> <commande…>'));
+      const st = new Map(ov.servers.map(s => [s.name, { status: s.status, toolCount: s.toolCount }]));
+      if (ov.servers.some(s => s.status === 'idle')) {
+        ui.spinner.start(`connexion aux serveurs MCP… (${ov.servers.filter(s => s.status === 'idle').length})`);
+        try { await connectAll(mgr, ov.servers, r => { if (r.status !== 'connecting') st.set(r.name, r); }, { timeoutMs: 15000 }); } finally { ui.spinner.stop(); }
       }
-      if (cfgMcp._error) println(c.yellow('  ⚠ ' + cfgMcp._error));
-      println(c.dim('\n  /mcp test <nom> · /mcp tools [nom] · /mcp call serveur.outil {json} · /mcp toggle|rm <nom>\n'));
+      const badge = s => {
+        const r = st.get(s.name) || {};
+        switch (r.status) {
+          case 'connected': return c.green(`✓ connecté`) + c.dim(` · ${r.toolCount} outil${r.toolCount > 1 ? 's' : ''}`);
+          case 'auth': return c.yellow('⚠ connexion au compte requise');
+          case 'error': return c.red('✗ erreur') + c.dim(' · ' + ui.clip(String(r.error || '').split('\n')[0], 60));
+          case 'disabled': return c.dim('○ désactivé');
+          case 'approve': return c.yellow('? à autoriser') + c.dim(` · /mcp ${s.name}`);
+          case 'untrusted': return c.yellow('? projet non approuvé') + c.dim(' · /mcp trust');
+          default: return c.dim('◌ non démarré');
+        }
+      };
+      let group = null;
+      for (const s of ov.servers) {
+        if (s.group !== group) { group = s.group; println('\n  ' + c.bold(group) + c.dim(` (${ov.servers.filter(x => x.group === group).length})`)); }
+        println(`    ${s.name.padEnd(18)} ${badge(s)}`);
+      }
+      if (ov.cloud.length) println('\n  ' + c.bold('claude.ai') + c.dim(` (${ov.cloud.length}) — connecteurs de ton compte Claude : ils restent chez Anthropic, FS-CLI ne peut pas les utiliser\n    `) + c.dim(ov.cloud.map(n => n.replace(/^claude\.ai /, '')).join(' · ')));
+      if (ov.error) println(c.yellow('\n  ⚠ ' + ov.error));
+      println(c.dim('\n  /mcp <nom> : ses outils · /mcp toggle <nom> · /mcp add <nom> <commande|url> · /mcp presets\n'));
       return;
     }
     case 'trust': {

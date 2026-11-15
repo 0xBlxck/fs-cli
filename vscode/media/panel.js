@@ -37,7 +37,9 @@
   const title = h('div', 'title', 'FS-CLI');
   const btnHist = h('button', 'icon-btn'); btnHist.innerHTML = ICON.hist; btnHist.title = 'Conversations précédentes';
   const btnNew = h('button', 'icon-btn'); btnNew.innerHTML = ICON.neu; btnNew.title = 'Nouvelle conversation';
-  head.append(title, btnHist, btnNew);
+  const btnMcp = h('button', 'icon-btn'); btnMcp.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0zM8 11v3"/></svg>'; btnMcp.title = 'Serveurs MCP';
+  btnMcp.onclick = () => { if (!S.busy) post({ type: 'command', text: '/mcp' }); };
+  head.append(title, btnMcp, btnHist, btnNew);
   const log = h('div', 'log');
   const tasksEl = h('div', 'tasks'); tasksEl.hidden = true;
   const composer = h('div', 'composer');
@@ -555,6 +557,95 @@
     chip.title = S.ctxOn ? 'Joint au message — clic pour ne pas l\'envoyer' : 'Non joint — clic pour le joindre';
   }
 
+  // ── fenêtre « Serveurs MCP » (comme celle de Claude Code) ──
+  const MCP_BADGE = {
+    connecting: ['◐ Connexion…', 'b-wait'], connected: ['✓ Connecté', 'b-ok'], auth: ['⚠ Connexion requise', 'b-warn'], error: ['✗ Erreur', 'b-err'],
+    disabled: ['○ Désactivé', 'b-off'], approve: ['? À autoriser', 'b-ask'], untrusted: ['? Projet à approuver', 'b-ask'], idle: ['◌ Non démarré', 'b-off'],
+  };
+  const MCP = { el: null, list: null, filter: null, data: null, open: new Set() };
+  function mcpClose() { if (MCP.el) { MCP.el.remove(); MCP.el = null; ta.focus(); } }
+  function mcpPanel(ov) {
+    MCP.data = ov;
+    if (!MCP.el) {
+      const ov_ = h('div', 'modal-bg'); ov_.onclick = e => { if (e.target === ov_) mcpClose(); };
+      const card = h('div', 'modal');
+      const top = h('div', 'mh'); top.append(h('div', 'mt', 'Serveurs MCP'));
+      const ref = h('button', 'icon-btn', '↻'); ref.title = 'Actualiser'; ref.onclick = () => post({ type: 'mcpAction', action: 'refresh' });
+      const x = h('button', 'icon-btn', '✕'); x.title = 'Fermer (Échap)'; x.onclick = mcpClose;
+      top.append(ref, x);
+      const f = h('input', 'mf'); f.placeholder = 'Filtrer les serveurs…'; f.oninput = mcpRender;
+      f.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); mcpClose(); } };
+      const list = h('div', 'ml');
+      card.append(top, f, list); ov_.append(card);
+      document.body.append(ov_);
+      MCP.el = ov_; MCP.list = list; MCP.filter = f;
+      f.focus();
+    }
+    mcpRender();
+  }
+  function mcpStatus(r) {
+    const s = MCP.data?.servers.find(x => x.name === r.name);
+    if (!s) return;
+    Object.assign(s, r);
+    if (MCP.el) mcpRender();
+  }
+  function mcpRender() {
+    if (!MCP.el || !MCP.data) return;
+    const q = MCP.filter.value.trim().toLowerCase();
+    const list = MCP.list; list.textContent = '';
+    const servers = MCP.data.servers.filter(s => !q || s.name.toLowerCase().includes(q));
+    const groups = [...new Set(servers.map(s => s.group))];
+    for (const g of groups) {
+      const items = servers.filter(s => s.group === g);
+      list.append(h('div', 'mg', `${g === 'Claude Code' ? 'Claude Code' : g} (${items.length})`));
+      for (const s of items) list.append(mcpRow(s));
+    }
+    const cloud = (MCP.data.cloud || []).filter(n => !q || n.toLowerCase().includes(q));
+    if (cloud.length) {
+      list.append(h('div', 'mg', `claude.ai (${cloud.length})`));
+      list.append(h('div', 'mnote', 'Connecteurs de ton compte Claude : ils tournent chez Anthropic, pas sur ton PC. FS-CLI ne peut pas les utiliser.'));
+      for (const n of cloud) {
+        const row = h('div', 'mrow cloud');
+        row.append(h('span', 'mn', n), h('span', 'badge b-off', 'Compte Claude'));
+        list.append(row);
+      }
+    }
+    if (!servers.length && !cloud.length) list.append(h('div', 'mnote', q ? 'Aucun serveur ne correspond.' : 'Aucun serveur MCP. Ajoute-en un avec /mcp add <nom> <commande|url> ou /mcp presets.'));
+    if (MCP.data.error) list.append(h('div', 'mnote warn', '⚠ ' + MCP.data.error));
+  }
+  function mcpRow(s) {
+    const wrap = h('div', 'mitem' + (MCP.open.has(s.name) ? ' open' : ''));
+    const row = h('div', 'mrow');
+    const [label, cls] = MCP_BADGE[s.status] || MCP_BADGE.idle;
+    const badge = h('span', 'badge ' + cls, s.status === 'connected' && s.toolCount ? `✓ Connecté · ${s.toolCount}` : label);
+    row.append(h('span', 'mn', s.name), badge);
+    row.onclick = () => { if (MCP.open.has(s.name)) MCP.open.delete(s.name); else MCP.open.add(s.name); mcpRender(); };
+    wrap.append(row);
+    if (MCP.open.has(s.name)) {
+      const d = h('div', 'mdet');
+      d.append(h('div', 'mk', s.transport === 'http' ? 'URL' : 'Commande'), h('div', 'mv', s.target || '—'));
+      if (s.source) d.append(h('div', 'mk', 'Source'), h('div', 'mv', s.source));
+      if (s.description) d.append(h('div', 'mk', 'Rôle'), h('div', 'mv', s.description));
+      if (s.error) d.append(h('div', 'mk', 'Erreur'), h('div', 'mv err', s.error));
+      if (s.status === 'auth') d.append(h('div', 'mk', ''), h('div', 'mv', 'Ce serveur demande une connexion à un compte (OAuth). Une connexion faite dans Claude Code reste chez Claude Code : ajoute une clé dans la config (en-tête Authorization) si le service en fournit une.'));
+      if (s.tools?.length) {
+        const tl = h('div', 'mtools');
+        for (const t of s.tools) { const it = h('div', 'mtool'); it.append(h('span', 'mtn', t.name)); if (t.description) it.append(h('span', 'mtd', t.description)); tl.append(it); }
+        d.append(h('div', 'mk', 'Outils'), tl);
+      }
+      const acts = h('div', 'macts');
+      const btn = (label, action, sec) => { const b = h('button', 'btn' + (sec ? ' sec' : ''), label); b.onclick = e => { e.stopPropagation(); post({ type: 'mcpAction', action, name: s.name }); }; acts.append(b); };
+      if (s.status === 'approve') btn('Autoriser et connecter', 'approve');
+      else if (s.status === 'untrusted') btn('Approuver les serveurs du projet', 'trust');
+      else if (s.status !== 'disabled') btn(s.status === 'connected' ? 'Reconnecter' : 'Connecter', 'connect', s.status === 'connected');
+      btn(s.status === 'disabled' ? 'Activer' : 'Désactiver', 'toggle', true);
+      d.append(acts);
+      wrap.append(d);
+    }
+    return wrap;
+  }
+  document.addEventListener('keydown', e => { if (MCP.el && e.key === 'Escape') { e.preventDefault(); mcpClose(); } });
+
   // ── messages de l'extension ──
   window.addEventListener('message', ({ data: m }) => {
     if (!m || typeof m !== 'object') return;
@@ -590,7 +681,9 @@
         showFlash('✓ ' + (ev.message || 'fichier restauré'));
         break;
       }
-      case 'select': selectCard(ev); break;
+      case 'select': mcpClose(); selectCard(ev); break;
+      case 'mcpPanel': mcpPanel(ev); break;
+      case 'mcpStatus': mcpStatus(ev); break;
       case 'ask': askCard(ev); break;
       case 'flash': showFlash(ev.text); break;
       case 'insert': insert(ev.text); break;

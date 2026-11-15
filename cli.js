@@ -16,6 +16,8 @@ import { runAgent, runBlock, setSelectHandler } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
 import { StdioInput, send as stdioSend } from './src/stdio.js';
 import { findEditors, buildVsix, installInto } from './src/vscode-install.js';
+import { mcpOverview, connectAll, connectOne } from './src/mcp-status.js';
+import { approveServer as approveMcp } from './src/pseudo.js';
 import { detectTargetDir } from './src/target.js';
 import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
@@ -420,7 +422,16 @@ const extraEnv = () => ({
   S, AGENTS, modelName, resolveModel, withAbort, ask, readAttachment, buildMessage, applySession, refreshPrompt,
   select: input.select ? o => input.select(o) : null,
   chatTurn: (t, o) => chatTurn(t, o),
+  ...(opts.stdio ? { mcpPanel: () => openMcpPanel() } : {}),
 });
+
+/** fenêtre « Serveurs MCP » du panneau VS Code : la liste tout de suite, puis l'état de chaque serveur dès qu'il est connu */
+async function openMcpPanel() {
+  const mgr = getMcp(S.cwd);
+  const ov = await mcpOverview(S.cwd, mgr);
+  stdioSend('mcpPanel', ov);
+  connectAll(mgr, ov.servers, r => stdioSend('mcpStatus', r), { timeoutMs: 20000 }).catch(() => {});
+}
 
 async function command(line) {
   const [cmd, ...rest] = line.split(/\s+/);
@@ -956,6 +967,20 @@ if (opts.stdio) {                                                    // commande
   input.on('diffBefore', (id, file) => {                               // contenu d'avant d'un fichier modifié (diff natif de VS Code) : seulement les fichiers touchés par le modèle
     const d = fileDiff(S.undo, String(file || ''));
     stdioSend('diffBefore', { id, path: file, ok: !!d, before: d ? d.before : '', created: d ? d.created : false });
+  });
+  input.on('mcpAction', async (action, name) => {                    // boutons de la fenêtre « Serveurs MCP »
+    const mgr = getMcp(S.cwd), sv = loadMcpConfig(S.cwd).mcpServers?.[name];
+    if (action === 'refresh') return openMcpPanel();
+    if (!sv) return;
+    try {
+      if (action === 'approve') {
+        if (!(await approveMcp(S, name, sv, { ask }))) return stdioSend('mcpStatus', { name, status: 'approve' });
+        action = 'connect';
+      }
+      if (action === 'connect') { stdioSend('mcpStatus', { name, status: 'connecting' }); return stdioSend('mcpStatus', await connectOne(mgr, name)); }
+      if (action === 'toggle') { await extraCommand('/mcp', `toggle ${name}`, extraEnv()); return openMcpPanel(); }
+      if (action === 'trust') { await extraCommand('/mcp', 'trust', extraEnv()); return openMcpPanel(); }
+    } catch (e) { stdioSend('mcpStatus', { name, status: 'error', error: String(e?.message || e) }); }
   });
   input.on('undoFile', file => {                                       // bouton « Annuler » d'un fichier du bilan
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour annuler un fichier' });

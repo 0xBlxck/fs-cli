@@ -137,6 +137,8 @@ class Chat {
         return;
       }
       case 'select': return this.toCli({ type: 'select', id: m.id, index: m.index });
+      case 'command': { const t = String(m.text || ''); if (/^\/[\w-]+( |$)/.test(t)) this.toCli({ type: 'submit', text: t }); return; }
+      case 'mcpAction': return this.toCli({ type: 'mcpAction', action: String(m.action || ''), name: String(m.name || '') });
       case 'ask': return this.toCli({ type: 'ask', id: m.id, text: String(m.text ?? '') });
       case 'interrupt': return this.toCli({ type: 'interrupt' });
       case 'setMode': return this.toCli({ type: 'setMode', mode: String(m.mode) });

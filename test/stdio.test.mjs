@@ -59,3 +59,9 @@ test('StdioInput : un événement JSON par ligne (préfixe \\x1e), réponses aux
     assert.equal(inp.takeQueued(), 'après');                                   // pendant le travail : mis en file
   } finally { process.stdout.write = orig; inp?.stop(); }
 });
+
+test('serveurs MCP : erreur de compte (OAuth) distinguée d\'une panne', async () => {
+  const { statusOfError } = await import('../src/mcp-status.js');
+  assert.equal(statusOfError('HTTP 401 : ce serveur demande une connexion à un compte (OAuth)'), 'auth');
+  assert.equal(statusOfError('Commande introuvable : "x"'), 'error');
+});

@@ -49,5 +49,16 @@ const steps = [
   () => E({ type: 'busy', busy: false }),
 ];
 if (location.hash === "#accueil") steps.length = 3;
+if (location.hash === "#mcp") { steps.length = 2; steps.push(() => E({ type: 'mcpPanel', servers: [
+  { name: 'supabase', group: 'Ce projet', status: 'connecting', transport: 'http', target: 'https://mcp.supabase.com/mcp' },
+  { name: 'playwright', group: 'FS-CLI', status: 'connected', toolCount: 45, transport: 'stdio', target: 'npx -y @playwright/mcp@latest' },
+  { name: 'blender', group: 'Claude Code', status: 'connected', toolCount: 26, transport: 'stdio', target: 'blender-mcp', source: 'Claude Code', tools: [{ name: 'execute_blender_code', description: 'Exécute du Python dans Blender' }, { name: 'get_objects_summary', description: 'Résumé des objets de la scène' }] },
+  { name: 'cua', group: 'Claude Code', status: 'approve', transport: 'stdio', target: 'cua mcp', source: 'Claude Code' },
+  { name: 'leboncoin', group: 'Claude Code', status: 'connecting', transport: 'stdio', target: 'node leboncoin.js' },
+  { name: 'meta-ads', group: 'Claude Code', status: 'auth', transport: 'http', target: 'https://mcp.example/meta' },
+  { name: 'rea', group: 'Claude Code', status: 'error', error: 'Commande introuvable : rea', transport: 'stdio', target: 'rea' },
+  { name: 'node_repl', group: 'Codex', status: 'disabled', transport: 'stdio', target: 'node repl.js' }],
+  cloud: ['claude.ai Canva', 'claude.ai Claude Docs', 'claude.ai Gmail'] }));
+  steps.push(() => document.querySelectorAll('.mrow')[2].click()); }
 let k = 0; (function next() { if (k < steps.length) { steps[k++](); setTimeout(next, 30); } else document.title = 'fini'; })();
 </script></body></html>
