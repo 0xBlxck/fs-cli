@@ -478,27 +478,37 @@ async function command(line) {
     }
     case '/navigateur': case '/browser': {                            // contrôle du navigateur (Playwright MCP) : ajout + démarrage
       const cfgAll = loadMcpConfig(S.cwd);
-      const mineChrome = /^(chrome|mon[- ]?chrome|extension)$/i.test(arg);
-      if (/^(off|non|retirer)$/i.test(arg)) {
+      // 1er mot = mode éventuel (chrome / separe / off) ; le reste = une demande à faire tout de suite avec le navigateur
+      const [first = '', ...more] = arg.split(/\s+/).filter(Boolean);
+      const MODE_CHROME = /^(chrome|mon[- ]?chrome|extension)$/i, MODE_SEP = /^(separe|séparé|normal|playwright)$/i;
+      if (/^(off|non|retirer)$/i.test(first)) {
         if (cfgAll.mcpServers.playwright?._scope === 'user') { delete cfgAll.mcpServers.playwright; saveMcpConfig('user', S.cwd, cfgAll); }
         return println(c.dim('  → contrôle du navigateur retiré'));
       }
-      const want = { command: 'npx', args: ['-y', '@playwright/mcp@latest', ...(mineChrome ? ['--extension'] : [])], description: mineChrome ? 'ton Chrome (extension Playwright MCP Bridge)' : 'navigateur piloté (Playwright)' };
-      cfgAll.mcpServers.playwright = { ...want, _scope: 'user' };
-      const saved = saveMcpConfig('user', S.cwd, cfgAll);
-      if (!saved.ok) return println(c.red('  ✗ ' + saved.error));
-      if (mineChrome) {
-        println(c.dim('  Mode « ton Chrome » : le modèle pilote TON navigateur, avec tes comptes déjà connectés.'));
-        println(c.dim('  Il faut l\'extension « Playwright MCP Bridge » du Chrome Web Store ; à la 1re action, Chrome te demandera d\'autoriser la connexion.'));
-      }
-      ui.spinner.start('préparation du navigateur (1re fois : téléchargement)…');
-      try {
-        const tools = await getMcp(S.cwd).listTools('playwright');
-        ui.spinner.stop();
-        println(c.green(`  ✓ contrôle du navigateur prêt (${tools.length} actions : ouvrir une page, cliquer, remplir, capturer l'écran…)`));
-        println(c.dim('  Demande simplement : « va sur youtube.com et cherche … », « ouvre mon site en local et vérifie le formulaire »…'));
-        return println(c.dim(mineChrome ? '  /navigateur pour revenir au navigateur séparé · /navigateur off pour retirer' : '  /navigateur chrome pour piloter TON Chrome (comptes connectés) · /navigateur off pour retirer'));
-      } catch (e) { ui.spinner.stop(); return println(c.red('  ✗ démarrage impossible : ' + e.message) + c.dim('\n  Il faut Google Chrome installé et Node.js (npx).')); }
+      const cur = cfgAll.mcpServers.playwright;
+      const curChrome = !!cur?.args?.includes('--extension');
+      const mineChrome = MODE_CHROME.test(first) ? true : MODE_SEP.test(first) ? false : (cur ? curChrome : false);   // sans mode précisé : on garde l'actuel
+      const request = (MODE_CHROME.test(first) || MODE_SEP.test(first) ? more : [first, ...more]).join(' ').trim();
+      const needSetup = !cur || curChrome !== mineChrome;
+      if (needSetup) {
+        const want = { command: 'npx', args: ['-y', '@playwright/mcp@latest', ...(mineChrome ? ['--extension'] : [])], description: mineChrome ? 'ton Chrome (extension Playwright MCP Bridge)' : 'navigateur piloté (Playwright)' };
+        cfgAll.mcpServers.playwright = { ...want, _scope: 'user' };
+        const saved = saveMcpConfig('user', S.cwd, cfgAll);
+        if (!saved.ok) return println(c.red('  ✗ ' + saved.error));
+        if (mineChrome) {
+          println(c.dim('  Mode « ton Chrome » : le modèle pilote TON navigateur, avec tes comptes déjà connectés.'));
+          println(c.dim('  Il faut l\'extension « Playwright MCP Bridge » du Chrome Web Store ; à la 1re action, Chrome te demandera d\'autoriser la connexion.'));
+        }
+        ui.spinner.start('préparation du navigateur (1re fois : téléchargement)…');
+        try {
+          const tools = await getMcp(S.cwd).listTools('playwright');
+          ui.spinner.stop();
+          println(c.green(`  ✓ contrôle du navigateur prêt${mineChrome ? ' (ton Chrome)' : ''} : ${tools.length} actions (ouvrir une page, cliquer, remplir, capturer l'écran…)`));
+        } catch (e) { ui.spinner.stop(); return println(c.red('  ✗ démarrage impossible : ' + e.message) + c.dim('\n  Il faut Google Chrome installé et Node.js (npx).')); }
+      } else if (!request) println(c.green(`  ✓ contrôle du navigateur déjà actif${mineChrome ? ' (ton Chrome)' : ' (navigateur séparé)'}`));
+      if (request) return chatTurn(/navigateur|chrome|browser/i.test(request) ? request : `${request} (dans le navigateur)`);   // la demande part directement
+      println(c.dim('  Demande simplement : « va sur youtube.com et cherche … », ou /navigateur ouvre quick.fr'));
+      return println(c.dim(mineChrome ? '  /navigateur separe pour le navigateur séparé · /navigateur off pour retirer' : '  /navigateur chrome pour piloter TON Chrome (comptes connectés) · /navigateur off pour retirer'));
     }
     case '/doctor': {                                                 // vérifie l'installation et dit quoi corriger
       ui.spinner.start('vérification…');
