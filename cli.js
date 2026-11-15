@@ -20,15 +20,16 @@ import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
 import { runDoctor } from './src/doctor.js';
+import { startBridge } from './src/bridge.js';
 import { checkUpdate, INSTALL_CMD } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
-import { toolsHint, mentionedServers, serverBrief } from './src/pseudo.js';
+import { toolsHint, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
-import { toolsCatalog } from './src/mcp.js';
+import { toolsCatalog, loadMcpConfig, saveMcpConfig } from './src/mcp.js';
 import { getMcp, activeServers } from './src/mcp-runtime.js';
 import * as ui from './src/ui.js';
 import { c, println, THEMES } from './src/ui.js';
@@ -236,7 +237,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/doctor', '/rewind', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/navigateur ', '/doctor', '/rewind', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -347,7 +348,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
@@ -474,6 +475,30 @@ async function command(line) {
     case '/undo': {
       const r = undoLast({ undo: S.undo }, FILES.trash);
       return println(r ? c.green('  ✓ ' + r) : c.dim('  rien à annuler'));
+    }
+    case '/navigateur': case '/browser': {                            // contrôle du navigateur (Playwright MCP) : ajout + démarrage
+      const cfgAll = loadMcpConfig(S.cwd);
+      const mineChrome = /^(chrome|mon[- ]?chrome|extension)$/i.test(arg);
+      if (/^(off|non|retirer)$/i.test(arg)) {
+        if (cfgAll.mcpServers.playwright?._scope === 'user') { delete cfgAll.mcpServers.playwright; saveMcpConfig('user', S.cwd, cfgAll); }
+        return println(c.dim('  → contrôle du navigateur retiré'));
+      }
+      const want = { command: 'npx', args: ['-y', '@playwright/mcp@latest', ...(mineChrome ? ['--extension'] : [])], description: mineChrome ? 'ton Chrome (extension Playwright MCP Bridge)' : 'navigateur piloté (Playwright)' };
+      cfgAll.mcpServers.playwright = { ...want, _scope: 'user' };
+      const saved = saveMcpConfig('user', S.cwd, cfgAll);
+      if (!saved.ok) return println(c.red('  ✗ ' + saved.error));
+      if (mineChrome) {
+        println(c.dim('  Mode « ton Chrome » : le modèle pilote TON navigateur, avec tes comptes déjà connectés.'));
+        println(c.dim('  Il faut l\'extension « Playwright MCP Bridge » du Chrome Web Store ; à la 1re action, Chrome te demandera d\'autoriser la connexion.'));
+      }
+      ui.spinner.start('préparation du navigateur (1re fois : téléchargement)…');
+      try {
+        const tools = await getMcp(S.cwd).listTools('playwright');
+        ui.spinner.stop();
+        println(c.green(`  ✓ contrôle du navigateur prêt (${tools.length} actions : ouvrir une page, cliquer, remplir, capturer l'écran…)`));
+        println(c.dim('  Demande simplement : « va sur youtube.com et cherche … », « ouvre mon site en local et vérifie le formulaire »…'));
+        return println(c.dim(mineChrome ? '  /navigateur pour revenir au navigateur séparé · /navigateur off pour retirer' : '  /navigateur chrome pour piloter TON Chrome (comptes connectés) · /navigateur off pour retirer'));
+      } catch (e) { ui.spinner.stop(); return println(c.red('  ✗ démarrage impossible : ' + e.message) + c.dim('\n  Il faut Google Chrome installé et Node.js (npx).')); }
     }
     case '/doctor': {                                                 // vérifie l'installation et dit quoi corriger
       ui.spinner.start('vérification…');
@@ -636,6 +661,9 @@ async function chatTurn(text, { keepLast = false } = {}) {
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
       }
+      if (wantsBrowser(text) && !Object.keys(loadMcpConfig(S.cwd).mcpServers || {}).some(n => BROWSER_SERVERS.test(n))) {
+        println(c.yellow('  💡 Pour que je pilote le navigateur, active-le une fois avec /navigateur'));
+      }
     }
     if (!keepLast) {                                                   // skills choisis automatiquement pour cette demande (correspondance nette seulement)
       S.skillsSent ||= new Set();
@@ -653,7 +681,14 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!keepLast) S.lastUserText = text;
     mem.observe(text, S.cwd);
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);
-    try { await runAgent(S, message, { signal: turnAbort.signal, ask }); }
+    try {
+      await runAgent(S, message, { signal: turnAbort.signal, ask });
+      if (ui.tasks.blocks > 1 && ui.tasks.list.length) {               // liste mise à jour pendant le travail : état final écrit une seule fois
+        const L = ui.tasks.list, done = L.filter(t => t.state === 'done').length;
+        println(`  ${c.bold('Tâches')} ${c.dim(`${done}/${L.length}`)}`);
+        for (const t of L) println(`  ${t.state === 'done' ? c.green('☑') + ' ' + c.dim(t.text) : t.state === 'doing' ? c.yellow('◐') + ' ' + t.text : c.dim('☐') + ' ' + t.text}`);
+      }
+    }
     finally { S.pendingFileIds = []; }                                  // les images ne partent qu'avec ce message
   } catch (e) {
     if (e.name === 'AbortError' || turnAbort.signal.aborted) {
@@ -707,7 +742,7 @@ async function handleInput(text) {
     else if (cfg.intents !== false && await naturalIntent(t)) return;
     else {
       if (cfg.intents !== false && cfg.engine === 'native') {     // le modèle n'a pas d'accès web : une URL citée est lue et jointe
-        for (const u of urlsIn(t)) await extraCommand('/fetch', u, extraEnv());
+        if (!wantsBrowser(t)) for (const u of urlsIn(t)) await extraCommand('/fetch', u, extraEnv());   // « va sur … dans le navigateur » : c'est le navigateur qui ira, pas un téléchargement
       }
       await chatTurn(t);
     }
@@ -745,6 +780,7 @@ input.on('submit', t => { runInput(t); });
 input.on('interrupt', () => { turnAbort?.abort(); });
 input.on('cycleMode', cycleMode);
 ui.tasks.on(list => input.setTasks?.(list));                          // liste de tâches du modèle → panneau épinglé
+await startBridge({ getManager: () => getMcp(S.cwd), getCwd: () => S.cwd });   // pont local : fs-mcp garde les serveurs MCP ouverts (navigateur…)
 input.on('pasteImage', () => { try { pasteClipboardImage(); } catch (e) { println(c.red('  image : ' + e.message)); } });
 input.on('quit', () => { shutdown(0); });
 process.on('exit', () => { try { input.stop(); } catch {} });

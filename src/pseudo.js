@@ -69,10 +69,22 @@ export function mentionedServers(cwd, text) {
   const t = String(text || '').toLowerCase();
   const names = Object.entries(loadMcpConfig(cwd).mcpServers || {}).filter(([, s]) => !s.disabled).map(([n]) => n);
   const saysMcp = /\bmcp\b/.test(t);
-  return names.filter(n => {
+  const found = names.filter(n => {
     const re = new RegExp(`(^|[^\\w-])${n.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[_-]/g, '[ _-]?')}($|[^\\w-])`);
     return re.test(t) && (saysMcp || n.length >= 6);              // noms courts (rea, cua) : seulement si « mcp » est dit
-  }).slice(0, 3);
+  });
+  // « ouvre chrome », « dans le navigateur », « va sur youtube.com » → le serveur navigateur, s'il est installé
+  const browser = names.find(n => BROWSER_SERVERS.test(n));
+  if (browser && !found.includes(browser) && wantsBrowser(t)) found.push(browser);
+  return found.slice(0, 3);
+}
+
+export const BROWSER_SERVERS = /^(playwright|navigateur|browser|chrome|chrome-devtools|puppeteer)$/i;
+/** La demande parle-t-elle de piloter un navigateur ? */
+export function wantsBrowser(text) {
+  const t = String(text || '').toLowerCase();
+  return /\b(navigateur|browser|chrome|firefox|edge|onglet)\b/.test(t) ||
+    /\b(va|aller|ouvre|ouvrir|visite|navigue|clique|connecte[- ]toi)\b[^.\n]{0,40}\b(sur|le site|la page|https?:\/\/|www\.|[\w-]+\.(com|fr|org|io|net))/.test(t);
 }
 
 /** Serveur nommé par l'utilisateur : accord si besoin, démarrage, puis liste de ses outils jointe à la demande. */

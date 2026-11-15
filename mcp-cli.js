@@ -16,6 +16,7 @@ import path from 'node:path';
 import { loadMcpConfig, McpManager } from './src/mcp.js';
 import { discoverSkills, searchSkills } from './src/discover.js';
 import { isImportApproved } from './src/approvals.js';
+import { bridgeRequest } from './src/bridge.js';
 
 const argv = process.argv.slice(2);
 const cwd = process.cwd();
@@ -47,6 +48,22 @@ function coerce(v, schema) {
   if (t === 'object') { try { return JSON.parse(v); } catch { return v; } }
   if (t === 'string') return v;
   try { return JSON.parse(v); } catch { return v; }
+}
+
+// Session FS-CLI ouverte → on passe par son pont : le serveur reste ouvert entre deux appels (navigateur, Blender…).
+// Sinon fs-mcp démarre le serveur lui-même pour cet appel.
+async function listToolsAny(name) {
+  const b = await bridgeRequest({ action: 'tools', server: name });
+  if (b) { if (b.error) throw Object.assign(new Error(b.error), { code: b.code }); return b.tools || []; }
+  mgr ||= new McpManager({ cwd });
+  return mgr.listTools(name);
+}
+async function callAny(name, tool, args) {
+  const b = await bridgeRequest({ action: 'call', server: name, tool, args });
+  if (b) { if (b.error) return { ok: false, text: b.error }; return { ok: !!b.ok, text: b.text }; }
+  mgr ||= new McpManager({ cwd });
+  const r = await mgr.callTool(name, tool, args, { timeoutMs: 120000 });
+  return { ok: r.ok && !r.isError, text: r.text || r.error || '' };
 }
 
 function parseArgs(kv, def) {
@@ -89,9 +106,8 @@ switch ((cmd || '').toLowerCase()) {
   case 'tools': {
     const name = rest[0]; if (!name) { await fail('Usage : fs-mcp tools <serveur>'); break; }
     const g = getServer(name); if (g.error) { await fail(g.error, g.code); break; }
-    mgr = new McpManager({ cwd });
     try {
-      const tools = await mgr.listTools(name);
+      const tools = await listToolsAny(name);
       out(`Outils de ${name} (${tools.length}) — * = obligatoire. Appel : fs-mcp call ${name} <outil> cle=valeur …`);
       for (const t of tools) out(describeTool(t));
       await finish(0);
@@ -102,15 +118,14 @@ switch ((cmd || '').toLowerCase()) {
     const [name, tool, ...kv] = rest;
     if (!name || !tool) { await fail('Usage : fs-mcp call <serveur> <outil> cle=valeur … (ou --json \'{…}\' / --json-file fichier.json)'); break; }
     const g = getServer(name); if (g.error) { await fail(g.error, g.code); break; }
-    mgr = new McpManager({ cwd });
     try {
-      const tools = await mgr.listTools(name);
+      const tools = await listToolsAny(name);
       const def = tools.find(t => t.name === tool);
       if (!def) { await fail(`Outil inconnu : ${tool}. Outils de ${name} : ${tools.map(t => t.name).join(', ')}`); break; }
       const args = parseArgs(kv, def);                          // lève une erreur claire si un argument est incompris
-      const res = await mgr.callTool(name, tool, args, { timeoutMs: 120000 });
-      out(res.text || res.error || '(aucune sortie)');
-      await finish(res.ok && !res.isError ? 0 : 1);
+      const res = await callAny(name, tool, args);
+      out(res.text || '(aucune sortie)');
+      await finish(res.ok ? 0 : 1);
     } catch (e) { await fail(e.message); }
     break;
   }

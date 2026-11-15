@@ -104,6 +104,7 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 - **Images** : colle une capture avec **Alt+V** (ou `/image`), glisse-dépose une image dans le terminal, ou écris `@capture.png` : le modèle la voit.
 - **Web** : une URL citée est lue automatiquement ; `/search` et `/fetch` (adresses locales refusées).
 - **Tes outils déjà installés, automatiquement** : FS-CLI retrouve les serveurs **MCP** configurés dans Claude Code, Claude Desktop, Codex, Cursor, Gemini CLI ou Windsurf, et les **skills** (`SKILL.md` de `~/.claude/skills`, `~/.agents/skills`, `~/.codex/skills`, plugins installés). Le modèle les utilise tout seul quand c'est utile, via le programme **`fs-mcp`** installé avec FS-CLI (`fs-mcp list`, `fs-mcp tools <serveur>`, `fs-mcp call <serveur> <outil> cle=valeur…`, `fs-mcp skills <mots>`) : la liste d'outils de France Student étant fixe, c'est un vrai programme qu'il lance, rien n'est simulé. Un serveur importé doit être autorisé une fois par toi (`/mcp <nom>`, ou la question posée quand tu le nommes dans ta demande). `/import` montre ce qui a été trouvé, `/import off` désactive.
+- **Contrôle du navigateur** : `/navigateur` (une fois) et le modèle peut ouvrir des pages, cliquer, remplir des formulaires, vérifier ton site en local… (Playwright). `/navigateur chrome` pour piloter **ton** Chrome avec tes comptes déjà connectés (extension « Playwright MCP Bridge »).
 - **MCP** : tes propres serveurs MCP (stdio et HTTP) avec presets (Blender, Playwright…).
 - **Fichiers protégés** : le modèle ne peut pas écraser un fichier que tu as modifié depuis sa dernière lecture ; écritures atomiques ; `/undo` annule la dernière modification.
 
@@ -131,7 +132,7 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |
 | Mémoire | `/remember` · `/forget` · `/memory` · `/preprompt` · `/profil` · `/skills` |
-| Web et outils | `/search` · `/fetch` · `/mcp` · `/import` · `/jobs` · `!commande` |
+| Web et outils | `/navigateur` · `/search` · `/fetch` · `/mcp` · `/import` · `/jobs` · `!commande` |
 | Sécurité | `/permissions` · `/mode auto\|ask\|plan` · `/intent on\|off` |
 
 ---

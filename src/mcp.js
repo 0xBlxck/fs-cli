@@ -251,7 +251,7 @@ class StdioTransport {
     const useShell = IS_WIN && !/\.exe$/i.test(command);
     const cwd = this.cwd && fs.existsSync(this.cwd) ? this.cwd : process.cwd();
     const opts = {
-      env: { ...process.env, ...Object.fromEntries(Object.entries(env).map(([k, v]) => [k, expandVars(v)])) },
+      env: { ...process.env, FS_CLI_BRIDGE: '', ...Object.fromEntries(Object.entries(env).map(([k, v]) => [k, expandVars(v)])) },   // le pont de session n'est pas transmis aux serveurs
       cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
     };
     const eargs = args.map(expandVars);

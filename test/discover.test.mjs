@@ -13,6 +13,7 @@ const home = path.join(tmp, 'home'); const proj = path.join(tmp, 'projet');
 fs.mkdirSync(proj, { recursive: true });
 process.env.FS_CLI_HOME = path.join(tmp, 'fscli');
 process.env.FS_IMPORT_HOME = home;
+delete process.env.FS_CLI_BRIDGE;                                     // jamais le pont d'une vraie session pendant les tests
 process.env.APPDATA = path.join(home, 'AppData', 'Roaming');
 
 const fake = path.join(here, 'mcp', 'fake-mcp-stdio.js');

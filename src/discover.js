@@ -185,21 +185,34 @@ const GENERIC = new Set(['code', 'fichier', 'fichiers', 'projet', 'script', 'pro
  * (au moins 2 mots qui correspondent et un score suffisant), 2 au maximum.
  */
 export function autoSkills(list, query, max = 2) {
-  const words = [...new Set(norm(query).split(/[^a-z0-9]+/).filter(w => (w.length > 2 || FR_EN[w]) && !STOP.has(w) && !GENERIC.has(w)))];
-  if (!words.length) return [];
-  const terms = [...new Set(words.flatMap(w => [w, ...(FR_EN[w] ? FR_EN[w].split(' ') : [])]))];
-  const scored = list.map(s => {
-    const n = norm(s.name), d = norm(s.description);
-    let score = 0; const hit = new Set();
-    for (const t of terms) {
-      if (n.includes(t)) { score += 3; hit.add(t); }
-      else if (new RegExp(`\\b${t}`).test(d)) { score += 1; hit.add(t); }
+  // mots de la demande (un mot et son pluriel = un seul mot), chacun avec ses équivalents anglais
+  const stem = w => (w.length > 3 ? w.replace(/(s|x)$/, '') : w);
+  const raw = norm(query).split(/[^a-z0-9]+/).filter(w => (w.length > 2 || FR_EN[w]) && !STOP.has(w) && !GENERIC.has(w) && !TECH.has(w));
+  const words = new Map();
+  for (const w of raw) { const k = stem(w); const t = words.get(k) || new Set([k]); t.add(w); for (const e of (FR_EN[w] || FR_EN[k] || '').split(' ').filter(Boolean)) t.add(e); words.set(k, t); }
+  if (!words.size) return [];
+  const texts = list.map(s => ({ s, n: norm(s.name).split(/[^a-z0-9]+/).filter(Boolean), d: norm(s.description) }));
+  const inDesc = (d, t) => new RegExp(`\\b${t}`).test(d);
+  // mot ENTIER du nom du skill (« web » ≠ « websocket », « test » ≠ « pentest »)
+  const inName = (tokens, t) => tokens.some(k => k === t || (t.length >= 5 && k.startsWith(t)));
+  const scored = texts.map(({ s, n, d }) => {
+    let score = 0, hits = 0;
+    for (const [, terms] of words) {
+      const tt = [...terms];
+      const df = texts.filter(x => tt.some(t => inName(x.n, t) || inDesc(x.d, t))).length;
+      const w = df > 30 ? 0.5 : 1;                                       // mot présent partout (« test », « code »…) : compte moitié
+      if (tt.some(t => inName(n, t))) { score += 3 * w; hits++; }
+      else if (tt.some(t => inDesc(d, t))) { score += w; hits++; }
     }
-    return { s, score, hits: hit.size };
-  }).filter(x => x.hits >= 2 && x.score >= 4).sort((a, b) => b.score - a.score);
+    // un seul mot suffit s'il est un mot entier du NOM du skill (« cv » → ats-latex-cv, « xlsx »…)
+    const nameOnly = hits === 1 && score >= 3;
+    return { s, score, ok: (hits >= 2 && score >= 3.5) || nameOnly };
+  }).filter(x => x.ok).sort((a, b) => b.score - a.score);
   if (!scored.length) return [];
   return scored.filter(x => x.score >= scored[0].score * 0.75).slice(0, max).map(x => x.s);
 }
+// fragments techniques qui ne disent rien de la nature de la demande
+const TECH = new Set(['src', 'json', 'package', 'index', 'html', 'css', 'node', 'npm', 'calc', 'etape', 'etapes', 'mini', 'lance', 'lancer', 'fichier', 'courts', 'court', 'bouton', 'ajoute']);
 
 /** Un chemin est-il dans un dossier de skill découvert ? (lecture autorisée sans question) */
 export function isSkillPath(p, cwd) {
