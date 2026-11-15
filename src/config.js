@@ -73,7 +73,9 @@ export function saveCfg() {
   try { fs.writeFileSync(FILES.cfg, JSON.stringify(cfg, null, 2), { mode: 0o600 }); } catch {}
 }
 
-export const TOKEN = process.env.FS_SESSION_TOKEN || '';
+export let TOKEN = process.env.FS_SESSION_TOKEN || '';
+/** Token fourni pendant l'exécution (assistant de premier lancement, /login) : jamais placé dans l'environnement. */
+export function setToken(t) { TOKEN = String(t || '').trim(); }
 // Sécurité : le token ne doit JAMAIS être hérité par les programmes que le CLI lance (commandes du modèle, serveurs MCP, python…)
 // idem pour la clé de recherche web : elle est lue ici, puis passée explicitement à web.js (jamais laissée dans l'environnement des enfants)
 export const SEARCH_KEY = process.env.FS_SEARCH_API_KEY || '';

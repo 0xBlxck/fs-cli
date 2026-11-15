@@ -18,6 +18,7 @@ import { detectTargetDir } from './src/target.js';
 import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
+import { loginWizard } from './src/setup.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
@@ -39,6 +40,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--cwd') opts.cwd = argv[++i];
   else if (a === '--web') opts.web = true;
   else if (a === '--classic') opts.classic = true;
+  else if (a === '--login') opts.login = true;
   else if (a === '-h' || a === '--help') opts.help = true;
   else if (a === '-v' || a === '--version') opts.version = true;
   else opts.prompt.push(a);
@@ -58,15 +60,24 @@ if (opts.help) {
   --cwd <dossier>          dossier de travail
   --web                    active la recherche web
   --classic                ancienne saisie (readline) au lieu de l'interface plein écran
+  --login                  (re)configurer ta clé de session France Student
   -h, --help  -v, --version`);
   process.exit(0);
 }
 
+if (opts.login && process.stdin.isTTY) {                                // fs-cli --login : changer de clé de session
+  if (!(await loginWizard({ first: false }))) process.exit(1);
+}
 if (!TOKEN) {
-  console.log(c.red('\n  FS_SESSION_TOKEN manquant.'));
-  console.log(c.dim(`  Mets-le dans ${path.join(ROOT, '.env')} ou ${path.join(HOME_DIR, '.env')} :  FS_SESSION_TOKEN=...`));
-  console.log(c.dim('  (ia.francestudent.org → DevTools → Application → Cookies → next-auth.session-token)\n'));
-  process.exit(1);
+  // premier lancement : assistant de connexion (aucun fichier à éditer) ; sans terminal interactif, on explique
+  const canAsk = process.stdin.isTTY && process.stdout.isTTY && !opts.print;
+  if (!canAsk || !(await loginWizard({ first: true }))) {
+    if (!canAsk) {
+      console.log(c.red('\n  Clé de session France Student manquante.'));
+      console.log(c.dim(`  Lance simplement « fs-cli » dans un terminal pour la configurer, ou mets FS_SESSION_TOKEN=... dans ${path.join(HOME_DIR, '.env')}\n`));
+    }
+    process.exit(1);
+  }
 }
 
 if (IS_WIN) { try { execSync('chcp 65001', { stdio: 'ignore' }); } catch {} }
@@ -580,7 +591,7 @@ async function handleInput(text) {
   } catch (e) {
     ui.spinner.stop();
     println(c.red(`\n  Erreur: ${e.message}`));
-    if (/401|expiré/.test(e.message)) println(c.dim('  → mets à jour FS_SESSION_TOKEN dans .env'));
+    if (/401|expiré/.test(e.message)) println(c.dim('  → ta clé de session a expiré : quitte puis lance « fs-cli --login »'));
   } finally {
     busy = false; input.setBusy(false);
     refreshPrompt();

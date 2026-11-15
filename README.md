@@ -21,36 +21,51 @@ Client terminal **communautaire et non officiel** pour [France Student AI](https
 - **Ctrl+C** arrête aussi la génération côté serveur (elle ne continue pas en arrière-plan).
 - **Zéro dépendance** (rien à `npm install`), pas de télémétrie.
 
-## Installation
+## Installation (5 minutes)
 
-Prérequis : **Node.js ≥ 20**. Testé sous **Windows 11 + PowerShell** ; Linux/macOS (bash) devraient fonctionner mais ne sont pas testés en continu.
+**1. Installe Node.js** (une seule fois) : télécharge la version **LTS** sur <https://nodejs.org>, ou dans PowerShell :
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+Ferme puis rouvre le terminal ensuite.
+
+**2. Installe FS-CLI** :
+
+```powershell
+npm install -g https://github.com/0xBlxck/fs-cli/archive/refs/heads/main.tar.gz
+```
+
+**3. Lance-le dans le dossier de ton projet** :
+
+```powershell
+cd C:cheminers	onprojet
+fs-cli
+```
+
+Au premier lancement, un assistant te guide pour connecter **ton** compte France Student : il ouvre le site, t'explique où copier ta clé de session (F12 → Application → Cookies → `next-auth.session-token`), la vérifie et l'enregistre sur ton PC (`~/.fs-cli/.env`). Rien à éditer à la main.
+
+> 🔐 Cette clé est l'équivalent d'un mot de passe : ne la donne à personne, ne la colle pas dans un ticket ou une capture d'écran. Si elle a fuité, déconnecte-toi puis reconnecte-toi sur le site. Pour en changer : `fs-cli --login`.
+
+| Besoin | Commande |
+|---|---|
+| Mettre à jour | relance la commande de l'étape 2 |
+| Changer de compte / clé expirée | `fs-cli --login` |
+| Reprendre la dernière session du dossier | `fs-cli -c` |
+| Une seule demande puis quitter | `fs-cli -p "résume ce dossier"` |
+| Désinstaller | `npm uninstall -g fs-cli` (tes réglages restent dans `~/.fs-cli`) |
+
+<details><summary>Installation pour développeurs (depuis les sources)</summary>
 
 ```bash
 git clone https://github.com/0xBlxck/fs-cli.git
 cd fs-cli
-cp .env.example .env        # Windows (cmd) : copy .env.example .env
+node cli.js          # ou : npm link, puis fs-cli
 ```
 
-### Ton token (à faire toi-même, une seule fois)
-
-Le CLI a besoin de **ta** session France Student. Personne ne peut te la fournir et tu ne dois la donner à personne.
-
-1. Connecte-toi sur <https://ia.francestudent.org>.
-2. Ouvre les outils de développement du navigateur (F12) → **Application** (Chrome) ou **Stockage** (Firefox) → **Cookies** → `ia.francestudent.org`.
-3. Copie la valeur du cookie `next-auth.session-token`.
-4. Colle-la dans le fichier `.env` : `FS_SESSION_TOKEN=la-valeur-copiée`.
-
-> 🔐 Ce token **est** ton mot de passe de session : ne le partage pas, ne le commite pas (`.env` est dans `.gitignore`), ne le colle pas dans un ticket ou une capture d'écran. S'il a fuité, déconnecte-toi puis reconnecte-toi sur le site.
-> Tu peux aussi le fournir par variable d'environnement (`FS_SESSION_TOKEN`) ou dans `~/.fs-cli/.env`.
-
-### Lancer
-
-```bash
-node cli.js                  # session interactive
-node cli.js -c               # reprend la dernière session du dossier
-node cli.js -p "résume ce dossier"   # une demande, puis quitte
-node cli.js --help
-```
+La clé peut aussi être fournie par la variable d'environnement `FS_SESSION_TOKEN` ou dans `~/.fs-cli/.env` (voir `.env.example`).
+</details>
 
 ## Utilisation
 
