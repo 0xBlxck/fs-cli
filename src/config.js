@@ -44,6 +44,7 @@ const DEFAULTS = {
   engineExplicit: false, // true dès que tu choisis avec /engine (sinon un ancien réglage « chat » est remplacé par « native »)
   autoCompact: true,  // compacte la conversation (résumé → nouvelle conversation) quand le contexte atteint le seuil
   compactThreshold: 80,
+  compactTokens: 80000,    // résumé aussi quand un message envoie plus que ça (l'historique entier repart à chaque message)
   sound: false,       // bip à la fin d'une réponse longue (> 3 s)
   eco: false,         // consignes de concision ajoutées aux demandes de création
   skills: [],         // ids des compétences actives (skills.json)
@@ -100,6 +101,13 @@ export function loadSessions() {
     if (s.chatId) return [{ chatId: s.chatId, agentId: s.agentId, cwd: s.cwd, title: '(ancienne session)', updatedAt: Date.now(), primed: false }];
   } catch {}
   return [];
+}
+
+/** conversations supprimées du site : marquées (jamais effacées du fichier), puis masquées des listes */
+export function markSessionsGone(ids) {
+  const set = new Set(ids); if (!set.size) return;
+  const list = loadSessions().map(x => (set.has(x.chatId) ? { ...x, gone: true } : x));
+  try { fs.writeFileSync(FILES.sessions, JSON.stringify(list, null, 1), { mode: 0o600 }); } catch {}
 }
 
 export function upsertSession(s) {

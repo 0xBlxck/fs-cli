@@ -9,7 +9,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
 
-import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession } from './src/config.js';
+import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
+import { fetchChatUsage } from './src/account.js';
 import { fetchAgents, listFsProjects } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
@@ -436,6 +437,18 @@ const PANEL_VER = String(process.env.FS_CLI_PANEL || '');            // version 
 const verNum = v => String(v || '0').split('.').map(n => parseInt(n, 10) || 0).reduce((a, n) => a * 1000 + n, 0);
 const panelAtLeast = v => !!PANEL_VER && verNum(PANEL_VER) >= verNum(v);
 
+/** sessions dont la conversation existe encore sur le site (vérification légère, en parallèle). Une conversation supprimée est marquée et masquée ;
+ *  si aucune vérification n'aboutit (réseau coupé), on ne masque rien. */
+async function liveSessions(limit = 50) {
+  const list = loadSessions().filter(s => s.chatId && !s.gone).slice(0, limit);
+  const check = s => Promise.race([fetchChatUsage(s.chatId).then(r => !!r).catch(() => null), new Promise(r => setTimeout(() => r(null), 5000))]);
+  const res = [];
+  for (let i = 0; i < list.length; i += 8) res.push(...await Promise.all(list.slice(i, i + 8).map(check)));
+  if (!res.some(Boolean)) return list;                               // rien n'a répondu : réseau ? on montre tout
+  markSessionsGone(list.filter((s, i) => res[i] === false).map(s => s.chatId));   // seulement un « n'existe pas » net
+  return list.filter((s, i) => res[i] !== false);                    // délai dépassé : gardée (dans le doute, on montre)
+}
+
 /** messages d'une conversation, sans les ajouts internes de FS-CLI (étiquette, notes, consignes jointes) */
 function transcriptOf(chat) {
   const clean = (role, t) => {
@@ -699,7 +712,8 @@ async function command(line) {
       return println();
     }
     case '/sessions': case '/resume': case '/load': {
-      const list = loadSessions().slice(0, 12);
+      ui.spinner.start('conversations…');
+      const list = await liveSessions(12).finally(() => ui.spinner.stop());   // sans celles supprimées du site
       if (!list.length) return println(c.dim('  aucune session sauvegardée'));
       const n = parseInt(arg) || (cmd === '/load' ? 1 : 0);
       if (n >= 1 && list[n - 1]) {
@@ -828,6 +842,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
       }
     }
     if (!S.ctxSent) {                                                  // préprompt, faits, notes, skills : 1er message d'une conversation
+      if (S.pendingSummary) { message = `[Reprise : résumé de la conversation précédente (même session de travail), à garder comme contexte]\n${S.pendingSummary}\n\n[Nouvelle demande de l'utilisateur]\n${message}`; println(c.dim('  ＋ résumé de la conversation précédente')); }
       const { text: ctxText, label } = mem.buildContextBlock(S.cwd);
       if (ctxText) { message += '\n\n' + ctxText; println(c.dim(`  ＋ contexte joint : ${label}`)); }
       if (cfg.fsProject && cfg.fsProject.id) {                         // projet France Student choisi (/projet) : ses instructions personnalisées
@@ -867,6 +882,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);
     try {
       await runAgent(S, message, { signal: turnAbort.signal, ask });
+      if (S.chatId && S.pendingSummary) { S.pendingSummary = null; S.compactedFrom = null; }   // nouvelle conversation ouverte avec le résumé
       if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));
       if (!opts.stdio && ui.tasks.blocks > 1 && ui.tasks.list.length) {               // liste mise à jour pendant le travail : état final écrit une seule fois
         const L = ui.tasks.list, done = L.filter(t => t.state === 'done').length;
@@ -888,6 +904,19 @@ async function chatTurn(text, { keepLast = false } = {}) {
     }
     finally { S.pendingFileIds = []; ui.tasks.set([]); }               // images : seulement ce message ; panneau de tâches vidé (sinon affiché en double)
   } catch (e) {
+    if (/Chat not found/i.test(e.message || '') && S.chatId) {        // conversation supprimée du site entre-temps : on repart sur une neuve
+      markSessionsGone([S.chatId]);
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      println(c.yellow('  cette conversation a été supprimée du site : ton message part dans une nouvelle conversation'));
+      turnAbort = null;
+      return chatTurn(text, { keepLast: true });
+    }
+    if (e.code === 'DAILY_CHAT_LIMIT' && S.compactedFrom && !S.chatId) {   // impossible d'ouvrir la conversation légère : on reste dans l'actuelle, rien n'est perdu
+      S.chatId = S.compactedFrom; S.compactedFrom = null; S.pendingSummary = null; S.ctxSent = true;
+      println(c.yellow('  limite des 50 conversations atteinte : on continue dans la conversation actuelle'));
+      turnAbort = null;
+      return chatTurn(text, { keepLast: true });
+    }
     if (e.name === 'AbortError' || turnAbort.signal.aborted) {
       ui.spinner.stop();
       println(c.yellow('\n  ⏹ interrompu'));
@@ -1004,9 +1033,9 @@ if (opts.stdio) {                                                    // commande
     stdioSend('diffBefore', { id, path: d ? (fileDiff(S.undo, abs) ? abs : path.resolve(S.cwd, String(file || ''))) : abs, ok: !!d, before: d ? d.before : '', created: d ? d.created : false });
   });
   // ── fenêtre « Conversations » (horloge du panneau) : liste des sessions, reprise avec réaffichage des messages ──
-  input.on('historyOpen', () => {
+  input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
-    stdioSend('history', { sessions: loadSessions().slice(0, 50).map(s => ({
+    stdioSend('history', { sessions: (await liveSessions(50)).map(s => ({
       chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || '',
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });

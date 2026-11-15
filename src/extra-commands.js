@@ -29,31 +29,33 @@ const compactSeed = summary =>
 
 export async function compactSession(S, { instruction = '', signal } = {}) {
   if (!S.chatId) throw new Error('aucune conversation à résumer');
+  // la nouvelle conversation compte dans la limite des 50 par jour : limite déjà atteinte → on ne paie même pas le résumé
+  if ((cfg.dailyLimitHitAt || 0) >= lastReset()) throw new Error('limite des 50 nouvelles conversations atteinte aujourd\'hui : le résumé attendra la remise à zéro (rien n\'a été consommé)');
   const prev = S.chatId;
   ui.spinner.start('résumé de la session…');
   try {
     const r1 = await streamChat({ agentId: S.agentId, chatId: prev, content: compactPrompt(instruction), webSearch: false, signal });
     const summary = clip(r1.text.trim(), 20000);
     if (!summary) throw new Error('résumé vide : la session n\'a pas été compactée');
-    ui.spinner.label('nouvelle conversation…');
-    let newId = null;
-    S.sid ||= newSid();
-    await streamChat({ agentId: S.agentId, chatId: null, content: (cfg.tagChats !== false ? tag(S.sid, 'suite') : '') + compactSeed(summary), webSearch: false, signal, register: { sid: S.sid, role: 'suite' }, onChat: id => { newId = id; } });
-    if (!newId) throw new Error('impossible d\'ouvrir la nouvelle conversation');
-    S.chatId = newId; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
-    S.ctxPercent = await contextPercent(newId).catch(() => null);
-    return { chars: summary.length, previous: prev, chatId: newId, percent: S.ctxPercent };
+    // comme Claude Code : pas de requête « Compris. » ; le résumé part avec le prochain vrai message, qui ouvre la nouvelle conversation
+    S.compactedFrom = prev; S.pendingSummary = summary;
+    S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
+    S.ctxPercent = null; S.lastPromptTokens = 0;
+    return { chars: summary.length, previous: prev, chatId: null, percent: null };
   } finally { ui.spinner.stop(); }
 }
 
 /** Avant un envoi : compacte si le contexte atteint le seuil (jamais pendant une boucle) */
 export async function maybeAutoCompact(S, signal) {
-  if (!cfg.autoCompact || !S.chatId || typeof S.ctxPercent !== 'number') return;
-  if (S.ctxPercent < cfg.compactThreshold) return;
-  println(c.yellow(`  ⚠ contexte à ${Math.round(S.ctxPercent)} % (seuil ${cfg.compactThreshold} %) — compactage automatique de la conversation`) + c.dim('  (/autocompact off pour désactiver)'));
+  if (!cfg.autoCompact || !S.chatId) return;
+  const full = typeof S.ctxPercent === 'number' && S.ctxPercent >= cfg.compactThreshold;
+  const heavy = (S.lastPromptTokens || 0) >= (cfg.compactTokens || 80000);   // chaque message renvoie tout l'historique : au-delà, il coûte trop
+  if (!full && !heavy) return;
+  if ((cfg.dailyLimitHitAt || 0) >= lastReset()) return;                     // limite atteinte : pas de nouvelle conversation possible, on n'essaie pas
+  println(c.yellow(full ? `  ⚠ contexte à ${Math.round(S.ctxPercent)} % — résumé automatique de la conversation` : `  ⚠ conversation lourde (≈${Math.round(S.lastPromptTokens / 1000)}k tokens envoyés à chaque message) — résumé automatique pour l'alléger`) + c.dim('  (/autocompact off pour désactiver)'));
   try {
     const r = await compactSession(S, { signal });
-    println(c.dim(`  ✓ conversation compactée : résumé de ${r.chars} caractères${r.percent == null ? '' : `, contexte à ${Math.round(r.percent)} %`}\n`));
+    println(c.dim(`  ✓ conversation résumée (${r.chars} caractères) : la suite repart dans une conversation légère\n`));
   } catch (e) { println(c.yellow(`  compactage impossible : ${e.message}`)); }
 }
 
@@ -331,11 +333,12 @@ export async function extraCommand(cmd, arg, env) {
       const session = [
         { label: 'Durée', value: mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min` },
         { label: 'Échanges', value: `${st.turns} demande${st.turns > 1 ? 's' : ''} · ${st.requests} requête${st.requests > 1 ? 's' : ''} · ${st.tools} outil${st.tools > 1 ? 's' : ''}` },
+        ...(S.lastPromptTokens ? [{ label: 'Envoyé par message', pct: Math.min(100, S.lastPromptTokens / (cfg.compactTokens || 80000) * 100), value: `≈ ${k(S.lastPromptTokens)} tokens`, note: `tout l'historique repart à chaque message · résumé automatique à ${Math.round((cfg.compactTokens || 80000) / 1000)}k` }] : []),
         { label: 'Tokens', value: `${k(S.tokens?.in)} envoyés · ${k(S.tokens?.out)} reçus` },
       ];
       if (S.chatId) {
         const pctCtx = Number(chatU?.contextUsagePercent);
-        session.push(Number.isFinite(pctCtx) ? { label: 'Contexte', pct: pctCtx, value: 'utilisé', note: cfg.autoCompact ? `compactage auto à ${cfg.compactThreshold} %` : '' } : { label: 'Contexte', value: 'indisponible' });
+        session.push(Number.isFinite(pctCtx) ? { label: 'Contexte', pct: pctCtx, value: 'utilisé', note: cfg.autoCompact ? `résumé automatique dès ${Math.round((cfg.compactTokens || 80000) / 1000)}k tokens par message ou ${cfg.compactThreshold} %` : 'résumé automatique désactivé' } : { label: 'Contexte', value: 'indisponible' });
         if (chatU?.tokenUsage?.totalTokenCount) session.push({ label: 'Tokens de la conversation', value: `${k(chatU.tokenUsage.totalTokenCount)} au total` });
       } else session.push({ label: 'Conversation', value: 'pas encore commencée' });
       const card = { title: 'Consommation', sections: [{ title: 'Compte France Student', rows: account }, { title: 'Cette session', rows: session }],
@@ -370,14 +373,17 @@ export async function extraCommand(cmd, arg, env) {
       if (!S.chatId) { println(c.dim('  aucune conversation à compacter')); return true; }
       await withAbort(async signal => {
         const r = await compactSession(S, { instruction: arg, signal });
-        println(c.green('  ✓ ') + `conversation compactée : résumé de ${r.chars} caractères` + (r.percent == null ? '' : `, contexte à ${Math.round(r.percent)} %`));
-        println(c.dim(`    ancienne conversation conservée côté serveur (${r.previous.slice(0, 8)}…)`));
+        println(c.green('  ✓ ') + `conversation résumée (${r.chars} caractères)` + c.dim(' : ton prochain message part dans une conversation légère, avec ce résumé'));
+        println(c.dim(`    l'ancienne reste disponible dans l'historique (${r.previous.slice(0, 8)}…)`));
       });
       return true;
     }
     case '/autocompact': {
-      cfg.autoCompact = arg ? /^(on|1|oui|true)$/i.test(arg) : !cfg.autoCompact; saveCfg();
-      println(c.dim(`  → compactage automatique ${cfg.autoCompact ? `ON (seuil ${cfg.compactThreshold} %)` : 'OFF'}`)); return true;
+      const kt = String(arg || '').match(/^(\d+)\s*k?$/i);                    // « /autocompact 60k » : seuil en tokens par message
+      if (kt) { cfg.compactTokens = Math.max(20000, parseInt(kt[1], 10) * (parseInt(kt[1], 10) < 1000 ? 1000 : 1)); cfg.autoCompact = true; saveCfg(); }
+      else cfg.autoCompact = arg ? /^(on|1|oui|true)$/i.test(arg) : !cfg.autoCompact;
+      saveCfg();
+      println(c.dim(`  → résumé automatique ${cfg.autoCompact ? `ON : dès ${Math.round((cfg.compactTokens || 80000) / 1000)}k tokens par message ou ${cfg.compactThreshold} % du contexte` : 'OFF'}`)); return true;
     }
     case '/threshold': {
       const n = parseInt(arg);

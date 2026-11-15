@@ -39,7 +39,9 @@
   const btnNew = h('button', 'icon-btn'); btnNew.innerHTML = ICON.neu; btnNew.title = 'Nouvelle conversation';
   const btnMcp = h('button', 'icon-btn'); btnMcp.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0zM8 11v3"/></svg>'; btnMcp.title = 'Serveurs MCP';
   btnMcp.onclick = () => { if (!S.busy) post({ type: 'command', text: '/mcp' }); };
-  head.append(title, btnMcp, btnHist, btnNew);
+  const btnUse = h('button', 'icon-btn'); btnUse.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 13.5h11M4.5 11V8M8 11V4.5M11.5 11V6.5"/></svg>'; btnUse.title = 'Compte & consommation';
+  btnUse.onclick = () => { if (!S.busy) post({ type: 'command', text: '/usage' }); };
+  head.append(title, btnUse, btnMcp, btnHist, btnNew);
   const log = h('div', 'log');
   const tasksEl = h('div', 'tasks'); tasksEl.hidden = true;
   const composer = h('div', 'composer');
@@ -493,6 +495,11 @@
   function send() {
     const text = ta.value;
     if (!text.trim()) return;
+    if (/^\s*\/(usage|mcp|resume|sessions|history)\s*$/i.test(text) && !S.busy) {   // ces commandes ouvrent une fenêtre : rien dans le fil
+      ta.value = ''; autosize(); closeMenu();
+      if (/resume|sessions|history/i.test(text)) return histOpen();
+      return post({ type: 'command', text: text.trim() });
+    }
     closeMenu();
     const el = h('div', 'msg-user' + (S.busy ? ' queued' : ''), text);
     if (S.ctxOn && S.ctx && !/^\s*[/!]/.test(text)) el.append(h('div', 'ctx', '⧉ ' + chipText(S.ctx)));
@@ -657,9 +664,15 @@
 
   // ── carte d'infos (/usage…) : sections de lignes, barres de progression colorées selon le niveau ──
   function card(data) {
-    aiEnd(); thinkEnd();
+    const bg = h('div', 'modal-bg'); const close = () => { bg.remove(); document.removeEventListener('keydown', esc, true); ta.focus(); };
+    const esc = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+    bg.onclick = e => { if (e.target === bg) close(); };
+    document.addEventListener('keydown', esc, true);
+    const box = h('div', 'modal card-modal');
+    const top = h('div', 'mh'); top.append(h('div', 'mt', data.title === 'Consommation' ? 'Compte & consommation' : (data.title || 'Infos')));
+    const x = h('button', 'icon-btn', '✕'); x.title = 'Fermer (Échap)'; x.onclick = close; top.append(x);
     const el = h('div', 'card');
-    if (data.title) el.append(h('div', 'ct', data.title));
+    box.append(top, el); bg.append(box);
     for (const sec of data.sections || []) {
       if (sec.title) el.append(h('div', 'cs', sec.title));
       for (const r of sec.rows || []) {
@@ -678,64 +691,66 @@
       }
     }
     if (data.footnote) el.append(h('div', 'cf', data.footnote));
-    add(el);
+    document.body.append(bg);
   }
 
-  // ── fenêtre « Conversations » (horloge) : recherche, groupes, reprise avec les anciens messages ──
-  const HIST = { el: null, list: null, filter: null, data: null, timer: 0 };
+  // ── sélecteur « Conversations » (horloge), comme celui de Claude Code : menu sous l'en-tête, onglets, recherche, titre + âge ──
+  const HIST = { el: null, list: null, filter: null, data: null, timer: 0, tab: 'here' };
   function ago(t) {
     if (!t) return '';
     const s = Math.round((Date.now() - t) / 1000);
-    if (s < 60) return 'à l\'instant';
-    if (s < 3600) return `il y a ${Math.floor(s / 60)} min`;
-    if (s < 86400) return `il y a ${Math.floor(s / 3600)} h`;
-    if (s < 172800) return 'hier';
-    return new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+    if (s < 60) return 'maintenant';
+    if (s < 3600) return `${Math.floor(s / 60)} min`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h`;
+    return `${Math.floor(s / 86400)} j`;
   }
-  function histClose() { if (HIST.el) { HIST.el.remove(); HIST.el = null; ta.focus(); } }
+  function histClose() { if (HIST.el) { HIST.el.remove(); HIST.el = null; document.removeEventListener('mousedown', histOutside, true); ta.focus(); } }
+  function histOutside(e) { if (HIST.el && !HIST.el.contains(e.target) && !btnHist.contains(e.target)) histClose(); }
   function histOpen() {
+    if (HIST.el) return histClose();
     if (S.busy) return showFlash('attends la fin de la réponse');
     post({ type: 'historyOpen' });
+    histShow({ sessions: null });                                       // ouvert tout de suite, la liste arrive (vérifiée sur le site)
     clearTimeout(HIST.timer);
-    HIST.timer = setTimeout(() => post({ type: 'command', text: '/resume' }), 1500);   // ancien CLI : il ne connaît pas la fenêtre → liste en texte
+    HIST.timer = setTimeout(() => { if (HIST.data === null) { histClose(); post({ type: 'command', text: '/resume' }); } }, 8000);   // ancien CLI : liste en texte
   }
   function histShow(ev) {
-    clearTimeout(HIST.timer);
-    HIST.data = ev.sessions || [];
+    if (ev.sessions) clearTimeout(HIST.timer);
+    HIST.data = ev.sessions;
     if (!HIST.el) {
-      const bg = h('div', 'modal-bg'); bg.onclick = e => { if (e.target === bg) histClose(); };
-      const card = h('div', 'modal');
-      const top = h('div', 'mh'); top.append(h('div', 'mt', 'Conversations'));
-      const nb = h('button', 'btn', '＋ Nouvelle'); nb.onclick = () => { histClose(); post({ type: 'command', text: '/new' }); };
-      const x = h('button', 'icon-btn', '✕'); x.title = 'Fermer (Échap)'; x.onclick = histClose;
-      top.append(nb, x);
-      const f = h('input', 'mf'); f.placeholder = 'Rechercher une conversation…'; f.oninput = histRender;
-      f.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); histClose(); } if (e.key === 'Enter') { const first = HIST.list.querySelector('.hrow'); if (first) first.click(); } };
-      const list = h('div', 'ml');
-      card.append(top, f, list); bg.append(card); document.body.append(bg);
-      HIST.el = bg; HIST.list = list; HIST.filter = f; f.focus();
+      const pop = h('div', 'pop');
+      const tabs = h('div', 'ptabs');
+      for (const [id, label] of [['here', 'Ce dossier'], ['all', 'Tous']]) {
+        const b = h('button', 'ptab' + (HIST.tab === id ? ' on' : ''), label);
+        b.onclick = () => { HIST.tab = id; tabs.querySelectorAll('.ptab').forEach(x => x.classList.toggle('on', x === b)); histRender(); };
+        tabs.append(b);
+      }
+      const f = h('input', 'pf'); f.placeholder = 'Rechercher…'; f.oninput = histRender;
+      f.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); histClose(); } if (e.key === 'Enter') HIST.list.querySelector('.prow')?.click(); };
+      const list = h('div', 'plist');
+      const nb = h('button', 'pnew', '＋ Nouvelle conversation'); nb.onclick = () => { histClose(); post({ type: 'command', text: '/new' }); };
+      pop.append(tabs, f, list, nb);
+      app.append(pop);
+      HIST.el = pop; HIST.list = list; HIST.filter = f; f.focus();
+      document.addEventListener('mousedown', histOutside, true);
     }
     histRender();
   }
   function histRender() {
     if (!HIST.el) return;
+    const list = HIST.list; list.textContent = '';
+    if (HIST.data === null) { list.append(h('div', 'pnote', 'Chargement…')); return; }
     const q = HIST.filter.value.trim().toLowerCase();
-    const items = HIST.data.filter(s => !q || s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q));
-    HIST.list.textContent = '';
-    if (!items.length) { HIST.list.append(h('div', 'mnote', q ? 'Aucune conversation ne correspond.' : 'Aucune conversation enregistrée pour l\'instant.')); return; }
-    for (const [title, group] of [['Ce dossier', items.filter(s => s.here)], ['Autres dossiers', items.filter(s => !s.here)]]) {
-      if (!group.length) continue;
-      HIST.list.append(h('div', 'mg', `${title} (${group.length})`));
-      for (const s of group) {
-        const row = h('div', 'hrow' + (s.current ? ' cur' : ''));
-        const t = h('div', 'ht', s.title || '(sans titre)');
-        const dir = String(s.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
-        const meta = h('div', 'hm', [s.current ? 'actuelle' : '', ago(s.updatedAt), s.model, s.here ? '' : dir].filter(Boolean).join(' · '));
-        row.append(t, meta);
-        row.title = s.cwd || '';
-        row.onclick = () => { histClose(); if (!s.current) post({ type: 'resumeChat', chatId: s.chatId }); };
-        HIST.list.append(row);
-      }
+    let items = HIST.data.filter(s => !q || s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q));
+    if (HIST.tab === 'here') items = items.filter(s => s.here);
+    if (!items.length) { list.append(h('div', 'pnote', q ? 'Aucune conversation ne correspond.' : HIST.tab === 'here' ? 'Aucune conversation dans ce dossier (onglet « Tous » pour les autres).' : 'Aucune conversation enregistrée.')); return; }
+    for (const s of items) {
+      const row = h('div', 'prow' + (s.current ? ' cur' : ''));
+      const dir = String(s.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
+      row.append(h('span', 'pt', s.title || '(sans titre)'), h('span', 'pa', ago(s.updatedAt)));
+      row.title = [s.model, s.here ? '' : dir].filter(Boolean).join(' · ');
+      row.onclick = () => { histClose(); if (!s.current) post({ type: 'resumeChat', chatId: s.chatId }); };
+      list.append(row);
     }
   }
   document.addEventListener('keydown', e => { if (HIST.el && e.key === 'Escape') { e.preventDefault(); histClose(); } });

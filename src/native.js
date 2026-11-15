@@ -87,10 +87,12 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     } finally { ui.spinner.stop(); }
     md.finish(); nReq++;
     const u = res.usage;
+    let reqIn = 0;
     if (u && typeof u === 'object') for (const [k, v] of Object.entries(u)) {
       if (typeof v !== 'number' || /total|reasoning|cached/i.test(k)) continue;
-      if (/prompt|input/i.test(k)) tokensIn += v; else if (/candidate|compl|output/i.test(k)) tokensOut += v;
+      if (/prompt|input/i.test(k)) { tokensIn += v; reqIn += v; } else if (/candidate|compl|output/i.test(k)) tokensOut += v;
     }
+    if (reqIn) S.lastPromptTokens = reqIn;                              // taille du contexte envoyé à cette requête (résumé auto au-delà du seuil)
     visible = res.text?.trim() || visible;
     const calls = res.toolCalls || [];
     if (!calls.length) break;
