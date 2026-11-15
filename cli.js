@@ -21,6 +21,7 @@ import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
 import { runDoctor } from './src/doctor.js';
 import { startBridge } from './src/bridge.js';
+import { chromeExtensionInstalled } from './src/browser.js';
 import { checkUpdate, INSTALL_CMD } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
@@ -489,6 +490,20 @@ async function command(line) {
       const curChrome = !!cur?.args?.includes('--extension');
       const mineChrome = MODE_CHROME.test(first) ? true : MODE_SEP.test(first) ? false : (cur ? curChrome : false);   // sans mode précisé : on garde l'actuel
       const request = (MODE_CHROME.test(first) || MODE_SEP.test(first) ? more : [first, ...more]).join(' ').trim();
+      if (mineChrome && !chromeExtensionInstalled()) {                  // mode « ton Chrome » sans l'extension : on ne bascule pas, on explique
+        if (curChrome) {                                               // déjà en mode Chrome sans extension : retour au navigateur séparé pour que ça marche
+          cfgAll.mcpServers.playwright = { command: 'npx', args: ['-y', '@playwright/mcp@latest'], description: 'navigateur piloté (Playwright)', _scope: 'user' };
+          saveMcpConfig('user', S.cwd, cfgAll);
+          println(c.dim('  (retour au navigateur séparé en attendant l\'extension)'));
+        }
+        const STORE = 'https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm';
+        println(c.yellow('  ⚠ L\'extension « Playwright MCP Bridge » n\'est pas installée dans ton Chrome : sans elle, le modèle ne peut pas piloter TON Chrome.'));
+        println(c.dim(`  1. Installe-la : ${STORE}`));
+        println(c.dim('  2. Puis relance : /navigateur chrome'));
+        const open = input.select && interactive ? await input.select({ title: 'Ouvrir la page de l\'extension dans Chrome ?', options: ['Oui, l\'ouvrir', 'Non'], defaultIndex: 0 }) : 1;
+        if (open === 0) { try { spawnSync('cmd', ['/c', 'start', '', STORE], { windowsHide: true }); } catch {} }
+        return println(c.dim(cur ? '  (le navigateur actuel reste actif)' : '  En attendant, /navigateur active un navigateur séparé (sans tes comptes).'));
+      }
       const needSetup = !cur || curChrome !== mineChrome;
       if (needSetup) {
         const want = { command: 'npx', args: ['-y', '@playwright/mcp@latest', ...(mineChrome ? ['--extension'] : [])], description: mineChrome ? 'ton Chrome (extension Playwright MCP Bridge)' : 'navigateur piloté (Playwright)' };
@@ -671,8 +686,10 @@ async function chatTurn(text, { keepLast = false } = {}) {
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
       }
-      if (wantsBrowser(text) && !Object.keys(loadMcpConfig(S.cwd).mcpServers || {}).some(n => BROWSER_SERVERS.test(n))) {
-        println(c.yellow('  💡 Pour que je pilote le navigateur, active-le une fois avec /navigateur'));
+      if (wantsBrowser(text)) {
+        const pw = loadMcpConfig(S.cwd).mcpServers || {};
+        if (!Object.keys(pw).some(n => BROWSER_SERVERS.test(n))) println(c.yellow('  💡 Pour que je pilote le navigateur, active-le une fois avec /navigateur'));
+        else if (pw.playwright?.args?.includes('--extension') && !chromeExtensionInstalled()) println(c.yellow('  ⚠ Mode « ton Chrome » sans l\'extension Playwright MCP Bridge : installe-la, ou tape /navigateur separe'));
       }
     }
     if (!keepLast) {                                                   // skills choisis automatiquement pour cette demande (correspondance nette seulement)

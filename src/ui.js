@@ -118,11 +118,14 @@ export function highlight(line) {
 function inline(s) {
   const codes = [];
   s = s.replace(/`([^`\n]+)`/g, (_, t) => { codes.push(t); return `\u0000${codes.length - 1}\u0000`; });
+  // liens AVANT le gras : sinon le « [ » des codes couleur (ESC[1m) est pris pour le début d'un lien et casse le texte
+  const links = [];
+  s = s.replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, (_, t, u) => { links.push([t, u]); return `\u0001${links.length - 1}\u0001`; });
   s = s.replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => c.bold(c.italic(t)));
   s = s.replace(/\*\*(.+?)\*\*/g, (_, t) => c.bold(t));
   s = s.replace(/__(.+?)__/g, (_, t) => c.bold(t));
   s = s.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)/g, (_, p, t) => p + c.italic(t));
-  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, t, u) => `${c.underline(t)} ${c.dim('(' + u + ')')}`);
+  s = s.replace(/\u0001(\d+)\u0001/g, (_, i) => `${c.underline(links[i][0])} ${c.dim('(' + links[i][1] + ')')}`);
   s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `\x1b[48;2;48;50;60m\x1b[38;2;240;205;150m ${codes[i]} \x1b[39m\x1b[49m`);
   return s;
 }

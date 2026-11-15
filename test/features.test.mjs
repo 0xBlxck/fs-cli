@@ -83,3 +83,14 @@ test('intention : « reviens en arrière » → /rewind, mais pas une demande nu
   assert.equal(detectIntent('annule tout ce que tu as fait stp')?.cmd, '/rewind');
   assert.equal(detectIntent('retour en arrière sur le design mais garde le header'), null);
 });
+
+test('affichage : gras + lien dans la même phrase restent propres (plus de « 1m » ni de crochets)', () => {
+  let out = ''; ui.attachSink({ write: s => out += s, print: s => out += s });
+  const md = new ui.MdStream();
+  md.push('1. **Installe [Playwright](https://exemple.fr/x).** puis **relance**\n');
+  md.end?.();
+  ui.attachSink(null);
+  const vis = out.replace(/\x1b\[[0-9;]*m/g, '');
+  assert.match(vis, /1\. Installe Playwright \(https:\/\/exemple\.fr\/x\)\. puis relance/);
+  assert.doesNotMatch(vis, /\d+m[A-Za-z]|\[Playwright/);
+});
