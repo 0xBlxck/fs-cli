@@ -38,6 +38,18 @@ export function grabClipboardImage() {
   return null;
 }
 
+/** Texte du presse-papiers (quand Ctrl+V arrive jusqu'au CLI sans image : on colle le texte nous-mêmes). */
+export function readClipboardText() {
+  try {
+    if (process.platform === 'win32') {
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+      return (r.stdout || '').replace(/\r\n/g, '\n').replace(/\n$/, '');
+    }
+    const r = process.platform === 'darwin' ? spawnSync('pbpaste', [], { encoding: 'utf8' }) : spawnSync('xclip', ['-selection', 'clipboard', '-o'], { encoding: 'utf8' });
+    return r.stdout || '';
+  } catch { return ''; }
+}
+
 /** Chemins d'images existantes dans le texte (glisser-déposer, collage) → remplacés par [Image #n]. */
 export function extractImagePaths(text, startIndex = 0) {
   const found = [];

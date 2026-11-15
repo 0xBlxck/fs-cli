@@ -19,7 +19,7 @@ import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
-import { grabClipboardImage, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
+import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
 import { toolsHint, mentionedServers, serverBrief } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills } from './src/discover.js';
@@ -183,6 +183,10 @@ async function sendImages(message) {
 function pasteClipboardImage() {
   if (S.images.length >= MAX_IMAGES) return ui.out(c.yellow(`\n  ⚠ ${MAX_IMAGES} images maximum par message\n`));
   const p = grabClipboardImage();
+  if (!p && input.insert && interactive) {                            // pas d'image : c'était un Ctrl+V de texte qui nous est parvenu → on colle le texte
+    const t = readClipboardText();
+    if (t) { input.insert(t); return; }
+  }
   if (!p) { if (input.flash && interactive) input.flash('pas d\'image dans le presse-papiers (fais une capture avec Win+Maj+S, puis Alt+V)'); else println(c.yellow('  pas d\'image dans le presse-papiers (capture avec Win+Maj+S, puis /image)')); return; }
   S.images.push(p);
   const tag = `[Image #${S.images.length}] `;

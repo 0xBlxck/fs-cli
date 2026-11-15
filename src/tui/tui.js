@@ -182,7 +182,7 @@ export class Tui {
     // barre d'état (mode)
     const ml = MODE_LABEL[st.mode] || MODE_LABEL.auto;
     const base = (this.busy ? c.dim('échap : interrompre · ') : '') + c.accent(ml[0]) + c.dim(' (maj+tab)');
-    const status = this.flashText ? c.yellow(this.flashText) : (W > 70 ? base + (this.busy ? '' : c.dim(' · / commandes · @ fichiers · ! shell')) : base);
+    const status = this.flashText ? c.yellow(this.flashText) : (W > 70 ? base + (this.busy ? '' : c.dim(' · / commandes · @ fichiers · ! shell · alt+v image')) : base);
     lines.push('  ' + status);
 
     return { lines, caret, hideCursor: false };
@@ -294,7 +294,9 @@ export class Tui {
       }
     }
     switch (k.name) {
-      case 'text': case 'paste': if (k.meta && k.name === 'text') return this.keyMeta(k); return this.insert(k.text);
+      case 'text': case 'paste':
+        if (k.name === 'paste' && !k.text) { if (!this.ask) this.emit('pasteImage'); return; }   // collage vide = Ctrl+V avec une image (Windows Terminal ne colle que du texte)
+        if (k.meta && k.name === 'text') return this.keyMeta(k); return this.insert(k.text);
       case 'enter': return this.enter();
       case 'newline': return this.insert('\n');
       case 'tab': return this.tab();

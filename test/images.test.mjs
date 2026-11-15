@@ -46,3 +46,15 @@ test('interface : Alt+V et Ctrl+V demandent le collage d\'une image', () => {
   assert.equal(tui.buf, '[Image #1] ');
   tui.stop();
 });
+
+test('interface : un collage vide (Ctrl+V avec une image dans Windows Terminal) demande le collage d\'image', () => {
+  const f = fakeStreams(60, 20);
+  const tui = new Tui({ stdin: f.stdin, stdout: f.stdout, history: [] });
+  let n = 0; tui.on('pasteImage', () => n++);
+  tui.start();
+  f.stdin.emit('data', Buffer.from('\x1b[200~\x1b[201~'));
+  assert.equal(n, 1);
+  f.stdin.emit('data', Buffer.from('\x1b[200~texte\x1b[201~'));
+  assert.equal(n, 1, 'un vrai collage de texte reste du texte'); assert.equal(tui.buf, 'texte');
+  tui.stop();
+});
