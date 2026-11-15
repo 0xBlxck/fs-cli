@@ -329,6 +329,12 @@ const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
 
 function banner() {
+  if (opts.stdio) {
+    try {
+      const bundled = JSON.parse(fs.readFileSync(path.join(ROOT, 'vscode', 'package.json'), 'utf8')).version;
+      if (verNum(bundled) > verNum(PANEL_VER || '0')) setTimeout(() => stdioSend('print', { text: c.yellow(`  ⬆ Nouvelle version du panneau (${bundled}) : tape /vscode puis recharge la fenêtre de l'éditeur`) + '\n' }), 50);
+    } catch {}
+  }
   if (opts.stdio) return stdioSend('ready', { version: VERSION, shell: sysEnv.shellName, models: Object.entries(AGENTS).map(([id, name]) => ({ id, name })), modes: MODES.map(m => ({ id: m, name: MODE_NAME[m], desc: MODE_DESC[m] })), commands: SLASH.map(x => x.trim()), cwd: S.cwd, chatId: S.chatId || null, title: S.title || '' });
   const sess = S.chatId ? c.dim(S.chatId.slice(0, 8)) : c.dim('nouvelle');
   ui.box([
@@ -422,8 +428,12 @@ const extraEnv = () => ({
   S, AGENTS, modelName, resolveModel, withAbort, ask, readAttachment, buildMessage, applySession, refreshPrompt,
   select: input.select ? o => input.select(o) : null,
   chatTurn: (t, o) => chatTurn(t, o),
-  ...(opts.stdio ? { mcpPanel: () => openMcpPanel() } : {}),
+  ...(opts.stdio && panelAtLeast('0.4.0') ? { mcpPanel: () => openMcpPanel() } : {}),
 });
+
+const PANEL_VER = String(process.env.FS_CLI_PANEL || '');            // version de l'extension qui pilote ce CLI (vide = ancienne extension)
+const verNum = v => String(v || '0').split('.').map(n => parseInt(n, 10) || 0).reduce((a, n) => a * 1000 + n, 0);
+const panelAtLeast = v => !!PANEL_VER && verNum(PANEL_VER) >= verNum(v);
 
 /** fenêtre « Serveurs MCP » du panneau VS Code : la liste tout de suite, puis l'état de chaque serveur dès qu'il est connu */
 async function openMcpPanel() {
