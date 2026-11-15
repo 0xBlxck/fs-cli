@@ -1,144 +1,182 @@
 # FS-CLI
 
-Client terminal **communautaire et non officiel** pour [France Student AI](https://ia.francestudent.org) : un agent qui lit, cherche, édite des fichiers et lance des commandes **sur ta machine**, avec de vrais appels d'outils, des confirmations, une mémoire par projet, des serveurs MCP et plusieurs modèles.
+**Un agent de code pour [France Student AI](https://ia.francestudent.org), dans ton terminal.** Tu lui parles normalement (« fais-moi un site de café », « corrige le bug dans script.js ») : il lit tes fichiers, les crée ou les modifie et lance des commandes **sur ton PC**, en te demandant ton accord quand c'est sensible.
 
-> *English: an unofficial community terminal client for France Student AI — a coding agent using the platform's official client-tools API, with permissions, per-project memory and MCP. Zero dependencies, Node.js ≥ 20, French UI.*
+Gratuit, open source, sans dépendance et sans télémétrie. Interface en français.
 
-> ⚠️ **Non affilié à France Student.** Tu utilises ton propre compte et ton propre token ; respecte les conditions d'utilisation de la plateforme. Le logiciel est fourni « tel quel », sans garantie (licence MIT). Il exécute des commandes sur ton ordinateur : lis la section [Sécurité](#sécurité).
+> *English: an unofficial community terminal client for France Student AI — a coding agent built on the platform's official client-tools API, with sub-agents, permissions, per-project memory and MCP. Zero dependencies, Node.js ≥ 20, French UI.*
 
-## Fonctions
+> ⚠️ **Projet communautaire, non affilié à France Student.** Tu utilises ton propre compte : respecte les conditions d'utilisation de la plateforme. Logiciel fourni « tel quel », sans garantie (licence MIT). Il exécute des commandes sur ton ordinateur : lis la section [Sécurité](#sécurité).
 
-- **Agent natif** : le modèle appelle les outils officiels « outils client » de FS (`list_directory`, `read_file`, `search_files`, `edit_file`, `write_file`, `run_command`) ; le CLI les exécute puis renvoie les résultats.
-- **Interface type Claude Code** : zone de saisie ancrée en bas de la fenêtre, suggestions `/` et `@`, menus de confirmation à flèches, file d'attente de messages, modes *auto / confirmer / plan* (Maj+Tab).
-- **Sécurité par défaut** : filtre de commandes (refus / confirmation / autorisation), détection de secrets avant écriture, chemins limités au dossier de travail, anti-SSRF pour le web, token hors de l'environnement des programmes lancés.
-- **Mémoire** : notes par dossier, préprompt, faits appris, compétences (`skills`), `/compact` automatique avant que le contexte soit plein.
-- **Plusieurs agents** : `/team` fait travailler des agents à la suite dans **la même conversation**, ou en parallèle dans des conversations réutilisées ; `/compare` pose la même question à deux modèles.
-- **MCP** : serveurs MCP (stdio et HTTP) avec presets ; un `.mcp.json` de projet ne démarre qu'après `/mcp trust`.
-- **Conversations rangées** : sur le site, les conversations du CLI sont regroupées dans le projet **FS-CLI** (`/fr-project <nom>` pour un autre, `/fr-project off` pour désactiver).
-- **Instructions du projet** : `/init` crée `FSCLI.md` (ou utilise un `AGENTS.md` existant), lu au début de chaque conversation.
-- **Fichiers protégés** : le modèle ne peut pas écraser un fichier modifié depuis sa dernière lecture (il doit le relire) ; écritures atomiques, jamais de fichier à moitié écrit.
-- **Confiance par dossier** : à la première ouverture d'un dossier, le CLI demande si tu lui fais confiance.
-- **Ctrl+C** arrête aussi la génération côté serveur (elle ne continue pas en arrière-plan).
-- **Zéro dépendance** (rien à `npm install`), pas de télémétrie.
+---
 
-## Installation (5 minutes)
+## Installation (5 minutes, Windows)
 
-**1. Installe Node.js** (une seule fois) : télécharge la version **LTS** sur <https://nodejs.org>, ou dans PowerShell :
+**1. Installe Node.js** (une seule fois) : version **LTS** sur <https://nodejs.org>, ou dans PowerShell :
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
 ```
 
-Ferme puis rouvre le terminal ensuite.
+Ferme puis rouvre le terminal.
 
-**2. Installe FS-CLI** :
+**2. Installe FS-CLI :**
 
 ```powershell
 npm install -g https://github.com/0xBlxck/fs-cli/archive/refs/heads/main.tar.gz
 ```
 
-**3. Lance-le dans le dossier de ton projet** :
+**3. Lance-le dans le dossier de ton projet :**
 
 ```powershell
 cd "C:\chemin\vers\ton projet"
 fs-cli
 ```
 
-Au premier lancement, un assistant te guide pour connecter **ton** compte France Student : il ouvre le site, t'explique où copier ta clé de session (F12 → Application → Cookies → `next-auth.session-token`), la vérifie et l'enregistre sur ton PC (`~/.fs-cli/.env`). Rien à éditer à la main.
+Au premier lancement, un **assistant** connecte ton compte France Student : il ouvre le site, t'explique où copier ta clé de session (F12 → *Application* → *Cookies* → `next-auth.session-token`), la vérifie et l'enregistre sur ton PC (`~/.fs-cli/.env`). Rien à éditer à la main. Il te demande ensuite si tu fais confiance au dossier.
 
-> 🔐 Cette clé est l'équivalent d'un mot de passe : ne la donne à personne, ne la colle pas dans un ticket ou une capture d'écran. Si elle a fuité, déconnecte-toi puis reconnecte-toi sur le site. Pour en changer : `fs-cli --login`.
+> 🔐 **Ta clé de session = ton mot de passe.** Ne la donne à personne, ne la colle pas dans un ticket ou une capture d'écran. Si elle a fuité : déconnecte-toi puis reconnecte-toi sur le site, et lance `fs-cli --login`.
 
 | Besoin | Commande |
 |---|---|
 | Mettre à jour | relance la commande de l'étape 2 |
 | Changer de compte / clé expirée | `fs-cli --login` |
 | Reprendre la dernière session du dossier | `fs-cli -c` |
-| Une seule demande puis quitter | `fs-cli -p "résume ce dossier"` |
+| Une seule demande, puis quitter | `fs-cli -p "résume ce dossier"` |
 | Désinstaller | `npm uninstall -g fs-cli` (tes réglages restent dans `~/.fs-cli`) |
 
-<details><summary>Installation pour développeurs (depuis les sources)</summary>
+Linux et macOS devraient fonctionner (bash) mais ne sont pas testés en continu.
+
+---
+
+## Premiers pas
+
+Tape ta demande et appuie sur Entrée. **Pas besoin de connaître les commandes** : le CLI comprend les demandes courantes.
+
+| Tu écris | Ce qui se passe |
+|---|---|
+| « crée un site de café avec une page menu » | le modèle crée les fichiers dans ton dossier |
+| « fais ce site avec plusieurs agents » | une **équipe d'agents** se partage le travail |
+| « … avec 3 agents en parallèle, et relis le résultat » | 3 agents en même temps, puis une relecture |
+| « compare gpt et claude sur … » | la même question posée à deux modèles |
+| « retiens que je code en TypeScript » | enregistré dans la mémoire du dossier |
+| « combien de conversations il me reste ? » | ton compteur du jour |
+| « résume https://exemple.fr/article » | la page est lue et jointe à ta demande |
+
+Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhension automatique.
+
+### Les 3 modes (Maj+Tab)
+
+| Mode | Comportement |
+|---|---|
+| **auto** | agit sans demander pour ce qui n'est pas dangereux ; demande pour les actions sensibles |
+| **confirmer** | demande ton accord avant chaque écriture et chaque commande |
+| **plan** | lecture seule : il explore et propose un plan, **rien n'est modifié** |
+
+### Raccourcis
+
+| Touche | Action |
+|---|---|
+| Entrée · `\` + Entrée · Ctrl+J | envoyer · nouvelle ligne (le collage multi-ligne est géré) |
+| Échap · Ctrl+C | interrompre (la génération s'arrête aussi côté serveur) · effacer ; deux fois Ctrl+C pour quitter |
+| `/` · `@fichier` · `!commande` | commandes · joindre un fichier · commande shell directe |
+| ↑ ↓ · Ctrl+R | historique · recherche dans l'historique |
+
+---
+
+## Fonctions
+
+- **Agent natif** : le modèle utilise les outils officiels « outils client » de France Student (lire, chercher, écrire, éditer, lancer une commande) ; le CLI les exécute sur ton PC avec ses garde-fous.
+- **Plusieurs agents** : `/team` répartit une tâche entre agents (jusqu'à 8), **à la suite dans la même conversation** (défaut) ou **en parallèle** ; `/compare` pose la même question à deux modèles.
+- **Interface type Claude Code** : saisie ancrée en bas de la fenêtre, suggestions, menus à flèches, file d'attente de messages, code replié en une ligne.
+- **Mémoire** : notes par dossier, préprompt, faits appris, compétences (`/skills`), compactage automatique avant que le contexte soit plein.
+- **Instructions du projet** : `/init` crée `FSCLI.md` (ou utilise un `AGENTS.md` existant), lu au début de chaque conversation.
+- **Conversations rangées** : sur le site, les conversations du CLI sont regroupées dans le projet **FS-CLI** (`/fr-project <nom>` pour un autre, `/fr-project off` pour désactiver).
+- **Web** : une URL citée est lue automatiquement ; `/search` et `/fetch` (adresses locales refusées).
+- **MCP** : serveurs MCP (stdio et HTTP) avec presets (Blender, Playwright…).
+- **Fichiers protégés** : le modèle ne peut pas écraser un fichier que tu as modifié depuis sa dernière lecture ; écritures atomiques ; `/undo` annule la dernière modification.
+
+### Conversations et limites du compte
+
+France Student limite à **50 nouvelles conversations par jour**. FS-CLI en utilise **une par session** : tous tes messages et toutes les actions de l'agent restent dans la même conversation, y compris `/team` en mode normal.
+
+Créent une conversation en plus : `/new`, le compactage (`/compact`, ou automatique à 80 % de contexte), `/team --pool` (jusqu'à 3, réutilisées ensuite) et `/compare` (2, réutilisées). `/chats` montre ton compteur du jour et quelles conversations appartiennent à ta session.
+
+Chaque envoi de résultats d'outils compte comme **une requête de chat** dans les limites de messages et le budget de ton compte (la fin de chaque tour affiche le nombre de requêtes).
+
+### Moteur natif et mode « chat »
+
+Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si ton compte ou ton modèle ne le gère pas, le CLI repasse seul en mode **chat** : le modèle écrit du code dans sa réponse et le CLI l'exécute avec les mêmes garde-fous. `/engine native|chat` pour choisir.
+
+---
+
+## Commandes
+
+`/help` les liste toutes. Les plus utiles :
+
+| Thème | Commandes |
+|---|---|
+| Conversation | `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
+| Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
+| Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |
+| Mémoire | `/remember` · `/forget` · `/memory` · `/preprompt` · `/profil` · `/skills` |
+| Web et outils | `/search` · `/fetch` · `/mcp` · `/jobs` · `!commande` |
+| Sécurité | `/permissions` · `/mode auto\|ask\|plan` · `/intent on\|off` |
+
+---
+
+## Sécurité
+
+Résumé ; le détail et le modèle de menace sont dans [SECURITY.md](SECURITY.md).
+
+- **Ta clé** n'est envoyée qu'à `api.francestudent.ai` (HTTPS), n'est jamais affichée ni journalisée, et **n'est pas transmise** aux commandes, scripts et serveurs MCP que le CLI lance.
+- **Confiance par dossier** : le CLI demande avant d'agir dans un nouveau dossier. S'il doit écrire **en dehors** du dossier de travail, il te le demande une fois (« faire confiance à ce dossier » évite les questions suivantes).
+- **Commandes analysées** : refus net (formatage de disque, code téléchargé puis exécuté, `git push --force`, suppression de la racine ou du dossier personnel…), confirmation (suppressions, `git push`, installations globales, `npx`…) ou autorisation.
+- **Fichiers sensibles** (`.env`, clés, `.ssh`…) et **secrets** écrits dans un fichier : toujours une confirmation, même en mode auto.
+- Le `.env` du dossier courant n'est **jamais lu** ; un `.mcp.json` de projet ne démarre rien sans `/mcp trust`.
+- Les pages web et fichiers peuvent contenir des instructions hostiles (prompt injection) : en cas de doute, passe en mode **confirmer** ou **plan**.
+- **Limites** : l'analyse des commandes est heuristique ; le CLI agit avec **tes** droits ; une commande autorisée peut envoyer des données sur Internet. Liste complète : [SECURITY.md](SECURITY.md#limites-connues-à-lire).
+
+Une faille ? Signale-la en privé (onglet *Security* → *Report a vulnerability*), jamais dans un ticket public.
+
+---
+
+## Problèmes fréquents
+
+| Problème | Solution |
+|---|---|
+| `fs-cli` n'est pas reconnu | ferme et rouvre le terminal ; sinon vérifie que `npm config get prefix` est dans ton `PATH` |
+| « clé de session expirée » / erreur 401 | `fs-cli --login` |
+| « Limite de 50 nouvelles conversations par jour » | continue dans une conversation existante (`fs-cli -c`, `/resume`) ; remise à zéro vers 5 h du matin |
+| « Ce modèle ne gère pas les outils client » | choisis un modèle Claude ou GPT avec `/model` |
+| Il me demande Oui/Non en mode auto | il écrit hors du dossier de travail : réponds « faire confiance à ce dossier », ou lance `fs-cli` dans ce dossier |
+| Accents illisibles | utilise Windows Terminal ou PowerShell 7 |
+
+---
+
+## Contribuer
 
 ```bash
 git clone https://github.com/0xBlxck/fs-cli.git
 cd fs-cli
-node cli.js          # ou : npm link, puis fs-cli
-```
-
-La clé peut aussi être fournie par la variable d'environnement `FS_SESSION_TOKEN` ou dans `~/.fs-cli/.env` (voir `.env.example`).
-</details>
-
-## Utilisation
-
-Tape ta demande : le modèle explore, édite et lance des commandes en demandant ton accord quand c'est sensible.
-
-**Pas besoin de connaître les commandes** : parle normalement, le CLI comprend.
-
-| Tu écris | Le CLI fait |
-|---|---|
-| « fais un site de café avec plusieurs agents » | lance une équipe d'agents (`/team`) |
-| « … avec 3 agents en parallèle, et relis le résultat » | 3 agents en même temps + relecture |
-| « compare gpt et claude sur … » | pose la question aux deux modèles (`/compare`) |
-| « retiens que je code en TypeScript » | l'enregistre dans la mémoire du dossier (`/remember`) |
-| « combien de conversations il me reste ? » | affiche ton compteur du jour (`/chats`, `/quota`) |
-| « résume https://… » | lit la page et la joint à ta demande |
-
-Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhension automatique.
-
-| Raccourci | Action |
-|---|---|
-| Entrée / `\` + Entrée · Ctrl+J | envoyer / nouvelle ligne (le collage multi-ligne est géré) |
-| Maj+Tab | mode **auto** → **confirmer** → **plan** (rien n'est exécuté) |
-| Échap · Ctrl+C | interrompre · effacer ; deux fois Ctrl+C pour quitter |
-| `/` · `@` · `!cmd` | commandes · joindre un fichier · commande shell directe |
-| ↑ ↓ · Ctrl+R | historique · recherche dans l'historique |
-
-`/help` liste tout. Les principales : `/model` `/new` `/resume` `/compact` `/context` `/quota` `/team` `/compare` `/mcp` `/permissions` `/remember` `/memory` `/skills` `/project` `/tree` `/index` `/search` `/fetch` `/undo` `/chats`.
-
-### Moteur natif et mode « chat »
-
-Par défaut le moteur **natif** utilise l'API officielle d'outils client de FS (modèles Claude et GPT ; pas Gemini). Si ton compte ou ton modèle ne les gère pas, le CLI repasse seul en mode **chat** : le modèle écrit du code dans sa réponse et le CLI l'exécute avec les mêmes garde-fous. `/engine native|chat` pour choisir.
-
-Chaque envoi de résultats d'outils est **une requête de chat** : elle compte dans les limites de messages et le budget quotidien de ton compte (la ligne de fin de tour affiche le nombre de requêtes).
-
-### Conversations (limite de FS : 50 nouvelles par jour)
-
-Une session = **une conversation**. `/team` travaille dans cette conversation (`--same`, défaut) ou dans des conversations réutilisées (`--pool`). Les titres sont étiquetés `[7f3a] …` ; `/chats` montre qui appartient à quoi et le compteur du jour ; `/clean` supprime celles des agents (après confirmation).
-
-## Sécurité
-
-Résumé — le détail et le modèle de menace sont dans [SECURITY.md](SECURITY.md).
-
-- Le token n'est envoyé qu'à `api.francestudent.ai` (HTTPS), n'est jamais journalisé, et **n'est pas hérité** par les commandes, scripts Python et serveurs MCP que le CLI lance.
-- Le `.env` du dossier courant n'est **jamais lu** (un dépôt piégé ne peut pas modifier ton environnement) ; seules quelques clés `FS_*` sont acceptées.
-- Chaque commande est analysée : **refus net** (formatage de disque, code téléchargé puis exécuté, `git push --force`, suppression de la racine ou du dossier personnel…), **confirmation** (suppressions, `git push`, installations globales, fichiers `.env`/clés…) ou **autorisation**.
-- Écrire un secret dans un fichier, sortir du dossier de travail ou écraser un fichier existant demande confirmation.
-- Le contenu de fichiers ou de pages web peut contenir des instructions hostiles (prompt injection) : en cas de doute, utilise le mode **confirmer** (Maj+Tab).
-- Un `.mcp.json` de projet ne démarre rien sans `/mcp trust` (approbation liée au contenu du fichier).
-- Limites : l'analyse des commandes est heuristique ; le CLI agit avec **tes** droits ; une commande autorisée peut envoyer des données sur Internet. Liste complète dans [SECURITY.md](SECURITY.md#limites-connues-à-lire).
-
-## Développement
-
-```bash
-npm test         # tests unitaires et sécurité (Windows + PowerShell)
-npm run scan     # cherche tokens, clés, e-mails, chemins personnels dans les fichiers suivis
 git config core.hooksPath .githooks   # bloque tout commit contenant un secret
+node cli.js                           # ou : npm link, puis fs-cli
+npm test                              # tests (aucun appel à la vraie API)
+npm run scan                          # cherche tokens, clés, e-mails, chemins personnels
 ```
 
-Les tests n'appellent pas la vraie API (faux serveurs, terminal simulé). Voir [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Structure
+Voir [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Fichier | Rôle |
 |---|---|
 | `cli.js` | point d'entrée, commandes de base, sessions |
-| `src/native.js` | moteur natif (outils client officiels) |
-| `src/agent.js` | exécution des outils, confirmations, mode chat de secours |
-| `src/permissions.js` | politique de commandes, règles, détection de secrets |
-| `src/tui/` | interface (saisie ancrée, rendu, clavier) |
-| `src/api.js` · `src/config.js` | client de l'API FS, configuration |
-| `src/mcp.js` · `src/web.js` | client MCP · lecture web sûre et recherche |
-| `src/team.js` · `src/chats.js` | agents multiples, gestion des conversations |
-| `src/memory.js` · `src/extra-commands.js` | mémoire, commandes supplémentaires |
+| `src/native.js` · `src/agent.js` | moteur natif · exécution des outils, confirmations, mode chat |
+| `src/permissions.js` · `src/trust.js` | politique de commandes et secrets · confiance par dossier |
+| `src/intent.js` | compréhension des demandes en langage naturel |
+| `src/team.js` · `src/chats.js` | agents multiples · gestion des conversations |
+| `src/api.js` · `src/setup.js` · `src/config.js` | API France Student · assistant de connexion · configuration |
+| `src/tools.js` · `src/web.js` · `src/mcp.js` | outils locaux · web sûr · client MCP |
+| `src/memory.js` · `src/extra-commands.js` · `src/tui/` | mémoire · commandes · interface |
 
 ## Licence
 
