@@ -51,6 +51,19 @@ node cli.js --help
 
 Tape ta demande : le modèle explore, édite et lance des commandes en demandant ton accord quand c'est sensible.
 
+**Pas besoin de connaître les commandes** : parle normalement, le CLI comprend.
+
+| Tu écris | Le CLI fait |
+|---|---|
+| « fais un site de café avec plusieurs agents » | lance une équipe d'agents (`/team`) |
+| « … avec 3 agents en parallèle, et relis le résultat » | 3 agents en même temps + relecture |
+| « compare gpt et claude sur … » | pose la question aux deux modèles (`/compare`) |
+| « retiens que je code en TypeScript » | l'enregistre dans la mémoire du dossier (`/remember`) |
+| « combien de conversations il me reste ? » | affiche ton compteur du jour (`/chats`, `/quota`) |
+| « résume https://… » | lit la page et la joint à ta demande |
+
+Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhension automatique.
+
 | Raccourci | Action |
 |---|---|
 | Entrée / `\` + Entrée · Ctrl+J | envoyer / nouvelle ligne (le collage multi-ligne est géré) |

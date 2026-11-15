@@ -16,6 +16,7 @@ import { runAgent, runBlock, setSelectHandler } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
 import { detectTargetDir } from './src/target.js';
 import { sensitivePathReason } from './src/permissions.js';
+import { detectIntent, urlsIn } from './src/intent.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
@@ -182,7 +183,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/intent ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -468,6 +469,9 @@ async function command(line) {
       return println('\n' + c.dim('  ↳ résultats joints à ton prochain message'));
     }
     case '/continue': return chatTurn('Continue.', { keepLast: true });
+    case '/intent':                                                   // compréhension des demandes en langage naturel
+      cfg.intents = arg ? /^(on|1|oui|true)$/i.test(arg) : cfg.intents === false; saveCfg();
+      return println(c.dim(`  → demandes en langage naturel ${cfg.intents ? 'ON (« fais ce site avec plusieurs agents » lance une équipe…)' : 'OFF (seules les /commandes déclenchent les fonctions)'}`));
     default:
       if (await extraCommand(cmd, arg, extraEnv())) return;
       return println(c.red(`  commande inconnue: ${cmd}`) + c.dim('  (/help)'));
@@ -543,6 +547,18 @@ async function direct(cmdline) {
   println();
 }
 
+/** Demande en langage naturel → fonction du CLI (équipe d'agents, comparaison, mémoire, quota…). Renvoie true si elle a été traitée. */
+async function naturalIntent(t) {
+  const r = detectIntent(t);
+  if (!r) return false;
+  println(c.dim(`  ↳ compris : ${r.label}`) + c.dim(r.cmd === '/team' ? '  (dis « sans agents » pour l\'éviter)' : ''));
+  const prevDuel = cfg.duelModel;
+  if (r.duelModel) { const id = resolveModel(r.duelModel); if (id !== null && id !== S.agentId) cfg.duelModel = id; }
+  try { await command(`${r.cmd} ${r.arg}`.trim()); }
+  finally { cfg.duelModel = prevDuel; }
+  return true;
+}
+
 async function handleInput(text) {
   busy = true; input.setBusy(true);
   try {
@@ -550,7 +566,13 @@ async function handleInput(text) {
     if (!t) return;
     if (!t.includes('\n') && t.startsWith('/')) await command(t);
     else if (!t.includes('\n') && t.startsWith('!')) await direct(t.slice(1));
-    else await chatTurn(t);
+    else if (cfg.intents !== false && await naturalIntent(t)) return;
+    else {
+      if (cfg.intents !== false && cfg.engine === 'native') {     // le modèle n'a pas d'accès web : une URL citée est lue et jointe
+        for (const u of urlsIn(t)) await extraCommand('/fetch', u, extraEnv());
+      }
+      await chatTurn(t);
+    }
   } catch (e) {
     ui.spinner.stop();
     println(c.red(`\n  Erreur: ${e.message}`));

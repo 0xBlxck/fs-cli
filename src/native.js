@@ -11,7 +11,8 @@ import { clipMiddle } from './tools.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
 
-const MAX_RESULT = 40000;      // limite FS par résultat (au-delà FS coupe et prévient le modèle)
+export const READ_TOOLS = CLIENT_TOOLS.slice(0, 3);   // list_directory, read_file, search_files : seuls outils proposés en mode plan
+const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi
 
 /** appel FS → appel de nos outils (noms et arguments traduits) */
@@ -36,6 +37,9 @@ async function execNative(S, call, io) {
   const callId = call.callId || call.call_id || call.id;
   const mapped = CLIENT_TOOLS.includes(call.name) ? mapCall(call.name, parseArgs(call.arguments)) : null;
   if (!mapped) return { callId, output: `Outil inconnu ou non pris en charge par le client : ${call.name}`, isError: true };
+  if (cfg.mode === 'plan' && !READ_TOOLS.includes(call.name)) {
+    return { callId, output: 'Mode plan (lecture seule) : aucune écriture ni commande. Propose un plan détaillé ; l\'utilisateur repassera en mode auto pour l\'appliquer.', isError: true };
+  }
   const r = await execCall(S, { name: mapped.name, args: mapped.args }, io);
   let out = String(r.output ?? '');
   if (mapped.max && mapped.name === 'grep') out = out.split('\n').slice(0, Math.max(1, Number(mapped.max))).join('\n');
@@ -62,7 +66,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     try {
       res = await stream({
         agentId: S.agentId, chatId: S.chatId, signal, webSearch: cfg.webSearch, register: { sid: S.sid, role: 'main' },
-        clientTools: CLIENT_TOOLS, ...(results ? { toolResults: results } : { content }),
+        clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results } : { content }),
         onChat: id => { if (!S.chatId) S.chatId = id; },
         onText: d => md.push(d),
         onReasoning: d => {

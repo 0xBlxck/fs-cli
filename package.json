@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node cli.js",
-    "test": "node --test test/tui.test.mjs test/pinned.test.mjs test/confirm.test.mjs test/blocks.test.mjs test/team.test.mjs test/native.test.mjs test/security.test.mjs && node test/permissions.check.mjs && node test/web.offline.check.mjs && node test/web.transport.check.mjs && node test/mcp/run-tests.js",
+    "test": "node --test test/intent.test.mjs test/tui.test.mjs test/pinned.test.mjs test/confirm.test.mjs test/blocks.test.mjs test/team.test.mjs test/native.test.mjs test/security.test.mjs && node test/permissions.check.mjs && node test/web.offline.check.mjs && node test/web.transport.check.mjs && node test/mcp/run-tests.js",
     "scan": "node scripts/scan.mjs",
     "scan:staged": "node scripts/scan.mjs --staged"
   },
