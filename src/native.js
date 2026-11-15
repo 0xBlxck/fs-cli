@@ -7,14 +7,18 @@ import path from 'node:path';
 import { streamChat, CLIENT_TOOLS, uploadFile } from './api.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent } from './account.js';
-import { cfg } from './config.js';
+import { cfg, saveCfg } from './config.js';
 import { newSid, tag } from './chats.js';
 import { execCall, baseDir } from './agent.js';
 import { clipMiddle } from './tools.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
 
-export const READ_TOOLS = CLIENT_TOOLS.slice(0, 3);   // list_directory, read_file, search_files : seuls outils proposés en mode plan
+export const READ_TOOLS = CLIENT_TOOLS.slice(0, 3);
+// Certains modèles de France Student refusent de servir d'agent à un outil externe (« ne peut pas servir de moteur à ton outil externe »,
+// « colle ici le contenu »…). FS-CLI ne contourne pas ce refus : il l'explique et propose un modèle qui accepte les outils.
+const TOOL_REFUSAL = /servir de moteur|outil externe|ne (?:peux|peut|pouvons) pas (?:acc[ée]der|modifier|[ée]crire|lire|ex[ée]cuter|cr[ée]er|lancer|ouvrir)\b[^.]{0,60}\b(?:fichiers?|disque|dossier|commandes?|ordinateur|PC|machine)|(?:je )?n'ai pas (?:d'|l')?acc[èe]s (?:à|aux) (?:tes |ton |vos |votre |ce |tes )?(?:fichiers?|disque|dossier|syst[èe]me|ordinateur|PC|machine)|colle[rz]? (?:ici )?(?:le )?contenu/i;
+export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || ''));   // list_directory, read_file, search_files : seuls outils proposés en mode plan
 const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi
 
@@ -109,6 +113,12 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     if (steps === (cfg.maxSteps || 40) - 1) hitLimit = true;
   }
   if (visible) S.lastResponse = visible;
+  if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; cfg.toolRefusals = r; saveCfg(); }
+  if (!nTools && looksLikeToolRefusal(visible)) {                    // le modèle a refusé d'utiliser les outils de FS-CLI
+    cfg.toolRefusals = { ...(cfg.toolRefusals || {}), [String(S.agentId)]: Date.now() }; saveCfg();
+    ui.println('\n' + c.yellow('  ⚠ Ce modèle refuse de travailler avec les outils de FS-CLI (lire, modifier des fichiers, lancer des commandes).'));
+    ui.println(c.dim('    Les modèles Claude le font : ') + c.accent('/model opus') + c.dim(' ou ') + c.accent('/model sonnet') + c.dim(' — puis redemande.'));
+  }
 
   const secs = (Date.now() - t0) / 1000;
   const bits = [ui.duration(secs)];

@@ -37,7 +37,9 @@ loadEnv(path.join(HOME_DIR, '.env'));
 // ── Config persistante ─────────────────────────────────────────────────────────
 const DEFAULTS = {
   agentId: -1002,
-  mcpAskImported: false,   // false = serveurs MCP importés (Claude Code, Codex…) actifs directement · true = accord demandé avant le 1er démarrage (/mcp ask on)
+  mcpAskImported: false,
+  toolRefusals: {},
+  dailyLimitHitAt: 0,      // France Student a répondu « limite de 50 nouvelles conversations atteinte » à cette date        // agentId → date : modèles qui refusent de travailler avec les outils de FS-CLI (prévenu à la sélection)   // false = serveurs MCP importés (Claude Code, Codex…) actifs directement · true = accord demandé avant le 1er démarrage (/mcp ask on)
   engine: 'native',    // native = vrais appels d'outils (mode officiel « outils client » de FS) · chat = le modèle écrit du code, le CLI l'exécute (secours)
   engineExplicit: false, // true dès que tu choisis avec /engine (sinon un ancien réglage « chat » est remplacé par « native »)
   autoCompact: true,  // compacte la conversation (résumé → nouvelle conversation) quand le contexte atteint le seuil

@@ -216,3 +216,9 @@ test('relecture d\'un fichier inchangé : pas renvoyé ; renvoyé si redemandé 
   assert.match((await TOOLS.read_file.run({ path: 'a.js', offset: 1, limit: 1 }, ctx)).output, /const a = 42/);   // autre plage : en entier
   assert.match((await TOOLS.read_file.run({ path: 'a.js' }, { cwd: dir })).output, /const a = 42/);   // pas de conversation : jamais de cache
 });
+
+test('modèle qui refuse les outils de FS-CLI : reconnu (sans fausse alerte sur une réponse normale)', async () => {
+  const { looksLikeToolRefusal: f } = await import('../src/native.js');
+  for (const s of ['Le chat France Student ne peut pas servir de moteur à ton outil externe.', 'colle ici le contenu actuel de index.html', "Je n'ai pas accès à tes fichiers.", 'Je ne peux pas modifier directement tes fichiers.']) assert.equal(f(s), true, s);
+  for (const s of ['Voici le formulaire modifié, le fichier est à jour.', 'Je ne peux pas garantir que ce test passe.', 'Tu peux coller ce code dans ton fichier.']) assert.equal(f(s), false, s);
+});

@@ -318,7 +318,7 @@ export async function extraCommand(cmd, arg, env) {
         if (pid) addAll((await requestJson('GET', `/projects/${encodeURIComponent(pid)}/chats`).catch(() => ({}))).data?.chats);
       }
       ui.spinner.stop();
-      const made = Math.max(seen.size, createdToday());
+      const made = (cfg.dailyLimitHitAt || 0) >= since ? DAILY_LIMIT : Math.max(seen.size, createdToday());   // limite déjà atteinte (dit par France Student) : 50/50
 
       // ── données : une carte = des sections de lignes { label, value, pct?, note? } ──
       const account = [];

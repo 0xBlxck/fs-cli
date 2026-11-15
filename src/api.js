@@ -76,7 +76,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
         res.on('end', () => {
           // limite quotidienne de nouvelles conversations : inutile de réessayer, on explique
           const daily = st === 429 ? parseDailyLimit(b) : null;
-          if (daily) return finish(reject, daily);
+          if (daily) { try { cfg.dailyLimitHitAt = Date.now(); saveCfg(); } catch {} return finish(reject, daily); }
           if (native && (st === 403 || (st === 400 && /Client tools are not supported/i.test(b)))) {       // flag désactivé ou modèle sans outils client (ex. Gemini)
             const e = new ApiError(st === 403 ? 'Le mode « outils client » n\'est pas activé sur ce compte (403).' : 'Ce modèle ne gère pas les outils client (essaie un modèle Claude ou GPT avec /model).', { status: st });
             e.code = 'NATIVE_UNSUPPORTED';

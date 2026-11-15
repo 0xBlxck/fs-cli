@@ -459,7 +459,7 @@ async function command(line) {
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
       println(); Object.entries(AGENTS).forEach(([id, n], i) =>
-        println(`  ${c.dim(String(i + 1).padStart(2))}  ${c.dim(id.padStart(6))}  ${n}${id === String(S.agentId) ? c.accent('  ◀') : ''}`));
+        println(`  ${c.dim(String(i + 1).padStart(2))}  ${c.dim(id.padStart(6))}  ${n}${id === String(S.agentId) ? c.accent('  ◀') : ''}${cfg.toolRefusals?.[id] ? c.yellow('  · refuse les outils de FS-CLI') : ''}`));
       return println();
     }
     case '/model': {
@@ -467,6 +467,7 @@ async function command(line) {
       const id = resolveModel(arg);
       if (id === null) return println(c.red(`  modèle inconnu: ${arg}`) + c.dim('  (/models)'));
       S.agentId = id; cfg.agentId = id; saveCfg(); saveSession();
+      if (cfg.toolRefusals?.[String(id)]) println(c.yellow('  ⚠ ce modèle a déjà refusé de travailler avec les outils de FS-CLI : il pourra discuter, mais pas lire ni modifier tes fichiers'));
       return println(c.dim(`  → ${modelName()}`) + (S.chatId ? c.dim(' · conversation conservée') : ''));
     }
     case '/mode': {
