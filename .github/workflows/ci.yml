@@ -23,3 +23,28 @@ jobs:
         run: npm test
       - name: Scan de secrets et de données personnelles
         run: npm run scan
+
+  portable:
+    # macOS et Linux : la suite est d'abord pensée pour Windows (PowerShell) ; ce job dit ce qui marche ailleurs
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntaxe de tous les fichiers
+        run: for f in cli.js mcp-cli.js src/*.js src/tui/*.js vscode/*.js vscode/media/*.js vscode/scripts/*.mjs; do node --check "$f" || exit 1; done
+      - name: Tests (chaque fichier séparément, pour voir lesquels passent)
+        run: |
+          fail=0
+          for f in test/*.test.mjs; do
+            if node --test "$f" > out.txt 2>&1; then echo "OK    $f"; else echo "ÉCHEC $f"; grep -E "✖|Error|expected|actual" out.txt | head -15; fail=1; fi
+          done
+          node test/web.offline.check.mjs > /dev/null 2>&1 && echo "OK    web.offline" || echo "ÉCHEC web.offline"
+          node test/mcp/run-tests.js > /dev/null 2>&1 && echo "OK    mcp" || echo "ÉCHEC mcp"
+          exit $fail
