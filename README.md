@@ -40,7 +40,7 @@ npm install -g https://github.com/0xBlxck/fs-cli/archive/refs/heads/main.tar.gz
 **3. Lance-le dans le dossier de ton projet** :
 
 ```powershell
-cd C:cheminers	onprojet
+cd "C:\chemin\vers\ton projet"
 fs-cli
 ```
 
