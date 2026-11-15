@@ -1,0 +1,30 @@
+# ── Secrets et données personnelles : NE JAMAIS COMMITER ─────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.kdbx
+credentials*
+secrets*
+id_rsa*
+
+# Données utilisateur du CLI (elles vivent dans ~/.fs-cli, au cas où)
+.fs-cli/
+sessions.json
+chats.json
+history.txt
+profile.json
+permissions.json
+mcp.json
+.mcp.json
+
+# Fichiers générés / locaux
+node_modules/
+RESUME.md
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

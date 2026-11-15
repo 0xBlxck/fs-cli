@@ -1,0 +1,104 @@
+// Config, .env, sessions persistantes
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+
+export const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+export const HOME_DIR = process.env.FS_CLI_HOME || path.join(os.homedir(), '.fs-cli');
+fs.mkdirSync(HOME_DIR, { recursive: true, mode: 0o700 });      // données privées : lisibles par toi seul (Linux/macOS)
+
+export const FILES = {
+  cfg: path.join(HOME_DIR, 'config.json'),
+  hist: path.join(HOME_DIR, 'history.txt'),
+  sessions: path.join(HOME_DIR, 'sessions.json'),
+  legacySession: path.join(HOME_DIR, 'session.json'),
+  trash: path.join(HOME_DIR, 'trash'),
+};
+
+// ── .env : process.env > dossier du CLI > ~/.fs-cli ────────────────────────────
+// Sécurité : le .env du dossier COURANT n'est jamais lu (un dépôt piégé pourrait y mettre PATH ou NODE_OPTIONS),
+// et seules ces clés sont acceptées, même dans nos propres fichiers .env.
+const ENV_ALLOWED = new Set(['FS_SESSION_TOKEN', 'FS_AGENT_ID', 'FS_WORKDIR', 'FS_SEARCH_API_KEY', 'FS_SEARCH_PROVIDER']);
+function loadEnv(file) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8').replace(/^﻿/, ''); } catch { return; }
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!m || !ENV_ALLOWED.has(m[1])) continue;
+    let v = m[2];
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    if (v !== '' && !process.env[m[1]]) process.env[m[1]] = v;      // une variable vide compte comme absente
+  }
+}
+loadEnv(path.join(ROOT, '.env'));
+loadEnv(path.join(HOME_DIR, '.env'));
+
+// ── Config persistante ─────────────────────────────────────────────────────────
+const DEFAULTS = {
+  agentId: -1002,
+  engine: 'native',    // native = vrais appels d'outils (mode officiel « outils client » de FS) · chat = le modèle écrit du code, le CLI l'exécute (secours)
+  engineExplicit: false, // true dès que tu choisis avec /engine (sinon un ancien réglage « chat » est remplacé par « native »)
+  autoCompact: true,  // compacte la conversation (résumé → nouvelle conversation) quand le contexte atteint le seuil
+  compactThreshold: 80,
+  sound: false,       // bip à la fin d'une réponse longue (> 3 s)
+  eco: false,         // consignes de concision ajoutées aux demandes de création
+  skills: [],         // ids des compétences actives (skills.json)
+  tagChats: true,     // préfixe le 1er message d'une conversation avec [id] pour la retrouver dans la liste FS
+  teamMode: 'same',   // /team : 'same' = agents à la suite DANS la conversation courante (aucune conversation créée) · 'pool' = agents en parallèle dans des conversations réutilisées
+  maxParallel: 3,    // agents de /team travaillant en même temps (1-6)
+  workerModel: null, // modèle des agents de /team (null = le modèle courant)
+  duelModel: null,   // 2e modèle pour /compare
+  showCode: false,   // false : les blocs de code sont repliés en une ligne (« ▸ html index.html · 118 lignes »), façon Claude Code
+  fileHint: true,     // chat : ajoute une consigne de FORMAT (fichiers directs, pas de script générateur) quand tu demandes de créer du code/des fichiers
+  feedback: true,     // chat + autoRun : renvoie les résultats d'exécution au modèle (false = affichés localement seulement)
+  autoRun: true,     // chat : exécute automatiquement les blocs de la réponse (sans taper /run)
+  autoRounds: 6,      // chat + autoRun : nombre max d'allers-retours (réparation après échec)
+  mode: 'auto',       // auto = tout s'exécute sauf actions dangereuses · ask = confirmation pour écrire/exécuter
+  webSearch: false,
+  theme: 'cyan',
+  showThinking: false,
+  maxSteps: 40,
+};
+export const cfg = { ...DEFAULTS };
+try {
+  const saved = JSON.parse(fs.readFileSync(FILES.cfg, 'utf8'));
+  for (const k of Object.keys(DEFAULTS)) if (saved[k] !== undefined) cfg[k] = saved[k];
+} catch {}
+if (!['auto', 'ask', 'plan'].includes(cfg.mode)) cfg.mode = 'auto';
+if (!['native', 'chat'].includes(cfg.engine)) cfg.engine = 'native';
+if (!cfg.engineExplicit && cfg.engine === 'chat') cfg.engine = 'native';      // migration : le mode natif est désormais disponible
+
+export function saveCfg() {
+  try { fs.writeFileSync(FILES.cfg, JSON.stringify(cfg, null, 2), { mode: 0o600 }); } catch {}
+}
+
+export const TOKEN = process.env.FS_SESSION_TOKEN || '';
+// Sécurité : le token ne doit JAMAIS être hérité par les programmes que le CLI lance (commandes du modèle, serveurs MCP, python…)
+// idem pour la clé de recherche web : elle est lue ici, puis passée explicitement à web.js (jamais laissée dans l'environnement des enfants)
+export const SEARCH_KEY = process.env.FS_SEARCH_API_KEY || '';
+export const SEARCH_PROVIDER = process.env.FS_SEARCH_PROVIDER || '';
+for (const k of ['FS_SESSION_TOKEN', 'FS_PASSWORD', 'FS_EMAIL', 'FS_SEARCH_API_KEY', 'FS_SEARCH_PROVIDER']) delete process.env[k];
+
+export const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '0.0.0'; } })();
+if (process.env.FS_AGENT_ID && !isNaN(parseInt(process.env.FS_AGENT_ID))) cfg.agentId = parseInt(process.env.FS_AGENT_ID);
+
+// ── Sessions ───────────────────────────────────────────────────────────────────
+export function loadSessions() {
+  try {
+    const list = JSON.parse(fs.readFileSync(FILES.sessions, 'utf8'));
+    if (Array.isArray(list)) return list;
+  } catch {}
+  // migration de l'ancien session.json
+  try {
+    const s = JSON.parse(fs.readFileSync(FILES.legacySession, 'utf8'));
+    if (s.chatId) return [{ chatId: s.chatId, agentId: s.agentId, cwd: s.cwd, title: '(ancienne session)', updatedAt: Date.now(), primed: false }];
+  } catch {}
+  return [];
+}
+
+export function upsertSession(s) {
+  const list = loadSessions().filter(x => x.chatId !== s.chatId);
+  list.unshift({ ...s, updatedAt: Date.now() });
+  try { fs.writeFileSync(FILES.sessions, JSON.stringify(list.slice(0, 50), null, 1), { mode: 0o600 }); } catch {}
+}
