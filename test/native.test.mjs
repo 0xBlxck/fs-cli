@@ -45,7 +45,7 @@ test('boucle complète : écrire, lire, chercher, lancer une commande — résul
   const f = fakeFs([
     { text: 'Je crée le fichier.', calls: [{ callId: 'c1', name: 'write_file', arguments: { path: 'hello.txt', content: 'Bonjour natif\n' } }] },
     { calls: [{ callId: 'c2', name: 'read_file', arguments: { path: 'hello.txt' } }, { callId: 'c3', name: 'search_files', arguments: { query: 'natif' } }, { callId: 'c4', name: 'list_directory', arguments: { path: '.' } }] },
-    { calls: [{ callId: 'c5', name: 'run_command', arguments: { command: 'Get-Content hello.txt' } }] },
+    { calls: [{ callId: 'c5', name: 'run_command', arguments: { command: 'cat hello.txt' } }] },
     { text: 'Terminé : hello.txt contient « Bonjour natif ».' },
   ]);
   await runNative(S, 'crée hello.txt puis vérifie', { ...io(), stream: f.stream });

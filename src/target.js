@@ -11,7 +11,8 @@ const trimTail = s => s.replace(/[\s.,;:!?)\]}»"'`]+$/g, '');
 export function detectTargetDir(text) {
   const cands = [];
   // racine d'un chemin absolu : C:\ ou C:/ partout ; /… et ~/… seulement hors Windows (sous Windows « /api » serait pris pour C:\api)
-  const ROOT = process.platform === 'win32' ? String.raw`[A-Za-z]:[\\/]` : String.raw`(?:[A-Za-z]:[\\/]|~\/|\/(?=[^\s/]))`;
+  // (un « C:\… » cité sous macOS / Linux n'existe pas là-bas : il ne doit pas devenir un dossier relatif « ./C:\… »)
+  const ROOT = process.platform === 'win32' ? String.raw`[A-Za-z]:[\\/]` : String.raw`(?:~\/|\/(?=[^\s/]))`;
   const home = s => (s.startsWith('~/') ? path.join(os.homedir(), s.slice(2)) : s);
   for (const m of text.matchAll(new RegExp(String.raw`["'\`](${ROOT}[^"'\`\r\n]+)["'\`]`, 'g'))) cands.push(home(m[1]));   // chemin entre guillemets
   for (const m of text.matchAll(new RegExp(String.raw`(?:^|[\s(])(${ROOT}[^\r\n]*)`, 'g'))) cands.push(home(m[1]));       // reste de la ligne : on teste les préfixes
