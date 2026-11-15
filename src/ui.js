@@ -257,7 +257,8 @@ export class MdStream {
     this.emit(line('┌', '┬', '┐'));
     cells.forEach((r, k) => {
       const head = k === 0 && rows[0].header;
-      this.emit(c.dim('│') + w.map((x, i) => ' ' + (head ? c.bold(fit(r[i] || '', x)) : fit(r[i] || '', x)) + ' ').join(c.dim('│')) + c.dim('│'));
+      const HB = s => `\x1b[48;2;44;47;58m${s}\x1b[49m`;                // en-tête sur fond grisé
+      this.emit(c.dim('│') + w.map((x, i) => head ? HB(' ' + c.bold(fit(r[i] || '', x)) + ' ') : ' ' + fit(r[i] || '', x) + ' ').join(c.dim('│')) + c.dim('│'));
       if (head && cells.length > 1) this.emit(line('├', '┼', '┤'));
     });
     this.emit(line('└', '┴', '┘'));
@@ -265,10 +266,37 @@ export class MdStream {
 }
 
 // ── Blocs d'outils ────────────────────────────────────────────────────────────
+// Présentation des actions (façon Claude Code) : ● puce verte · type · libellé · détails en gris
+const ACTIONS = {
+  shell: ['>_', 'Commande'], python: ['py', 'Python'], read_file: ['◇', 'Lire'], write_file: ['✎', 'Écrire'], edit_file: ['✎', 'Modifier'],
+  list_dir: ['▤', 'Lister'], grep: ['⌕', 'Chercher'], glob: ['⌕', 'Trouver'], fetch_url: ['⇣', 'Web'], web_search: ['⌕', 'Recherche web'],
+};
+/** Décode une commande fs-mcp (node "…mcp-cli.js" call srv outil args) pour l'afficher lisiblement. */
+export function describeAction(name, summary = '') {
+  const s = String(summary || '').replace(/\s+/g, ' ').trim();
+  if (name === 'shell') {
+    const m = s.match(/(?:mcp-cli\.js"?|fs-mcp)\s+(call|tools|list|skills?)\s*(.*)$/i);
+    if (m) {
+      const [, verb, rest] = m;
+      if (verb.toLowerCase() === 'call') { const [srv, tool, ...args] = rest.split(' '); return { tag: 'MCP', label: `${srv} · ${tool || ''}`, detail: args.join(' ') }; }
+      if (verb.toLowerCase() === 'tools') return { tag: 'MCP', label: `${rest.split(' ')[0]} · outils`, detail: '' };
+      if (verb.toLowerCase() === 'list') return { tag: 'MCP', label: 'serveurs disponibles', detail: '' };
+      return { tag: 'MCP', label: 'skills', detail: rest };
+    }
+  }
+  const m = name.match(/^mcp (\S+)\.(\S+)$/);
+  if (m) return { tag: 'MCP', label: `${m[1]} · ${m[2]}`, detail: s };
+  const a = ACTIONS[name];
+  return a ? { tag: a[0], label: a[1], detail: s } : { tag: '', label: name, detail: s };
+}
 export function toolHeader(name, summary = '') {
   println();
-  println(`  ${c.accent('●')} ${c.bold(name)}${summary ? '  ' + c.dim(clip(summary.replace(/\s+/g, ' '), cols() - name.length - 10)) : ''}`);
+  const { tag, label, detail } = describeAction(name, summary);
+  const head = `${tag ? c.accent(c.bold(tag)) + ' ' : ''}${c.bold(label)}`;
+  const room = cols() - stripLen(head) - 8;
+  println(`  ${c.green('●')} ${head}${detail ? '  ' + c.dim(clip(detail, Math.max(10, room))) : ''}`);
 }
+const stripLen = s => s.replace(/\x1b\[[0-9;]*m/g, '').length;
 
 export function toolBody(text, { max = 8, error = false } = {}) {
   const lines = sanitize(text).replace(/\r/g, '').split('\n');

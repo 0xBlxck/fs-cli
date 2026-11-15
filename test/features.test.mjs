@@ -119,3 +119,12 @@ test('navigateur : vision, pdf, devtools activés, jeton de l\'extension conserv
   const mine = playwrightServer({ mineChrome: true, token: 'abc', outDir: '/x' });
   assert.ok(mine.args.includes('--extension')); assert.equal(mine.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, 'abc');
 });
+
+test('actions lisibles : les appels fs-mcp sont décodés, les outils ont un type et un libellé', () => {
+  const B = String.fromCharCode(92);
+  const cmd = `node "C:${B}x${B}fs-cli${B}mcp-cli.js" call Roblox_Studio get_studio_state studio_id=abc`;
+  assert.deepEqual(ui.describeAction('shell', cmd), { tag: 'MCP', label: 'Roblox_Studio · get_studio_state', detail: 'studio_id=abc' });
+  assert.equal(ui.describeAction('shell', 'npm test').label, 'Commande');
+  assert.equal(ui.describeAction('edit_file', 'a.css').label, 'Modifier');
+  assert.equal(ui.describeAction('mcp blender.get_scene', '{}').tag, 'MCP');
+});
