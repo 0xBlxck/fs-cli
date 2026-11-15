@@ -730,8 +730,9 @@ async function chatTurn(text, { keepLast = false } = {}) {
       if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));
       if (ui.tasks.blocks > 1 && ui.tasks.list.length) {               // liste mise à jour pendant le travail : état final écrit une seule fois
         const L = ui.tasks.list, done = L.filter(t => t.state === 'done').length;
-        println(`  ${c.bold('Tâches')} ${c.dim(`${done}/${L.length}`)}`);
-        for (const t of L) println(`  ${t.state === 'done' ? c.green('☑') + ' ' + c.dim(t.text) : t.state === 'doing' ? c.yellow('◐') + ' ' + t.text : c.dim('☐') + ' ' + t.text}`);
+        println(`
+  ${done === L.length ? c.green('●') : c.accent('●')} ${c.bold('Tâches')} ${c.dim(`· ${done}/${L.length} faites`)}`);
+        L.forEach((t, i) => println(`  ${i === 0 ? c.dim('  └') : '   '} ${ui.taskLine(t.state, t.text)}`));
       }
       // mode plan : le modèle a proposé un plan → on demande s'il faut l'appliquer (comme Claude Code)
       if (cfg.mode === 'plan' && interactive && input.select && (S.lastResponse || '').trim()) {
@@ -744,7 +745,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
         if (idx === 0 || idx === 1) S.afterPlan = idx === 0 ? 'auto' : 'ask';
       }
     }
-    finally { S.pendingFileIds = []; }                                  // les images ne partent qu'avec ce message
+    finally { S.pendingFileIds = []; ui.tasks.set([]); }               // images : seulement ce message ; panneau de tâches vidé (sinon affiché en double)
   } catch (e) {
     if (e.name === 'AbortError' || turnAbort.signal.aborted) {
       ui.spinner.stop();

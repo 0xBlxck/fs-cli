@@ -348,7 +348,7 @@ export async function runAgent(S, userText, { signal, ask }) {
   }
 
   const secsN = (Date.now() - t0) / 1000;
-  const bits = [`${secsN.toFixed(1)}s`];
+  const bits = [ui.duration(secsN)];
   if (nTools) bits.push(`${nTools} outil${nTools > 1 ? 's' : ''}`);
   if (tokensIn > 0 && tokensOut > 0) bits.push(`${fmtK(tokensIn)}↑ ${fmtK(tokensOut)}↓ tok`);
   if (tokensOut > 20 && secsN > 0.5) bits.push(`${Math.round(tokensOut / secsN)} tok/s`);

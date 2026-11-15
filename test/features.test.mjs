@@ -37,8 +37,9 @@ test('panneau épinglé : « Tâches 1/3 » et les étapes au-dessus de la saisi
   tui.start();
   tui.setTasks([{ text: 'créer index.html', state: 'done' }, { text: 'ajouter le style', state: 'doing' }, { text: 'tester', state: 'todo' }]);
   const rows = tui.compose().lines.map(strip);
-  assert.ok(rows.some(l => /Tâches 1\/3/.test(l)));
-  assert.ok(rows.some(l => /☑ créer index\.html/.test(l)) && rows.some(l => /◐ ajouter le style/.test(l)) && rows.some(l => /☐ tester/.test(l)));
+  assert.ok(rows.some(l => /Tâches · 1\/3 faites/.test(l)));
+  assert.ok(rows.some(l => /☒ créer index\.html/.test(l)) && rows.some(l => /◐ ajouter le style/.test(l)) && rows.some(l => /☐ tester/.test(l)));
+  assert.ok(!rows.some(l => /☑/.test(l)), 'jamais ☑ (affiché en émoji par Windows Terminal)');
   tui.setTasks([]);
   assert.ok(!tui.compose().lines.map(strip).some(l => /Tâches/.test(l)));
   tui.stop();

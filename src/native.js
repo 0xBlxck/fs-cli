@@ -111,7 +111,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
   if (visible) S.lastResponse = visible;
 
   const secs = (Date.now() - t0) / 1000;
-  const bits = [`${secs.toFixed(1)}s`];
+  const bits = [ui.duration(secs)];
   if (nTools) bits.push(`${nTools} outil${nTools > 1 ? 's' : ''}`);
   bits.push(`${nReq} requête${nReq > 1 ? 's' : ''}`);
   if (tokensIn > 0 && tokensOut > 0) bits.push(`${tokensIn >= 1000 ? (tokensIn / 1000).toFixed(1) + 'k' : tokensIn}↑ ${tokensOut >= 1000 ? (tokensOut / 1000).toFixed(1) + 'k' : tokensOut}↓ tok`);

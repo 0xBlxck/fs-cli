@@ -41,6 +41,19 @@ process.on('exit', () => { if (TTY) process.stdout.write('\x1b[?25h'); });
 let sink = null;
 export function attachSink(s) { sink = s; }
 
+/** Une ligne de tâche (symboles en texte, jamais en émoji) : ☐ à faire · ◐ en cours (gras) · ☒ fait (barré, grisé). */
+export function taskLine(state, text) {
+  if (state === 'done') return `${c.green('☒')} ${c.dim(`\x1b[9m${text}\x1b[29m`)}`;
+  if (state === 'doing') return `${c.yellow('◐')} ${c.bold(text)}`;
+  return `${c.dim('☐')} ${text}`;
+}
+/** Durée lisible : « 6,8 s », « 3 min 26 s ». */
+export function duration(secs) {
+  if (secs < 60) return `${secs.toFixed(1).replace('.', ',')} s`;
+  const m = Math.floor(secs / 60), s = Math.round(secs % 60);
+  return `${m} min${s ? ` ${s} s` : ''}`;
+}
+
 /** Liste de tâches courante (la dernière écrite par le modèle) : affichée en panneau épinglé au-dessus de la saisie. */
 export const tasks = {
   list: [], listeners: [], blocks: 0,                                   // blocks : nombre de listes écrites pendant la demande en cours
@@ -225,10 +238,9 @@ export class MdStream {
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { this.emit(c.dim('─'.repeat(Math.min(48, cols() - 4)))); return; }
     if ((m = line.match(/^(\s*)[-*+]\s+\[( |x|X|~|>|-)\]\s+(.*)$/))) {   // liste de tâches du modèle : ☐ à faire · ◐ en cours · ☑ fait
       const st = m[2] === ' ' ? 'todo' : /[xX]/.test(m[2]) ? 'done' : 'doing';
-      const icon = st === 'done' ? c.green('☑') : st === 'doing' ? c.yellow('◐') : c.dim('☐');
       if (!this.inTasks) { this.inTasks = true; this.taskList = []; tasks.blocks++; }
       // seule la 1re liste de la demande s'écrit dans le fil ; les mises à jour suivantes ne changent que le panneau épinglé
-      if (tasks.blocks <= 1) this.emit(`${m[1]}${icon} ${st === 'done' ? c.dim(inline(m[3])) : inline(m[3])}`);
+      if (tasks.blocks <= 1) this.emit(`  ${m[1]}${taskLine(st, inline(m[3]))}`);
       this.taskList.push({ text: m[3].replace(/[*_`]/g, '').trim(), state: st });
       tasks.set(this.taskList.slice());
       return;

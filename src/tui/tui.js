@@ -4,7 +4,7 @@ import { KeyParser } from './keys.js';
 import { Screen } from './screen.js';
 import { PinnedScreen } from './pinned.js';
 import { layoutInput, indexAt, strWidth, padAnsi, stripAnsi, clipAnsi } from './layout.js';
-import { c } from '../ui.js';
+import { c, taskLine } from '../ui.js';
 
 // astuces affichées dans la zone de saisie vide (une nouvelle à chaque demande)
 const TIPS = ['fais-moi un site de café avec plusieurs agents', 'corrige le bug dans script.js', 'ouvre quick.fr dans le navigateur', 'retiens que je code en TypeScript', 'explique ce projet', 'ajoute des tests', 'refais le design de index.html', 'combien de conversations il me reste ?'];
@@ -140,17 +140,17 @@ export class Tui {
     // liste de tâches du modèle, épinglée : on voit où il en est sur les longues tâches
     if (this.tasks.length) {
       const done = this.tasks.filter(t => t.state === 'done').length;
-      lines.push('  ' + c.bold('Tâches') + c.dim(` ${done}/${this.tasks.length}`));
+      lines.push('  ' + c.accent('●') + ' ' + c.bold('Tâches') + c.dim(` · ${done}/${this.tasks.length} faites`));
       let items = this.tasks;
       if (items.length > 7) {                                         // longue liste : fenêtre autour de la première étape non faite
         const open = Math.max(0, items.findIndex(t => t.state !== 'done'));
         const start = Math.max(0, Math.min(open - 1, items.length - 7));
         items = items.slice(start, start + 7);
       }
-      const max = Math.max(10, W - 8);
+      const max = Math.max(10, W - 10);
       for (const t of items) {
         const txt = t.text.length > max ? t.text.slice(0, max - 1) + '…' : t.text;
-        lines.push('  ' + (t.state === 'done' ? c.green('☑ ') + c.dim(txt) : t.state === 'doing' ? c.yellow('◐ ') + txt : c.dim('☐ ') + txt));
+        lines.push('    ' + taskLine(t.state, txt));
       }
     }
 
