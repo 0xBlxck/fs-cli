@@ -25,9 +25,8 @@ jobs:
         run: npm run scan
 
   portable:
-    # macOS et Linux : la suite est d'abord pensée pour Windows (PowerShell) ; ce job dit ce qui marche ailleurs
+    # macOS et Linux : toute la suite, sauf les tests de commandes PowerShell (marqués Windows seulement)
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
