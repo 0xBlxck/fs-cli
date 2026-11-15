@@ -125,10 +125,11 @@ export async function confirm(ask, { title, detail, danger, allowAlways = false,
   }
 }
 
-function needsConfirm(risk, S) {
+export function needsConfirm(risk, S) {
   if (risk.danger || risk.protectedPath || risk.secrets) return true;
   if (risk.kind === 'read' || risk.kind === 'net') return false;
   if (cfg.mode === 'auto') return false;
+  if (cfg.mode === 'edits' && risk.kind === 'write') return false;   // mode « accepter les modifications » : fichiers oui, commandes à confirmer
   return !S.allow[risk.kind];
 }
 
@@ -229,7 +230,7 @@ const judgeFor = (name, args, cwd) =>
 async function runMcpBlock(S, b, io) {
   const { server, tool, args } = b.mcp;
   ui.toolHeader(`mcp ${server}.${tool}`, JSON.stringify(args).slice(0, 100));
-  if (cfg.mode === 'ask' && !S.allow.mcp) {
+  if ((cfg.mode === 'ask' || cfg.mode === 'edits') && !S.allow.mcp) {
     const r = await confirm(io.ask, { title: `Appeler l'outil MCP ${server}.${tool} ?`, detail: JSON.stringify(args, null, 1), danger: false });
     if (r.aborted || io.signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     if (!r.allow) { ui.toolNote('refusé', 'yellow'); S.pendingResults.push(`[mcp ${server}.${tool}] refusé par l'utilisateur`); return { ok: false, output: 'refusé' }; }

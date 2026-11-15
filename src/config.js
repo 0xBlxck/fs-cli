@@ -65,7 +65,7 @@ try {
   const saved = JSON.parse(fs.readFileSync(FILES.cfg, 'utf8'));
   for (const k of Object.keys(DEFAULTS)) if (saved[k] !== undefined) cfg[k] = saved[k];
 } catch {}
-if (!['auto', 'ask', 'plan'].includes(cfg.mode)) cfg.mode = 'auto';
+if (!['auto', 'edits', 'ask', 'plan'].includes(cfg.mode)) cfg.mode = 'auto';
 if (!['native', 'chat'].includes(cfg.engine)) cfg.engine = 'native';
 if (!cfg.engineExplicit && cfg.engine === 'chat') cfg.engine = 'native';      // migration : le mode natif est désormais disponible
 

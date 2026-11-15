@@ -11,6 +11,7 @@ const TIPS = ['fais-moi un site de café avec plusieurs agents', 'corrige le bug
 
 const MODE_LABEL = {
   auto: ['⏵⏵ auto', 'exécution automatique'],
+  edits: ['⏵ modifs auto', 'fichiers modifiés sans demander, commandes confirmées'],
   ask: ['⏸ confirmer', 'confirmation à chaque action'],
   plan: ['◇ plan', 'proposer sans exécuter'],
 };
@@ -107,9 +108,18 @@ export class Tui {
     return new Promise(resolve => {
       this.select_ = { title, detail, options, idx: defaultIndex, resolve };
       this.render();
+      this.attention(true);
     });
   }
-  finishSelect(v) { const s = this.select_; this.select_ = null; this.render(); s.resolve(v); }
+  finishSelect(v) { const s = this.select_; this.select_ = null; this.attention(false); this.render(); s.resolve(v); }
+  /** l'agent attend une réponse : bip (la barre des tâches clignote si la fenêtre est en arrière-plan) + barre de progression orange dans Windows Terminal */
+  attention(on) {
+    if (!this.started) return;
+    try {
+      if (on) this.stdout.write('\x07' + (process.env.WT_SESSION ? '\x1b]9;4;4;100\x07' : ''));
+      else if (process.env.WT_SESSION) this.stdout.write(this.busy ? '\x1b]9;4;3;0\x07' : '\x1b]9;4;0;0\x07');
+    } catch {}
+  }
 
   takeQueued() {
     const t = this.queue.shift();

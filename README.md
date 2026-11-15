@@ -70,13 +70,14 @@ Tape ta demande et appuie sur Entrée. **Pas besoin de connaître les commandes*
 
 Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhension automatique.
 
-### Les 3 modes (Maj+Tab)
+### Les 4 modes (Maj+Tab)
 
 | Mode | Comportement |
 |---|---|
 | **auto** | agit sans demander pour ce qui n'est pas dangereux ; demande pour les actions sensibles |
+| **modifs auto** | modifie les fichiers sans demander, mais te demande avant chaque commande |
 | **confirmer** | demande ton accord avant chaque écriture et chaque commande |
-| **plan** | lecture seule : il explore et propose un plan, **rien n'est modifié** |
+| **plan** | lecture seule : il explore et propose un plan, **rien n'est modifié** (`/plan <demande>` pour une seule demande) |
 
 ### Raccourcis
 
@@ -101,6 +102,8 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 - **Diff coloré** : chaque modification montre les lignes retirées (rouge) et ajoutées (vert), avec les numéros de ligne.
 - **Mode plan** : le modèle propose un plan en lecture seule, puis te demande s'il doit l'appliquer (automatiquement ou en validant chaque action).
 - **Commandes perso** : un fichier `ma-commande.md` dans `.fs-cli/commands/` (projet) ou `~/.fs-cli/commands/` devient `/ma-commande` (`$ARGUMENTS` = ce que tu tapes après). Tes commandes de Claude Code (`.claude/commands/`) marchent aussi.
+- **Bilan des fichiers** : après chaque demande, la liste des fichiers modifiés (+/− lignes) ; `/changes` montre le diff d'un fichier et permet de **l'annuler seul**.
+- **Alerte** : quand l'agent attend ta réponse, le terminal bipe (la barre des tâches clignote) — tu peux faire autre chose pendant qu'il travaille.
 - **Retour en arrière** : `/rewind` (ou « reviens en arrière ») remet tous les fichiers dans l'état d'avant la demande de ton choix.
 - **Plusieurs agents** : `/team` répartit une tâche entre agents (jusqu'à 8), **à la suite dans la même conversation** (défaut) ou **en parallèle** ; `/compare` pose la même question à deux modèles.
 - **Interface type Claude Code** : saisie ancrée en bas de la fenêtre, suggestions, menus à flèches, file d'attente de messages, code replié en une ligne.
@@ -134,12 +137,12 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 
 | Thème | Commandes |
 |---|---|
-| Conversation | `/usage` · `/rewind` · `/doctor` · `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
+| Conversation | `/usage` · `/changes` · `/messages` · `/plan <demande>` · `/rewind` · `/doctor` · `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |
 | Mémoire | `/remember` · `/forget` · `/memory` · `/preprompt` · `/profil` · `/skills` |
 | Web et outils | `/navigateur` · `/search` · `/fetch` · `/mcp` · `/import` · `/jobs` · `!commande` |
-| Sécurité | `/permissions` · `/mode auto\|ask\|plan` · `/intent on\|off` |
+| Sécurité | `/permissions` · `/mode auto\|edits\|ask\|plan` · `/intent on\|off` |
 
 ---
 

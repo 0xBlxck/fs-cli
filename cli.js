@@ -31,6 +31,8 @@ import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.j
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
+import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
+import { fetchChat } from './src/api.js';
 import { toolsCatalog, loadMcpConfig, saveMcpConfig } from './src/mcp.js';
 import { getMcp, activeServers } from './src/mcp-runtime.js';
 import * as ui from './src/ui.js';
@@ -65,7 +67,7 @@ if (opts.help) {
   fs -c                    reprend la dernière session de ce dossier
 
   -m, --model <id|nom>     modèle (ex: -m opus, -m -2003)
-  --mode auto|ask          auto = exécute tout sauf actions dangereuses · ask = confirme écritures/commandes
+  --mode auto|edits|ask|plan  auto = tout sauf actions dangereuses · edits = fichiers sans demander, commandes confirmées · ask = confirme tout · plan = lecture seule
   --cwd <dossier>          dossier de travail
   --web                    active la recherche web
   --classic                ancienne saisie (readline) au lieu de l'interface plein écran
@@ -92,7 +94,7 @@ if (!TOKEN) {
 if (IS_WIN) { try { execSync('chcp 65001', { stdio: 'ignore' }); } catch {} }
 try { process.stdout.setDefaultEncoding('utf8'); } catch {}
 
-if (opts.mode && ['auto', 'ask', 'plan'].includes(opts.mode)) cfg.mode = opts.mode;
+if (opts.mode && ['auto', 'edits', 'ask', 'plan'].includes(opts.mode)) cfg.mode = opts.mode;
 if (opts.web) cfg.webSearch = true;
 ui.theme.name = THEMES[cfg.theme] ? cfg.theme : 'cyan';
 
@@ -239,7 +241,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/navigateur ', '/doctor', '/rewind', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/navigateur ', '/doctor', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -328,7 +330,7 @@ function banner() {
 
 const HELP_ROWS = [
     ['/new', 'nouvelle conversation'], ['/model [nom|id|n°]', 'changer de modèle (conversation conservée)'], ['/models', 'lister les modèles'],
-    ['/mode [auto|ask|plan]', 'auto : tout s\'exécute sauf actions dangereuses · ask : confirme chaque action · plan : rien n\'est exécuté (Maj+Tab pour changer)'],
+    ['/mode [auto|edits|ask|plan]', 'auto : tout s\'exécute sauf actions dangereuses · edits : fichiers sans demander, commandes confirmées · ask : confirme chaque action · plan : rien n\'est exécuté (Maj+Tab pour changer)'],
     ['/cd <dossier>', 'changer de dossier de travail'], ['/target [dossier|clear]', 'dossier où écrire les fichiers à nom relatif (détecté si ta demande cite un chemin)'], ['/read <fichier>', 'joindre un fichier au prochain message (ou @fichier)'],
     ['/run [n|all]', 'exécuter les blocs de code de la dernière réponse (écrit aussi les fichiers nommés)'],
     ['/context · /quota', 'contexte utilisé de la conversation · quota du compte'],
@@ -353,7 +355,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
@@ -386,7 +388,7 @@ function status() {
   row('modèle', c.white(modelName()) + c.dim(`  (${S.agentId})`));
   row('session', S.chatId || c.dim('aucune'));
   row('dossier', S.cwd);
-  row('mode', cfg.mode === 'auto' ? c.green('auto') : c.yellow('ask'));
+  row('mode', cfg.mode === 'auto' ? c.green('auto') : c.yellow(MODE_NAME[cfg.mode] || cfg.mode));
   row('web', cfg.webSearch ? c.green('on') : c.dim('off'));
   row('shell', sysEnv.shellName);
   row('python', sysEnv.pythonVersion || c.dim('non détecté'));
@@ -436,9 +438,9 @@ async function command(line) {
     }
     case '/mode': {
       const m = arg || (cfg.mode === 'auto' ? 'ask' : 'auto');
-      if (!MODES.includes(m)) return println(c.red('  usage: /mode auto|ask|plan'));
+      if (!MODES.includes(m)) return println(c.red('  usage: /mode auto|edits|ask|plan'));
       cfg.mode = m; saveCfg(); S.allow = {}; refreshPrompt();
-      return println(c.dim(`  → mode ${m === 'auto' ? 'auto (confirmation seulement pour les actions dangereuses)' : m === 'ask' ? 'ask (confirmation avant écriture/commande)' : 'plan (rien n\'est exécuté, le code est affiché en entier)'}  ·  Maj+Tab pour changer`));
+      return println(c.dim(`  → ${MODE_DESC[m]}  ·  Maj+Tab pour changer`));
     }
     case '/web': cfg.webSearch = !cfg.webSearch; saveCfg(); return println(c.dim(`  → web ${cfg.webSearch ? 'on' : 'off'}`));
     case '/think': cfg.showThinking = !cfg.showThinking; saveCfg(); return println(c.dim(`  → raisonnement ${cfg.showThinking ? 'affiché' : 'masqué'}`));
@@ -571,6 +573,62 @@ async function command(line) {
       if (done.length > 12) println(c.dim(`    … +${done.length - 12}`));
       return;
     }
+    case '/changes': case '/diff': {                                  // fichiers modifiés dans la session : diff et annulation fichier par fichier
+      const files = summarizeChanges(S.undo, 0);
+      if (!files.length) return println(c.dim('  aucun fichier modifié par le modèle dans cette session'));
+      const [sub, num] = /^(undo|annuler)\b/i.test(arg) ? ['undo', arg.split(/\s+/)[1]] : ['diff', arg];
+      const at = n => files[parseInt(n, 10) - 1];
+      const showDiff = f => {
+        const d = fileDiff(S.undo, f.path);
+        println(`\n  ${changeLine(f, S.cwd, c)}`);
+        if (f.binary) return println(c.dim('  ⎿  fichier binaire : pas de diff'));
+        ui.diffView(d.before, d.after, { max: 80 });
+      };
+      const doUndo = f => {
+        const r = undoFile(S, f.path, FILES.trash);
+        S.notes.push(`L'utilisateur a annulé tes modifications du fichier ${f.path} (retour à son état d'avant). Relis-le avant de le modifier.`);
+        println(c.green(`  ✓ ${r}`));
+      };
+      if (num && !at(num)) return println(c.red(`  numéro inconnu (1 à ${files.length})`));
+      if (sub === 'undo' && num) return doUndo(at(num));
+      if (sub === 'diff' && num) return showDiff(at(num));
+      if (input.select && interactive) {
+        const idx = await input.select({ title: `Fichiers modifiés dans cette session · ${files.length}`, detail: 'Choisis un fichier pour voir son diff ou l\'annuler.', options: [...files.slice(0, 9).map(f => changeLine(f, S.cwd, c)), 'Fermer'] });
+        const f = idx == null ? null : files[idx];
+        if (!f) return;
+        showDiff(f);
+        const act = await input.select({ title: `Annuler les modifications de ${path.basename(f.path)} ?`, detail: f.created ? 'Le fichier a été créé par le modèle : il partira dans la corbeille du CLI (récupérable).' : 'Le fichier reprendra son contenu d\'avant la première modification du modèle. Les autres fichiers ne bougent pas.', options: ['Non, garder', 'Oui, annuler ce fichier'] });
+        if (act === 1) doUndo(f);
+        return;
+      }
+      println(); files.forEach((f, i) => println(`  ${c.accent(String(i + 1).padStart(2))}  ${changeLine(f, S.cwd, c)}`));
+      return println(c.dim('\n  /changes <n°> : voir le diff · /changes undo <n°> : annuler ce fichier\n'));
+    }
+    case '/plan': {                                                   // /plan <demande> : une demande en lecture seule, puis proposition d'appliquer
+      if (!arg) { cfg.mode = 'plan'; saveCfg(); S.allow = {}; refreshPrompt(); return println(c.dim(`  → ${MODE_DESC.plan}  ·  /plan <demande> pour une seule demande`)); }
+      const prev = cfg.mode;
+      cfg.mode = 'plan'; S.allow = {}; refreshPrompt();
+      try { await chatTurn(arg); }
+      finally { if (cfg.mode === 'plan' && prev !== 'plan') { cfg.mode = prev; S.allow = {}; refreshPrompt(); println(c.dim(`  ↩ retour au mode ${MODE_NAME[prev]}`)); } }
+      return;
+    }
+    case '/messages': {                                               // réafficher les derniers messages de la conversation
+      if (!S.chatId) return println(c.dim('  pas encore de conversation'));
+      const n = Math.min(100, Math.max(1, parseInt(arg, 10) || 10));
+      ui.spinner.start('lecture de la conversation…');
+      const data = await fetchChat(S.chatId).finally(() => ui.spinner.stop());
+      const msgs = (data?.chatMessages || []).filter(m => (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim());
+      if (!msgs.length) return println(c.dim('  aucun message lisible'));
+      const shown = msgs.slice(-n);
+      println(c.dim(`\n  ${shown.length} dernier${shown.length > 1 ? 's' : ''} message${shown.length > 1 ? 's' : ''} sur ${msgs.length}\n`));
+      for (const m of shown) {
+        const txt = ui.sanitize(String(m.content)).replace(/^\[[^\]]{0,4000}\]\s*/s, '').trim();   // note client en tête (contexte joint) retirée
+        if (m.role === 'user') println(c.dim('> ') + (txt.length > 600 ? txt.slice(0, 600) + c.dim(' …') : txt).split('\n').join('\n  '));
+        else { const md = new ui.MdStream({ collapse: false }); md.push(txt.length > 4000 ? txt.slice(0, 4000) + '\n\n… (tronqué : /copy pour la dernière réponse entière)' : txt); md.finish(); }
+        println();
+      }
+      return;
+    }
     case '/tools': {
       println(); for (const [n, t] of Object.entries(TOOLS)) println(`  ${c.accent(n.padEnd(11))} ${c.dim(t.risk.padEnd(6))} ${t.desc().split('.')[0]}`);
       return println();
@@ -659,6 +717,18 @@ async function command(line) {
 const FILE_INTENT = /\b(html|css|site|page web|fichiers?|écris|ecris|crée|cree|génère|genere|fais|code|script)\b/i;
 const formatHint = () => `[Format de réponse souhaité : pour chaque fichier à créer, un bloc de code dont la ligne d'ouverture donne le langage et le nom du fichier, par exemple \`\`\`html index.html — avec le contenu final du fichier lui-même, pas un script qui le génère. ${S.targetDir ? `Dossier cible : ${S.targetDir} (un nom relatif y sera écrit, sous-dossiers possibles, ex. \`\`\`html monsite/index.html).` : `Dossier de travail actuel : ${S.cwd} (un nom relatif y sera écrit ; pour un autre dossier, mets le chemin complet dans le nom du fichier).`}]`;
 
+/** « ● Fichiers modifiés · 3 » après une demande qui a écrit des fichiers (comme FranceStudent Code) */
+function printTurnChanges() {
+  const mark = (S.turnMarks || []).at(-1);
+  if (!mark || S.undo.length <= mark.at) return;
+  const files = summarizeChanges(S.undo, mark.at);
+  const add = files.reduce((n, f) => n + f.added, 0), rem = files.reduce((n, f) => n + f.removed, 0);
+  println(`\n  ${c.green('●')} ${c.bold('Fichiers modifiés')} ${c.dim(`· ${files.length}`)}  ${add ? c.green('+' + add) : ''} ${rem ? c.red('−' + rem) : ''}`);
+  files.slice(0, 12).forEach((f, i) => println(`  ${i === 0 ? c.dim('  └') : '   '} ${changeLine(f, S.cwd, c)}`));
+  if (files.length > 12) println(c.dim(`      … +${files.length - 12} autres`));
+  println(c.dim('    /changes pour voir les diffs ou annuler un fichier'));
+}
+
 async function chatTurn(text, { keepLast = false } = {}) {
   turnAbort = new AbortController();
   println();
@@ -734,15 +804,16 @@ async function chatTurn(text, { keepLast = false } = {}) {
   ${done === L.length ? c.green('●') : c.accent('●')} ${c.bold('Tâches')} ${c.dim(`· ${done}/${L.length} faites`)}`);
         L.forEach((t, i) => println(`  ${i === 0 ? c.dim('  └') : '   '} ${ui.taskLine(t.state, t.text)}`));
       }
+      printTurnChanges();                                              // bilan des fichiers touchés par cette demande
       // mode plan : le modèle a proposé un plan → on demande s'il faut l'appliquer (comme Claude Code)
       if (cfg.mode === 'plan' && interactive && input.select && (S.lastResponse || '').trim()) {
         const idx = await input.select({
           title: 'Appliquer ce plan ?',
           detail: 'Le modèle a travaillé en lecture seule. Choisis comment il doit maintenant l\'exécuter.',
-          options: ['Oui, et accepter les modifications automatiquement (mode auto)', 'Oui, en validant chaque action (mode confirmer)', 'Non, continuer à planifier'],
+          options: ['Oui, tout automatiquement (mode auto)', 'Oui, fichiers automatiques mais commandes confirmées (mode modifs auto)', 'Oui, en validant chaque action (mode confirmer)', 'Non, continuer à planifier'],
           defaultIndex: 0,
         });
-        if (idx === 0 || idx === 1) S.afterPlan = idx === 0 ? 'auto' : 'ask';
+        if (idx >= 0 && idx <= 2) S.afterPlan = ['auto', 'edits', 'ask'][idx];
       }
     }
     finally { S.pendingFileIds = []; ui.tasks.set([]); }               // images : seulement ce message ; panneau de tâches vidé (sinon affiché en double)
@@ -759,7 +830,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
   println();
   if (S.afterPlan) {                                                   // plan approuvé : on change de mode et on lance l'exécution
     cfg.mode = S.afterPlan; S.afterPlan = null; saveCfg(); S.allow = {}; refreshPrompt();
-    println(c.green(`  ✓ plan approuvé : exécution en mode ${cfg.mode === 'auto' ? 'auto' : 'confirmer'}`));
+    println(c.green(`  ✓ plan approuvé : exécution en mode ${MODE_NAME[cfg.mode]}`));
     return chatTurn('Le plan est approuvé : exécute-le maintenant, étape par étape, en tenant la liste de tâches à jour.');
   }
 }
@@ -830,10 +901,17 @@ async function runInput(text) {
   }
 }
 
-const MODES = ['auto', 'ask', 'plan'];
+const MODES = ['auto', 'edits', 'ask', 'plan'];
+const MODE_NAME = { auto: 'auto', edits: 'modifs auto', ask: 'confirmer', plan: 'plan' };
+const MODE_DESC = {
+  auto: "mode auto : tout s'exécute (confirmation seulement pour les actions dangereuses)",
+  edits: 'mode modifs auto : fichiers modifiés sans demander, commandes confirmées',
+  ask: 'mode confirmer : demande avant chaque écriture ou commande',
+  plan: "mode plan : lecture seule, rien n'est exécuté",
+};
 function cycleMode() {
   cfg.mode = MODES[(MODES.indexOf(cfg.mode) + 1) % MODES.length]; saveCfg(); S.allow = {};
-  input.flash?.(cfg.mode === 'auto' ? 'mode auto : exécution automatique' : cfg.mode === 'ask' ? 'mode confirmer : demande avant chaque action' : 'mode plan : rien n\'est exécuté');
+  input.flash?.(MODE_DESC[cfg.mode]);
   refreshPrompt();
 }
 
