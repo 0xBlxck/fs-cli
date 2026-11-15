@@ -89,7 +89,7 @@ export async function loginWizard({ first = true } = {}) {
     process.stdout.write('\r\x1b[K');
     if (!ok) { setToken(''); say(c.yellow('  Clé refusée par France Student (expirée, incomplète ou d\'un autre site). Réessaie.')); continue; }
     const file = saveToken(token);
-    say(c.green('  ✓ Connecté ! ') + c.dim(`Clé enregistrée dans ${file} — /login pour la changer plus tard.`));
+    say(c.green('  ✓ Connecté ! ') + c.dim(`Clé enregistrée dans ${file} — « fs-cli --login » pour la changer plus tard.`));
     say();
     return true;
   }

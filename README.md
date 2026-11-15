@@ -18,7 +18,11 @@ Gratuit, open source, sans dépendance et sans télémétrie. Interface en fran�
 winget install OpenJS.NodeJS.LTS
 ```
 
-Ferme puis rouvre le terminal.
+Ferme puis rouvre le terminal. Sur un Windows neuf, autorise aussi les scripts de npm (une seule fois, réponds `O`) :
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
 
 **2. Installe FS-CLI :**
 
@@ -145,7 +149,8 @@ Une faille ? Signale-la en privé (onglet *Security* → *Report a vulnerability
 
 | Problème | Solution |
 |---|---|
-| `fs-cli` n'est pas reconnu | ferme et rouvre le terminal ; sinon vérifie que `npm config get prefix` est dans ton `PATH` |
+| « l'exécution de scripts est désactivée sur ce système » (npm ou fs-cli) | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, puis réessaie (ou lance `fs-cli.cmd`) |
+| `npm` ou `fs-cli` n'est pas reconnu | ferme et rouvre le terminal ; sinon vérifie que `npm config get prefix` est dans ton `PATH` |
 | « clé de session expirée » / erreur 401 | `fs-cli --login` |
 | « Limite de 50 nouvelles conversations par jour » | continue dans une conversation existante (`fs-cli -c`, `/resume`) ; remise à zéro vers 5 h du matin |
 | « Ce modèle ne gère pas les outils client » | choisis un modèle Claude ou GPT avec `/model` |
