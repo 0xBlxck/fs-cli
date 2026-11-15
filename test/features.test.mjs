@@ -146,3 +146,11 @@ test('actions façon Codex : explorations regroupées, commande écrite à la fi
   assert.equal(tui.active.length, 0, 'zone du bas vidée une fois l\'action terminée');
   ui.attachSink(null); tui.stop();
 });
+
+test('diff : exact ligne à ligne, ancienne ligne avant la nouvelle, numéros de ligne', () => {
+  const ops = ui.lineDiff('a\nb\nc\nd', 'a\nB\nc\nd\ne');
+  assert.deepEqual(ops.map(o => o.t + o.line), [' a', '-b', '+B', ' c', ' d', '+e']);
+  assert.equal(ops.find(o => o.t === '+' && o.line === 'e').n, 5);
+  assert.equal(ops.find(o => o.t === '-').o, 2);
+  assert.deepEqual(ui.lineDiff('x\r\ny', 'x\ny').map(o => o.t), [' ', ' '], 'fins de ligne Windows ignorées');
+});

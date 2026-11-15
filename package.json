@@ -1,6 +1,6 @@
 {
   "name": "fs-cli",
-  "version": "3.13.0",
+  "version": "3.14.0",
   "description": "Client terminal communautaire (non officiel) pour France Student AI : agent avec vrais appels d'outils, permissions, mémoire, MCP",
   "type": "module",
   "bin": {

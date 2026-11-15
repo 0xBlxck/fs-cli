@@ -412,8 +412,10 @@ export const TOOLS = {
       writeAtomic(fp, bom + content);
       ctx.undo?.push({ path: fp, prev });
       const n = a.content.split('\n').length;
+      // fichier existant réécrit : on montre le diff (comme Claude Code) si c'est du texte de taille raisonnable
+      const diff = prev && prev.length < 400_000 && !looksBinary(prev) ? [prev.toString('utf8').replace(/^﻿/, ''), content] : undefined;
       return { ok: true, output: `${prev ? 'Fichier écrasé' : 'Fichier créé'}: ${fp} (${n} lignes, ${human(Buffer.byteLength(content))})`,
-        display: `${prev ? 'écrasé' : 'créé'} · ${n} lignes · ${human(Buffer.byteLength(content))}`, kind: prev ? 'warn' : 'ok' };
+        display: `${prev ? 'écrasé' : 'créé'} · ${n} lignes · ${human(Buffer.byteLength(content))}`, kind: prev ? 'warn' : 'ok', ...(diff ? { diff } : {}) };
     },
   },
 
@@ -456,7 +458,7 @@ export const TOOLS = {
       ctx.undo?.push({ path: fp, prev: buf });
       writeAtomic(fp, (hadBom ? '﻿' : '') + updated);
       const count = a.replace_all ? idx.length : 1;
-      return { ok: true, output: `Édité ${fp} (${count} remplacement${count > 1 ? 's' : ''})`, diff: [a.old_string, a.new_string], display: `${count} remplacement${count > 1 ? 's' : ''}` };
+      return { ok: true, output: `Édité ${fp} (${count} remplacement${count > 1 ? 's' : ''})`, diff: [text, updated], display: `${count} remplacement${count > 1 ? 's' : ''}` };   // fichier entier avant / après : vrais numéros de ligne
     },
   },
 

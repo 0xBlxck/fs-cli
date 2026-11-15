@@ -405,18 +405,59 @@ export function createLive(maxLines = 24) {
   };
 }
 
-export function diffView(oldStr, newStr, max = 14) {
-  const o = oldStr.split('\n'), n = newStr.split('\n');
-  let a = 0;
-  while (a < o.length && a < n.length && o[a] === n[a]) a++;
-  let b = 0;
-  while (b < o.length - a && b < n.length - a && o[o.length - 1 - b] === n[n.length - 1 - b]) b++;
-  const rem = o.slice(a, o.length - b), add = n.slice(a, n.length - b);
-  const lines = [...rem.map(l => c.red('- ' + l)), ...add.map(l => c.green('+ ' + l))];
-  const w = cols() - 8;
-  lines.slice(0, max).forEach((l, i) => println(`  ${i === 0 ? c.dim('⎿') : ' '}  ${clip(l, w + 20)}`));
-  if (lines.length > max) println(`     ${c.dim(`… +${lines.length - max} lignes`)}`);
-  return { removed: rem.length, added: add.length };
+/**
+ * Différences ligne à ligne entre deux textes : [{ t: ' '|'-'|'+', line, o?, n? }] (o / n = numéros de ligne avant / après).
+ * Préfixe et suffixe communs retirés, puis plus longue sous-séquence commune sur le milieu (exact, et rapide en pratique).
+ */
+export function lineDiff(oldStr, newStr) {
+  const o = String(oldStr ?? '').replace(/\r\n/g, '\n').split('\n'), n = String(newStr ?? '').replace(/\r\n/g, '\n').split('\n');
+  let p = 0; while (p < o.length && p < n.length && o[p] === n[p]) p++;
+  let s = 0; while (s < o.length - p && s < n.length - p && o[o.length - 1 - s] === n[n.length - 1 - s]) s++;
+  const A = o.slice(p, o.length - s), B = n.slice(p, n.length - s);
+  const ops = [];
+  for (let i = 0; i < p; i++) ops.push({ t: ' ', line: o[i], o: i + 1, n: i + 1 });
+  if (A.length * B.length <= 4_000_000) {
+    const L = Array.from({ length: A.length + 1 }, () => new Uint32Array(B.length + 1));
+    for (let i = A.length - 1; i >= 0; i--) for (let j = B.length - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    let i = 0, j = 0;
+    while (i < A.length || j < B.length) {
+      if (i < A.length && j < B.length && A[i] === B[j]) { ops.push({ t: ' ', line: A[i], o: p + i + 1, n: p + j + 1 }); i++; j++; }
+      else if (i < A.length && (j >= B.length || L[i + 1][j] >= L[i][j + 1])) { ops.push({ t: '-', line: A[i], o: p + i + 1 }); i++; }   // ancienne ligne d'abord
+      else { ops.push({ t: '+', line: B[j], n: p + j + 1 }); j++; }
+    }
+  } else {                                                          // très gros changement : tout l'ancien bloc retiré, tout le nouveau ajouté
+    A.forEach((l, k) => ops.push({ t: '-', line: l, o: p + k + 1 }));
+    B.forEach((l, k) => ops.push({ t: '+', line: l, n: p + k + 1 }));
+  }
+  for (let k = 0; k < s; k++) ops.push({ t: ' ', line: o[o.length - s + k], o: o.length - s + k + 1, n: n.length - s + k + 1 });
+  return ops;
+}
+
+/** Diff coloré façon Claude Code : résumé, numéros de ligne, ajouts sur fond vert, retraits sur fond rouge, 2 lignes de contexte. */
+export function diffView(oldStr, newStr, { max = 30, context = 2 } = {}) {
+  const ops = lineDiff(oldStr, newStr);
+  const added = ops.filter(x => x.t === '+').length, removed = ops.filter(x => x.t === '-').length;
+  const parts = [added && `${added} ajout${added > 1 ? 's' : ''}`, removed && `${removed} suppression${removed > 1 ? 's' : ''}`].filter(Boolean);
+  println(`  ${c.dim('⎿')}  ${parts.length ? parts.join(', ') : 'aucun changement'}`);
+  // lignes à montrer : chaque changement avec `context` lignes autour ; « ⋮ » entre deux zones éloignées
+  const keep = new Set();
+  ops.forEach((x, i) => { if (x.t !== ' ') for (let k = Math.max(0, i - context); k <= Math.min(ops.length - 1, i + context); k++) keep.add(k); });
+  const width = String(ops.reduce((m, x) => Math.max(m, x.o || 0, x.n || 0), 0)).length;
+  const ADD = s => `\x1b[48;2;22;58;34m${s}\x1b[49m`, DEL = s => `\x1b[48;2;72;26;30m${s}\x1b[49m`;
+  const W = cols() - 8 - width;
+  let shown = 0, last = -2;
+  for (let i = 0; i < ops.length; i++) {
+    if (!keep.has(i)) continue;
+    if (shown >= max) { println(`     ${c.dim(`… +${[...keep].filter(k => k >= i).length} lignes`)}`); break; }
+    if (last >= 0 && i > last + 1) println(`     ${c.dim('⋮')}`);
+    const x = ops[i], num = String(x.t === '-' ? x.o : x.n).padStart(width);
+    const text = clip(sanitize(x.line).replace(/\t/g, '  '), W);
+    if (x.t === '+') println(`     ${ADD(`${c.green(num)} ${c.green('+')} ${text}`.padEnd(0))}`);
+    else if (x.t === '-') println(`     ${DEL(`${c.red(num)} ${c.red('-')} ${text}`)}`);
+    else println(`     ${c.dim(num)}   ${c.dim(text)}`);
+    shown++; last = i;
+  }
+  return { removed, added };
 }
 
 // ── Boîte / bannière ──────────────────────────────────────────────────────────
