@@ -463,7 +463,7 @@ class HttpTransport {
           + 'Utilise un serveur « Streamable HTTP » (URL en /mcp) ou un serveur stdio.', 'http', { status: res.status });
       }
       if (res.status === 401 || res.status === 403) {
-        throw new McpError(`HTTP ${res.status} : authentification requise (OAuth non supporté ; ajoute un en-tête "headers": {"Authorization": "Bearer …"} dans la config)`, 'http', { status: res.status });
+        throw new McpError(`HTTP ${res.status} : ce serveur demande une connexion à un compte (OAuth). Si tu l'as connecté dans Claude Code ou un autre assistant, cette connexion reste chez lui : FS-CLI ne peut pas la réutiliser. Sinon, ajoute un en-tête "headers": {"Authorization": "Bearer …"} dans la config`, 'http', { status: res.status });
       }
       if (res.status === 404 && this.sessionId) {
         throw new McpError('Session MCP expirée (HTTP 404) : reconnecte le serveur', 'http', { status: 404 });

@@ -144,7 +144,9 @@ function mutateMcp(cwd, name, fn) {           // modifie la config dans le scope
 async function mcpCommand(arg, env) {
   const { S, withAbort } = env;
   const cwd = S.cwd, mgr = getMcp(cwd);
-  const [sub = 'list', ...rest] = splitArgs(arg);
+  let [sub = 'list', ...rest] = splitArgs(arg);
+  // « /mcp blender » = « /mcp tools blender » : démarre le serveur et montre ses outils
+  if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
   const target = rest[0];
   switch (sub.toLowerCase()) {
     case 'list': case 'ls': {

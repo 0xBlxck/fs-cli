@@ -368,7 +368,7 @@ async function command(line) {
   const [cmd, ...rest] = line.split(/\s+/);
   const arg = line.slice(cmd.length).trim();
   switch (cmd) {
-    case '/quit': case '/exit': case '/q': saveSession(); input.stop(); console.log(c.dim('  à bientôt')); process.exit(0);
+    case '/quit': case '/exit': case '/q': return shutdown(0);
     case '/help': case '/?': return help();
     case '/clear': input.clearScreen(); return banner();
     case '/status': return status();
@@ -639,12 +639,7 @@ function cycleMode() {
 input.on('submit', t => { runInput(t); });
 input.on('interrupt', () => { turnAbort?.abort(); });
 input.on('cycleMode', cycleMode);
-input.on('quit', () => {
-  saveSession();
-  input.stop();
-  console.log(c.dim('  à bientôt'));
-  process.exit(0);
-});
+input.on('quit', () => { shutdown(0); });
 process.on('exit', () => { try { input.stop(); } catch {} });
 process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); });
 
@@ -667,12 +662,23 @@ async function ensureFolderTrust(dir) {
   return true;
 }
 
+/** Sortie propre : on ferme d'abord les serveurs MCP (sinon Node peut planter sous Windows en fermant leurs connexions). */
+let stopping = false;
+async function shutdown(code = 0, { quiet = false } = {}) {
+  if (stopping) return; stopping = true;
+  saveSession();
+  try { await Promise.race([getMcp(S.cwd).closeAll(), new Promise(r => setTimeout(r, 2000))]); } catch {}
+  try { input.stop(); } catch {}
+  if (!quiet) console.log(c.dim('  à bientôt'));
+  await new Promise(r => setTimeout(r, 150));                      // laisse les connexions réseau finir de se fermer
+  process.exit(code);
+}
+
 // ── Lancement ─────────────────────────────────────────────────────────────────
 if (opts.print) {
   if (!initial) { console.log(c.red('  -p nécessite une demande')); process.exit(1); }
   await handleInput(initial);
-  saveSession();
-  process.exit(0);
+  await shutdown(0, { quiet: true });
 }
 
 if (interactive) {
