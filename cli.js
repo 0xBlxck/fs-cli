@@ -405,7 +405,9 @@ async function command(line) {
     }
     case '/theme': {
       if (!THEMES[arg]) return println(c.red('  thèmes: ') + Object.keys(THEMES).join(' · '));
-      cfg.theme = arg; ui.theme.name = arg; saveCfg(); refreshPrompt(); return println(c.accent(`  → thème ${arg}`));
+      cfg.theme = arg; ui.theme.name = arg; saveCfg(); refreshPrompt();
+      input.clearScreen(); banner();                                   // le texte déjà affiché ne peut pas changer de couleur : on réaffiche avec le nouveau thème
+      return println(c.accent(`  → thème ${arg}`) + c.dim('  (la conversation continue, seul l\'écran a été réaffiché)'));
     }
     case '/cd': {
       const dir = resolveP(arg || os.homedir(), S.cwd);
