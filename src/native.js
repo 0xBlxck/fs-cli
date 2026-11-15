@@ -106,6 +106,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
   bits.push(`${nReq} requête${nReq > 1 ? 's' : ''}`);
   if (tokensIn > 0 && tokensOut > 0) bits.push(`${tokensIn >= 1000 ? (tokensIn / 1000).toFixed(1) + 'k' : tokensIn}↑ ${tokensOut >= 1000 ? (tokensOut / 1000).toFixed(1) + 'k' : tokensOut}↓ tok`);
   S.tokens.in += tokensIn; S.tokens.out += tokensOut;
+  S.stats ||= { turns: 0, requests: 0, tools: 0 }; S.stats.turns++; S.stats.requests += nReq; S.stats.tools += nTools;   // pour /usage
   let ctxBit = '';
   if (S.chatId) {
     S.ctxPercent = await ctxPct(S.chatId).catch(() => null);

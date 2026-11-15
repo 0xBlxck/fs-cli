@@ -54,7 +54,7 @@ export function detectIntent(raw) {
       && /\b(conv\w*|chats?|messages?|requ[êe]tes?|quota|limite|budget|cr[ée]dits?|consomm\w*)\b/i.test(head) && head.length < 160) {
     return /\bconv\w*|chats?\b/i.test(head)
       ? { cmd: '/chats', arg: '', label: 'tes conversations du jour' }
-      : { cmd: '/quota', arg: '', label: 'ton quota' };
+      : { cmd: '/usage', arg: '', label: 'ta consommation' };
   }
   // ── contexte
   if (/\b(contexte|m[ée]moire\s+de\s+la\s+conv\w*)\b/i.test(head) && /\b(plein|rempli|o[ùu]\s+en\s+est|combien|taille|niveau|reste)\b/i.test(head) && head.length < 160) {

@@ -27,7 +27,7 @@ test('autres fonctions', () => {
   assert.deepEqual([cmd('retiens que je code en TypeScript'), detectIntent('retiens que je code en TypeScript').arg], ['/remember', 'je code en TypeScript']);
   assert.equal(cmd('souviens-toi que le port est 3003'), '/remember');
   assert.equal(cmd('combien de conversations il me reste ?'), '/chats');
-  assert.equal(cmd("c'est quoi mon quota"), '/quota');
+  assert.equal(cmd("c'est quoi mon quota"), '/usage');
   assert.equal(cmd('le contexte est plein ?'), '/context');
   assert.equal(cmd('nouvelle conversation'), '/new');
   assert.equal(cmd('compacte la conversation'), '/compact');

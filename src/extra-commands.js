@@ -2,13 +2,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cfg, saveCfg, upsertSession } from './config.js';
-import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject } from './api.js';
+import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject, requestJson, listFsProjects } from './api.js';
 import { fetchChatUsage, fetchUserUsage, contextPercent, describeChatUsage, describeUserUsage } from './account.js';
 import * as mem from './memory.js';
 import { PRESETS, loadMcpConfig, saveMcpConfig, trustProject } from './mcp.js';
 import { removeRule, clearRules, describeRules } from './permissions.js';
 import { runTeam } from './team.js';
-import { newSid, tag, forSession, unregister, createdToday, DAILY_LIMIT } from './chats.js';
+import { newSid, tag, forSession, unregister, createdToday, lastReset, DAILY_LIMIT } from './chats.js';
 import { getMcp } from './mcp-runtime.js';
 import { approveServer } from './pseudo.js';
 import { isImportApproved } from './approvals.js';
@@ -271,6 +271,57 @@ export async function extraCommand(cmd, arg, env) {
       println(`  ${c.dim('conversation')} ${S.chatId || c.dim('aucune')}`);
       if (S.chatId) for (const l of describeChatUsage(dto)) println(`  ${c.dim('usage       ')} ${l}`);
       println(`  ${c.dim('compactage  ')} ${cfg.autoCompact ? `auto à ${cfg.compactThreshold} %` : 'manuel'} ${c.dim('(/compact · /autocompact on|off · /threshold <n>)')}`);
+      println();
+      return true;
+    }
+    case '/usage': {                                                  // tout en un : compte, limites du jour, session, conversation
+      ui.spinner.start('consommation…');
+      const [u, chatU] = await Promise.all([fetchUserUsage(), fetchChatUsage(S.chatId)]);
+      ui.spinner.stop();
+      const bar = (p, w = 24) => {
+        const v = Math.max(0, Math.min(100, Number(p) || 0)), n = Math.round(v / 100 * w);
+        const col = v > 90 ? c.red : v > 75 ? c.yellow : c.accent;
+        return col('█'.repeat(n)) + c.dim('░'.repeat(w - n)) + ' ' + (col === c.accent ? c.bold : col)(`${Math.round(v)} %`);
+      };
+      const local = iso => { const d = new Date(iso); if (isNaN(d)) return '?'; const today = new Date().toDateString() === d.toDateString();
+        return (today ? 'aujourd\'hui ' : d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }) + ' ') + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); };
+      const k = n => (n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + 'k' : String(n || 0));
+      const NAMES = { TRANSCRIPT_UPLOAD: 'transcriptions (jour)', USER_INVITES: 'invitations (mois)' };
+      const row = (label, value) => println(`  ${c.dim(label.padEnd(24))} ${value}`);
+      println();
+      println(`  ${c.bold('Compte France Student')}`);
+      if (u?.chatBudget) {
+        row('budget de chat', bar(u.chatBudget.usedPercent));
+        row('', c.dim(`${Math.round(u.chatBudget.remainingPercent)} % restant · remise à zéro ${local(u.chatBudget.resetAt)}`));
+      } else row('budget de chat', c.dim('indisponible'));
+      for (const rl of u?.rateLimits || []) row(NAMES[rl.type] || String(rl.type || '?').toLowerCase().replace(/_/g, ' '), `${rl.used}/${rl.limit}  ${c.dim('· remise à zéro ' + local(rl.resetAt))}`);
+      if (u?.rateLimitPowerUpActive) row('power-up', c.green('actif (limites doublées)'));
+      // conversations créées depuis la remise à zéro (04:00 UTC) : liste du compte + projet FS-CLI (exclu de la liste), et compteur local
+      const since = lastReset();
+      const seen = new Map();
+      const addAll = arr => { for (const x of arr || []) if (x?.id && Date.parse(x.createdAt) >= since) seen.set(x.id, 1); };
+      addAll(await fetchChatsList(50).catch(() => []));
+      if (cfg.fsProject !== false) {                                   // projet où le CLI range ses conversations (retrouvé par son nom, jamais créé ici)
+        const want = (cfg.fsProject?.name || 'FS-CLI').toLowerCase();
+        const pid = cfg.fsProject?.id || (await listFsProjects().catch(() => [])).find(p => String(p?.name || '').toLowerCase() === want)?.id;
+        if (pid) addAll((await requestJson('GET', `/projects/${encodeURIComponent(pid)}/chats`).catch(() => ({}))).data?.chats);
+      }
+      const made = Math.max(seen.size, createdToday());
+      row('nouvelles conversations', `${made} créée${made > 1 ? 's' : ''} aujourd'hui ${c.dim(`(limite ${DAILY_LIMIT}/jour · remise à zéro ${local(new Date(since + 86400000).toISOString())})`)}`);
+      row('', c.dim('les conversations supprimées comptent aussi dans la limite mais ne sont plus visibles'));
+      println();
+      println(`  ${c.bold('Cette session')}`);
+      const st = S.stats || { turns: 0, requests: 0, tools: 0 }, mins = Math.round((Date.now() - (S.startedAt || Date.now())) / 60000);
+      row('durée', `${mins < 60 ? mins + ' min' : Math.floor(mins / 60) + ' h ' + (mins % 60) + ' min'}`);
+      row('échanges', `${st.turns} demande${st.turns > 1 ? 's' : ''} · ${st.requests} requête${st.requests > 1 ? 's' : ''} · ${st.tools} outil${st.tools > 1 ? 's' : ''} lancé${st.tools > 1 ? 's' : ''}`);
+      row('tokens', `${k(S.tokens?.in)}↑ envoyés · ${k(S.tokens?.out)}↓ reçus`);
+      if (S.chatId) {
+        const pctCtx = Number(chatU?.contextUsagePercent);
+        row('contexte de la conversation', Number.isFinite(pctCtx) ? bar(pctCtx) + c.dim(cfg.autoCompact ? `  (compactage auto à ${cfg.compactThreshold} %)` : '') : c.dim('indisponible'));
+        const t = chatU?.tokenUsage;
+        if (t?.totalTokenCount) row('tokens de la conversation', c.dim(`${k(t.totalTokenCount)} au total`));
+      } else row('conversation', c.dim('pas encore commencée'));
+      if (u?.chatBudget?.accountingUncertain) println(c.dim('\n  (France Student indique que le décompte du budget peut être approximatif)'));
       println();
       return true;
     }

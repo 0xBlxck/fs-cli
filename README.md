@@ -64,7 +64,7 @@ Tape ta demande et appuie sur Entrée. **Pas besoin de connaître les commandes*
 | « … avec 3 agents en parallèle, et relis le résultat » | 3 agents en même temps, puis une relecture |
 | « compare gpt et claude sur … » | la même question posée à deux modèles |
 | « retiens que je code en TypeScript » | enregistré dans la mémoire du dossier |
-| « combien de conversations il me reste ? » | ton compteur du jour |
+| « combien de conversations il me reste ? » / « mon quota ? » | ton compteur du jour / ta consommation (`/usage`) |
 | « résume https://exemple.fr/article » | la page est lue et jointe à ta demande |
 
 Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhension automatique.
@@ -123,7 +123,7 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 
 | Thème | Commandes |
 |---|---|
-| Conversation | `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
+| Conversation | `/usage` · `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |
 | Mémoire | `/remember` · `/forget` · `/memory` · `/preprompt` · `/profil` · `/skills` |

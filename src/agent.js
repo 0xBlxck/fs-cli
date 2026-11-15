@@ -351,6 +351,7 @@ export async function runAgent(S, userText, { signal, ask }) {
   if (tokensIn > 0 && tokensOut > 0) bits.push(`${fmtK(tokensIn)}↑ ${fmtK(tokensOut)}↓ tok`);
   if (tokensOut > 20 && secsN > 0.5) bits.push(`${Math.round(tokensOut / secsN)} tok/s`);
   S.tokens.in += tokensIn; S.tokens.out += tokensOut;
+  S.stats ||= { turns: 0, requests: 0, tools: 0 }; S.stats.turns++; S.stats.requests += steps + 1; S.stats.tools += nTools;   // pour /usage (mode chat)
   let ctxBit = '';
   if (S.chatId) {                                   // pourcentage de contexte utilisé (compaction auto au seuil)
     S.ctxPercent = await contextPercent(S.chatId).catch(() => null);
