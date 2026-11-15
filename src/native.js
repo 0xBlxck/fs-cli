@@ -8,7 +8,6 @@ import { cfg } from './config.js';
 import { newSid, tag } from './chats.js';
 import { execCall, baseDir } from './agent.js';
 import { clipMiddle } from './tools.js';
-import { runPseudo } from './pseudo.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
 
@@ -38,14 +37,6 @@ async function execNative(S, call, io) {
   const callId = call.callId || call.call_id || call.id;
   const mapped = CLIENT_TOOLS.includes(call.name) ? mapCall(call.name, parseArgs(call.arguments)) : null;
   if (!mapped) return { callId, output: `Outil inconnu ou non pris en charge par le client : ${call.name}`, isError: true };
-  if (call.name === 'run_command') {                                  // mcp … / skills … / skill … : exécutés par le CLI, sans shell
-    const cmd = String(mapped.args.command || '');
-    const isCall = /^\s*mcp\s+[\w-]+\.[\w.:-]+/i.test(cmd);
-    if (!(cfg.mode === 'plan' && isCall)) {
-      const p = await runPseudo(S, cmd, io);
-      if (p) return { callId, output: clipMiddle(String(p.output ?? ''), MAX_RESULT), isError: !p.ok };
-    }
-  }
   if (cfg.mode === 'plan' && !READ_TOOLS.includes(call.name)) {
     return { callId, output: 'Mode plan (lecture seule) : aucune écriture ni commande. Propose un plan détaillé ; l\'utilisateur repassera en mode auto pour l\'appliquer.', isError: true };
   }

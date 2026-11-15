@@ -10,6 +10,8 @@ import { removeRule, clearRules, describeRules } from './permissions.js';
 import { runTeam } from './team.js';
 import { newSid, tag, forSession, unregister, createdToday, DAILY_LIMIT } from './chats.js';
 import { getMcp } from './mcp-runtime.js';
+import { approveServer } from './pseudo.js';
+import { isImportApproved } from './approvals.js';
 import { TOOLS, resolveP, scanProject } from './tools.js';
 import * as ui from './ui.js';
 import { c, println } from './ui.js';
@@ -37,7 +39,7 @@ export async function compactSession(S, { instruction = '', signal } = {}) {
     S.sid ||= newSid();
     await streamChat({ agentId: S.agentId, chatId: null, content: (cfg.tagChats !== false ? tag(S.sid, 'suite') : '') + compactSeed(summary), webSearch: false, signal, register: { sid: S.sid, role: 'suite' }, onChat: id => { newId = id; } });
     if (!newId) throw new Error('impossible d\'ouvrir la nouvelle conversation');
-    S.chatId = newId; S.ctxSent = false; S.blocks = []; S.pendingResults = [];
+    S.chatId = newId; S.ctxSent = false; S.toolsHintSig = ''; S.blocks = []; S.pendingResults = [];
     S.ctxPercent = await contextPercent(newId).catch(() => null);
     return { chars: summary.length, previous: prev, chatId: newId, percent: S.ctxPercent };
   } finally { ui.spinner.stop(); }
@@ -148,6 +150,12 @@ async function mcpCommand(arg, env) {
   // « /mcp blender » = « /mcp tools blender » : démarre le serveur et montre ses outils
   if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
   const target = rest[0];
+  // serveur importé d'un autre assistant (Claude Code, Codex…) : ton accord avant de le démarrer
+  if (/^(tools|test|call)$/i.test(sub) && target) {
+    const nm = sub.toLowerCase() === 'call' ? String(target).split('.')[0] : target;
+    const sv = loadMcpConfig(cwd).mcpServers?.[nm];
+    if (sv && !(await approveServer(S, nm, sv, { ask: env.ask, signal: undefined }))) return println(c.dim('  non autorisé'));
+  }
   switch (sub.toLowerCase()) {
     case 'list': case 'ls': {
       const list = await mgr.list(), cfgMcp = loadMcpConfig(cwd);
@@ -219,7 +227,7 @@ async function mcpCommand(arg, env) {
     }
     case 'tools': {
       await withAbort(async signal => {
-        const names = target ? [target] : (await mgr.list()).filter(s => !s.disabled).map(s => s.name);
+        const names = target ? [target] : (await mgr.list()).filter(s => !s.disabled && (s.scope !== 'importé' || isImportApproved(s.name, loadMcpConfig(cwd).mcpServers[s.name]))).map(s => s.name);
         for (const n of names) {
           try {
             ui.spinner.start(`${n}…`); const tools = await mgr.listTools(n, { signal }); ui.spinner.stop();

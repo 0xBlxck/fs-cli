@@ -1,13 +1,15 @@
 {
   "name": "fs-cli",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "Client terminal communautaire (non officiel) pour France Student AI : agent avec vrais appels d'outils, permissions, mémoire, MCP",
   "type": "module",
   "bin": {
-    "fs-cli": "./cli.js"
+    "fs-cli": "./cli.js",
+    "fs-mcp": "./mcp-cli.js"
   },
   "files": [
     "cli.js",
+    "mcp-cli.js",
     "src/",
     "skills.json",
     ".env.example",

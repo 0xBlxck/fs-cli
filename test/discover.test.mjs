@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-disc-'));
@@ -30,10 +31,10 @@ w(path.join(home, '.codex', 'skills', 'excel', 'SKILL.md'), '---\nname: excel\nd
 w(path.join(home, '.claude', 'plugins', 'marketplaces', 'm', 'skills', 'pas-installe', 'SKILL.md'), '---\nname: pas-installe\n---\n');
 
 const d = await import('../src/discover.js');
-const { runPseudo, toolsHint } = await import('../src/pseudo.js');
+const { toolsHint, approveServer, mentionedServers } = await import('../src/pseudo.js');
+const { loadMcpConfig } = await import('../src/mcp.js');
 const { setSelectHandler } = await import('../src/agent.js');
 const { cfg } = await import('../src/config.js');
-const { getMcp } = await import('../src/mcp-runtime.js');
 
 test('MCP : Claude Code (utilisateur + ce dossier) et Codex sont trouvés, le premier gagne', () => {
   const s = d.discoverMcpServers(proj);
@@ -62,38 +63,55 @@ test('/import off : plus rien n\'est importé', () => {
   cfg.importTools = true;
 });
 
-test('commandes spéciales : skills, skill, mcp list — sans shell', async () => {
-  const S = { cwd: proj, allow: {}, notes: [] };
-  const io = { signal: new AbortController().signal, ask: async () => '' };
-  const r1 = await runPseudo(S, 'skills site web', io);
-  assert.ok(r1.ok); assert.match(r1.output, /site-web/);
-  const r2 = await runPseudo(S, 'skill site-web', io);
-  assert.match(r2.output, /Utilise une grille/); assert.match(r2.output, /hero\.html/);
-  const r3 = await runPseudo(S, 'mcp list', io);
-  assert.match(r3.output, /faux \(de Claude Code\)/);
-  assert.equal(await runPseudo(S, 'npm test', io), null, 'une vraie commande n\'est pas interceptée');
-  const hint = toolsHint(proj, 'crée un site web');
-  assert.match(hint.text, /Serveurs MCP : .*faux/); assert.match(hint.text, /site-web/);
-  assert.doesNotMatch(hint.text, /ne-doit-pas-partir/, 'les variables d\'environnement ne sont jamais envoyées au modèle');
+
+// ── fs-mcp : le vrai programme que le modèle lance avec run_command ──
+const CLI = path.join(here, '..', 'mcp-cli.js');
+const fsmcp = (...args) => spawnSync(process.execPath, [CLI, ...args], {
+  cwd: proj, encoding: 'utf8', timeout: 60000,
+  env: { ...process.env, FS_CLI_HOME: process.env.FS_CLI_HOME, FS_IMPORT_HOME: home, APPDATA: process.env.APPDATA },
 });
 
-test('serveur importé : accord demandé au 1er démarrage, refus respecté, puis appel d\'outil réel', async () => {
-  cfg.mode = 'auto';
+test('fs-mcp list / skills / skill : lecture, aucun serveur démarré', () => {
+  const l = fsmcp('list');
+  assert.equal(l.status, 0); assert.match(l.stdout, /faux \(configuré dans Claude Code, PAS encore approuvé\)/);
+  const s = fsmcp('skills', 'site', 'web');
+  assert.match(s.stdout, /site-web/); assert.match(s.stdout, /SKILL\.md/);
+  assert.match(fsmcp('skill', 'site-web').stdout, /Utilise une grille/);
+});
+
+test('fs-mcp : un serveur importé non approuvé est REFUSÉ (le modèle ne peut pas le démarrer seul)', () => {
+  const r = fsmcp('call', 'faux', 'echo', 'text=salut');
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /pas encore approuvé/); assert.match(r.stderr, /\/mcp faux/);
+});
+
+test('accord donné dans FS-CLI → fs-mcp appelle vraiment l\'outil (arguments cle=valeur typés)', async () => {
   const asked = [];
-  let answer = 'Non';
-  setSelectHandler(async (o) => { asked.push(o.title); return o.options.findIndex(x => x.startsWith(answer)); });
+  setSelectHandler(async (o) => { asked.push(o); return 0; });            // « Oui, autoriser ce serveur »
   const S = { cwd: proj, allow: {}, notes: [] };
-  const io = { signal: new AbortController().signal, ask: async () => '' };
-  const refused = await runPseudo(S, 'mcp faux.echo {"text":"salut"}', io);
-  assert.equal(refused.ok, false); assert.match(refused.output, /refusé/);
-  assert.match(asked[0], /« faux » \(configuré dans Claude Code\)/);
-  answer = 'Oui, toujours';
-  const ok = await runPseudo(S, 'mcp faux.echo {"text":"salut","upper":true}', io);
-  assert.equal(ok.ok, true); assert.equal(ok.output, 'SALUT');
-  const tools = await runPseudo({ cwd: proj, allow: {}, notes: [] }, 'mcp faux', io);   // nouvelle session : « toujours » mémorisé
-  assert.match(tools.output, /echo\(text\*: string, upper: boolean\)/);
-  assert.equal(asked.length, 2, 'plus de question après « toujours »');
-  const bad = await runPseudo(S, 'mcp faux.echo pas-du-json', io);
-  assert.match(bad.output, /objet JSON/);
-  await getMcp(proj).closeAll?.();
+  const ok = await approveServer(S, 'faux', loadMcpConfig(proj).mcpServers.faux, { ask: async () => '' });
+  assert.equal(ok, true);
+  assert.match(asked[0].title, /« faux » \(configuré dans Claude Code\)/);
+  assert.deepEqual(asked[0].options, ['Oui, autoriser ce serveur', 'Non']);
+  const t = fsmcp('tools', 'faux');
+  assert.equal(t.status, 0, t.stderr); assert.match(t.stdout, /echo text\*=string upper=boolean/);
+  const c = fsmcp('call', 'faux', 'echo', 'text=salut', 'upper=true');
+  assert.equal(c.status, 0, c.stderr); assert.equal(c.stdout.trim(), 'SALUT');
+  const bad = fsmcp('call', 'faux', 'echo', 'pas-un-argument');
+  assert.notEqual(bad.status, 0); assert.match(bad.stderr, /cle=valeur/);
+  // un accord est lié à la commande du serveur : si elle change, il tombe
+  const cj = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'));
+  cj.mcpServers.faux.args = [fake, '--autre'];
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify(cj));
+  assert.equal(fsmcp('call', 'faux', 'echo', 'text=x').status, 3, 'commande modifiée → nouvel accord nécessaire');
+});
+
+test('bloc d\'info envoyé au modèle : commande réelle, guides proches, aucune clé', () => {
+  const hint = toolsHint(proj, 'crée un site web');
+  assert.match(hint.text, /mcp-cli\.js" list/); assert.match(hint.text, /Serveurs MCP : .*faux/);
+  assert.match(hint.text, /site-web → .*SKILL\.md/);
+  assert.doesNotMatch(hint.text, /ne-doit-pas-partir/, 'les variables d\'environnement ne sont jamais envoyées au modèle');
+  assert.ok(hint.sig && hint.sig === toolsHint(proj, 'autre chose').sig, 'signature stable : envoyé une fois par conversation');
+  assert.deepEqual(mentionedServers(proj, 'fais-le avec le mcp faux'), ['faux']);
+  assert.deepEqual(mentionedServers(proj, 'un truc faux'), [], 'nom court sans « mcp » : ignoré');
 });

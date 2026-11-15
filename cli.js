@@ -19,7 +19,7 @@ import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
-import { toolsHint } from './src/pseudo.js';
+import { toolsHint, mentionedServers, serverBrief } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
@@ -115,7 +115,7 @@ function resolveModel(arg) {
 
 function saveSession() {
   if (!S.chatId) return;
-  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, targetDir: S.targetDir });
+  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, targetDir: S.targetDir, toolsHintSig: S.toolsHintSig || '' });
 }
 
 // ── Démarrage ─────────────────────────────────────────────────────────────────
@@ -139,6 +139,7 @@ function applySession(s) {
   S.ctxSent = s.ctxSent !== false; S.ctxPercent = null; S.blocks = []; S.pendingResults = [];
   S.sid = s.sid || newSid(); S.slots = s.slots || {}; S.targetDir = s.targetDir && fs.existsSync(s.targetDir) ? s.targetDir : null;
   if (s.cwd && fs.existsSync(s.cwd)) S.cwd = s.cwd;
+  S.toolsHintSig = s.toolsHintSig || '';                             // outils du PC déjà annoncés dans cette conversation ?
 }
 
 // ── Pièces jointes (@fichier) ─────────────────────────────────────────────────
@@ -375,7 +376,7 @@ async function command(line) {
     case '/id': return println(c.dim('  ' + (S.chatId || 'aucune conversation')));
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
-      S.chatId = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      S.chatId = null; S.toolsHintSig = ''; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
       println(); Object.entries(AGENTS).forEach(([id, n], i) =>
@@ -540,11 +541,15 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!S.ctxSent) {                                                  // préprompt, faits, notes, skills : 1er message d'une conversation
       const { text: ctxText, label } = mem.buildContextBlock(S.cwd);
       if (ctxText) { message += '\n\n' + ctxText; println(c.dim(`  ＋ contexte joint : ${label}`)); }
-      if (cfg.engine === 'native') {                                   // MCP et skills du PC (les tiens + Claude Code, Codex…)
-        const hint = toolsHint(S.cwd, text);
-        if (hint.text) { message += '\n\n' + hint.text; println(c.dim(`  ＋ outils du PC : ${hint.label}`)); }
-      }
       S.ctxSent = true;
+    }
+    if (cfg.engine === 'native') {                                     // MCP et skills du PC : annoncés à toute conversation qui ne les a pas encore vus (y compris après /resume)
+      const hint = toolsHint(S.cwd, text);
+      if (hint.text && hint.sig !== S.toolsHintSig) { message += '\n\n' + hint.text; S.toolsHintSig = hint.sig; println(c.dim(`  ＋ outils du PC : ${hint.label}`)); }
+      for (const name of mentionedServers(S.cwd, text)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
+        const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
+        if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
+      }
     }
     if (!keepLast) S.lastUserText = text;
     mem.observe(text, S.cwd);

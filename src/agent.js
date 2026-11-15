@@ -76,13 +76,13 @@ function fitDetail(detail, maxRows = 8) {
   return rows.slice(0, maxRows - 1).join('\n') + `\n… +${hidden.length} ligne(s) masquée(s) (${hidden.join('').length} caractères) — vérifie la commande complète avant d'accepter`;
 }
 
-export async function confirm(ask, { title, detail, danger, allowAlways = false, trustDir = null, alwaysLabel = null }) {
+export async function confirm(ask, { title, detail, danger, allowAlways = false, trustDir = null, alwaysLabel = null, yesLabel = null, noAlways = false }) {
   detail = fitDetail(detail);
   title = ui.sanitize(title);
   const TRUST = trustDir ? `Oui, et faire confiance à ce dossier (${ui.shortPath ? ui.shortPath(trustDir, 40) : trustDir})` : null;
   if (selectHandler) {
-    const alwaysOk = !danger || allowAlways;
-    const options = ['Oui'];
+    const alwaysOk = !noAlways && (!danger || allowAlways);
+    const options = [yesLabel || 'Oui'];
     if (TRUST) options.push(TRUST);
     else if (alwaysOk) options.push(alwaysLabel ? `Oui, ${alwaysLabel}` : danger ? 'Oui, et ne plus demander (règle enregistrée)' : 'Oui, et ne plus demander pendant cette session');
     options.push('Non');
