@@ -29,7 +29,7 @@ async function oneStream(S, content, signal) {
   ui.spinner.start('réflexion…');
   try {
     const res = await streamChat({
-      agentId: S.agentId, chatId: S.chatId, content, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: 'main' },
+      agentId: S.agentId, chatId: S.chatId, content, files: S.pendingFileIds, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: 'main' },
       onChat: id => { if (!S.chatId) S.chatId = id; },
       onReasoning: d => {
         if (!cfg.showThinking) return;

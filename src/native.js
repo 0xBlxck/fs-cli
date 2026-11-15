@@ -66,7 +66,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     try {
       res = await stream({
         agentId: S.agentId, chatId: S.chatId, signal, webSearch: cfg.webSearch, register: { sid: S.sid, role: 'main' },
-        clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results } : { content }),
+        clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results } : { content, files: S.pendingFileIds }),   // images jointes : avec le message, pas avec les résultats
         onChat: id => { if (!S.chatId) S.chatId = id; },
         onText: d => md.push(d),
         onReasoning: d => {

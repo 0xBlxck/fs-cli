@@ -28,18 +28,31 @@ export function parseDailyLimit(body) {
 /** Outils client officiels de FS (mode « avancé ») : appels exécutés sur la machine de l'utilisateur */
 export const CLIENT_TOOLS = ['list_directory', 'read_file', 'search_files', 'edit_file', 'write_file', 'run_command'];
 
-function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning, onChat, register, clientTools, toolResults }) {
+/** Envoie un fichier (image…) sur Files v2 ; renvoie son id, à mettre dans `files` d'un message. */
+export async function uploadFile(buffer, filename, mime = 'application/octet-stream') {
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: mime }), String(filename || 'fichier').replace(/[\r\n"\\/]/g, '_').slice(0, 200));
+  const r = await fetch(`https://${HOST}/filesv2`, { method: 'POST', headers: { ...baseHeaders(), Accept: 'application/json' }, body: form, signal: AbortSignal.timeout(120000), redirect: 'error' });
+  const text = await r.text();
+  let j = null; try { j = JSON.parse(text); } catch {}
+  if (!r.ok) throw new ApiError(`Envoi de ${filename} impossible (HTTP ${r.status}${j?.message ? ' : ' + String(j.message).slice(0, 200) : ''})`, { status: r.status });
+  const id = j?.id ?? j?.file_id ?? j?.uuid;
+  if (!id) throw new ApiError(`Envoi de ${filename} : réponse sans identifiant`);
+  return String(id);
+}
+
+function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning, onChat, register, clientTools, toolResults, files }) {
   return new Promise((resolve, reject) => {
     // Outils client : nouveau chat → POST /chats/stream (initialContent + clientTools) ; chat existant → POST /chats/{id} (content + clientTools / toolResults)
     const native = !!(clientTools || toolResults);
     let urlPath = '/chats/stream', body;
     if (native && chatId) {
       urlPath = `/chats/${encodeURIComponent(chatId)}`;
-      body = { agentId, ...(content ? { content } : {}), ...(clientTools ? { clientTools } : {}), ...(toolResults ? { toolResults } : {}), ...(webSearch ? { enableWebSearch: true } : {}) };
+      body = { agentId, ...(content ? { content } : {}), ...(files?.length ? { files } : {}), ...(clientTools ? { clientTools } : {}), ...(toolResults ? { toolResults } : {}), ...(webSearch ? { enableWebSearch: true } : {}) };
     } else {
       body = {
         agentId, chatId: chatId || null, enableCanvas: false, enableWebSearch: !!webSearch,
-        images: [], initialContent: content, isIncognito: false, isPrivate: true,
+        images: [], files: files?.length ? files : [], initialContent: content, isIncognito: false, isPrivate: true,
         ...(clientTools ? { clientTools } : {}),
       };
     }

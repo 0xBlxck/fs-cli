@@ -84,6 +84,7 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 | Entrée · `\` + Entrée · Ctrl+J | envoyer · nouvelle ligne (le collage multi-ligne est géré) |
 | Échap · Ctrl+C | interrompre (la génération s'arrête aussi côté serveur) · effacer ; deux fois Ctrl+C pour quitter |
 | `/` · `@fichier` · `!commande` | commandes · joindre un fichier · commande shell directe |
+| **Alt+V** | coller une image (capture Win+Maj+S…) ; glisser-déposer une image ou `@image.png` marche aussi |
 | ↑ ↓ · Ctrl+R | historique · recherche dans l'historique |
 
 ---
@@ -96,6 +97,7 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 - **Mémoire** : notes par dossier, préprompt, faits appris, compétences (`/skills`), compactage automatique avant que le contexte soit plein.
 - **Instructions du projet** : `/init` crée `FSCLI.md` (ou utilise un `AGENTS.md` existant), lu au début de chaque conversation.
 - **Conversations rangées** : sur le site, les conversations du CLI sont regroupées dans le projet **FS-CLI** (`/fr-project <nom>` pour un autre, `/fr-project off` pour désactiver).
+- **Images** : colle une capture avec **Alt+V** (ou `/image`), glisse-dépose une image dans le terminal, ou écris `@capture.png` : le modèle la voit.
 - **Web** : une URL citée est lue automatiquement ; `/search` et `/fetch` (adresses locales refusées).
 - **Tes outils déjà installés, automatiquement** : FS-CLI retrouve les serveurs **MCP** configurés dans Claude Code, Claude Desktop, Codex, Cursor, Gemini CLI ou Windsurf, et les **skills** (`SKILL.md` de `~/.claude/skills`, `~/.agents/skills`, `~/.codex/skills`, plugins installés). Le modèle les utilise tout seul quand c'est utile, via le programme **`fs-mcp`** installé avec FS-CLI (`fs-mcp list`, `fs-mcp tools <serveur>`, `fs-mcp call <serveur> <outil> cle=valeur…`, `fs-mcp skills <mots>`) : la liste d'outils de France Student étant fixe, c'est un vrai programme qu'il lance, rien n'est simulé. Un serveur importé doit être autorisé une fois par toi (`/mcp <nom>`, ou la question posée quand tu le nommes dans ta demande). `/import` montre ce qui a été trouvé, `/import off` désactive.
 - **MCP** : tes propres serveurs MCP (stdio et HTTP) avec presets (Blender, Playwright…).

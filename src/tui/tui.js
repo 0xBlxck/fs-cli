@@ -22,7 +22,7 @@ export class Tui {
     this.flashText = ''; this.flashTimer = null; this.lastCtrlC = 0;
     this.sug = { items: [], idx: -1, start: 0 }; this.sugOff = null;
     this.search = null; this.ask = null; this.askSaved = null; this.select_ = null;
-    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [] };
+    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [] };
     this.started = false;
     // zone de saisie ancrée en bas de la fenêtre si le terminal annonce sa hauteur ; sinon affichage « en ligne » classique
     const pin = pinned && (stdout.rows || 0) >= 8;
@@ -284,6 +284,7 @@ export class Tui {
         case 'w': return this.cutBetween(this.wordLeft(), this.cur);
         case 'c': return this.ctrlC();
         case 'd': return this.ctrlD();
+        case 'v': if (!this.ask) this.emit('pasteImage'); return;     // Ctrl+V qui arrive jusqu'ici = le terminal n'a pas collé de texte (image)
         case 'l': return this.screen.clearScreen();
         case 'r': if (this.ask) return; this.search = { q: '', idx: null, match: null }; return this.render();
         case 'p': return this.up();
@@ -316,6 +317,7 @@ export class Tui {
       case 'b': this.cur = this.wordLeft(); return this.render();
       case 'f': this.cur = this.wordRight(); return this.render();
       case 'd': return this.cutBetween(this.cur, this.wordRight());
+      case 'v': if (!this.ask) this.emit('pasteImage'); return;       // Alt+V : coller une image (comme Claude Code sous Windows)
     }
   }
 

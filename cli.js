@@ -19,6 +19,8 @@ import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
+import { grabClipboardImage, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
+import { uploadFile } from './src/api.js';
 import { toolsHint, mentionedServers, serverBrief } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
@@ -98,7 +100,7 @@ const S = {
   chatId: null, agentId: cfg.agentId, primed: false,
   cwd: opts.cwd ? path.resolve(opts.cwd) : (process.env.FS_WORKDIR || process.cwd()),
   notes: [], allow: {}, undo: [], tokens: { in: 0, out: 0 }, lastResponse: '', title: '', pendingFiles: [],
-  blocks: [], pendingResults: [], ctxSent: false, ctxPercent: null, lastUserText: '', pendingContext: [], mcpSig: '', targetDir: null, sid: newSid(), slots: {},
+  blocks: [], pendingResults: [], ctxSent: false, ctxPercent: null, lastUserText: '', pendingContext: [], images: [], pendingFileIds: [], mcpSig: '', targetDir: null, sid: newSid(), slots: {},
 };
 const modelName = (id = S.agentId) => AGENTS[String(id)] || `#${id}`;
 
@@ -158,6 +160,35 @@ function readAttachment(fp) {
   return { label: `${path.basename(fp)} (${n} lignes)`, body: `<fs:file path="${fp}" lines="${n}">\n${text}${cut}\n</fs:file>` };
 }
 
+/** Envoie les images en attente (Files v2) et prépare leurs ids pour ce message ; ajoute une ligne pour que le modèle sache lesquelles. */
+async function sendImages(message) {
+  const ids = [], names = [];
+  const list = S.images.splice(0, S.images.length);
+  ui.spinner.start(`envoi de ${list.length} image${list.length > 1 ? 's' : ''}…`);
+  try {
+    for (const [i, p] of list.entries()) {
+      const st = fs.statSync(p);
+      if (st.size > MAX_IMAGE_BYTES) { ui.spinner.stop(); println(c.yellow(`  ⚠ ${path.basename(p)} ignorée : trop lourde (max ${MAX_IMAGE_BYTES / 1048576} Mo)`)); continue; }
+      ids.push(await uploadFile(fs.readFileSync(p), path.basename(p), mimeOf(p)));
+      names.push(`Image #${i + 1} = ${path.basename(p)}`);
+    }
+  } finally { ui.spinner.stop(); }
+  if (!ids.length) return message;
+  S.pendingFileIds = ids;
+  println(c.dim(`  📎 ${ids.length} image${ids.length > 1 ? 's' : ''} jointe${ids.length > 1 ? 's' : ''} : ${list.map(p => path.basename(p)).join(', ')}`));
+  return `${message}\n\n[${ids.length} image${ids.length > 1 ? 's' : ''} jointe${ids.length > 1 ? 's' : ''} à ce message : ${names.join(' ; ')}]`;
+}
+
+/** Alt+V / Ctrl+V / /image : image du presse-papiers → jointe au prochain message. */
+function pasteClipboardImage() {
+  if (S.images.length >= MAX_IMAGES) return ui.out(c.yellow(`\n  ⚠ ${MAX_IMAGES} images maximum par message\n`));
+  const p = grabClipboardImage();
+  if (!p) { if (input.flash && interactive) input.flash('pas d\'image dans le presse-papiers (fais une capture avec Win+Maj+S, puis Alt+V)'); else println(c.yellow('  pas d\'image dans le presse-papiers (capture avec Win+Maj+S, puis /image)')); return; }
+  S.images.push(p);
+  const tag = `[Image #${S.images.length}] `;
+  if (input.insert && interactive) input.insert(tag); else println(c.dim(`  📎 ${tag.trim()} prête : elle partira avec ton prochain message`));
+}
+
 function buildMessage(text) {
   const atts = [];
   for (const f of S.pendingFiles) atts.push(f);
@@ -169,6 +200,7 @@ function buildMessage(text) {
       if (!fs.existsSync(fp)) continue;
       const why = sensitivePathReason(fp);   // un @fichier ne doit pas envoyer un secret à l'API sans que tu le saches
       if (why) { println(c.yellow('  ⚠ @' + raw + ' non joint : ' + why)); continue; }
+      if (IMAGE_RE.test(fp)) { if (!S.images.includes(fp) && S.images.length < MAX_IMAGES) S.images.push(fp); continue; }   // @image.png : envoyée comme image
       atts.push(readAttachment(fp));
     } catch {}
   }
@@ -198,7 +230,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -309,7 +341,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
@@ -489,6 +521,14 @@ async function command(line) {
       return println('\n' + c.dim('  ↳ résultats joints à ton prochain message'));
     }
     case '/continue': return chatTurn('Continue.', { keepLast: true });
+    case '/image': {                                                  // /image : presse-papiers · /image <chemin> : fichier · /image clear
+      if (/^(clear|aucune|off)$/i.test(arg)) { S.images = []; return println(c.dim('  → images en attente retirées')); }
+      if (!arg) { pasteClipboardImage(); return; }
+      const p = resolveP(arg, S.cwd);
+      if (!fs.existsSync(p) || !IMAGE_RE.test(p)) return println(c.red('  image introuvable (png, jpg, gif, webp, bmp)'));
+      if (S.images.length >= MAX_IMAGES) return println(c.yellow(`  ${MAX_IMAGES} images maximum par message`));
+      S.images.push(p); return println(c.dim(`  📎 [Image #${S.images.length}] ${path.basename(p)} : elle partira avec ton prochain message`));
+    }
     case '/import': {                                                 // MCP et skills des autres assistants (Claude Code, Codex…)
       if (/^(on|off|oui|non)$/i.test(arg)) { cfg.importTools = /^(on|oui)$/i.test(arg); saveCfg(); }
       if (cfg.importTools === false) return println(c.dim('  import désactivé — /import on pour utiliser les MCP et skills de Claude Code, Codex…'));
@@ -519,9 +559,12 @@ async function chatTurn(text, { keepLast = false } = {}) {
   println();
   try {
     await maybeAutoCompact(S, turnAbort.signal);                       // contexte plein → résumé + nouvelle conversation
-    const dir = detectTargetDir(text);                                 // « … dans C:\Users\moi\Downloads\SITE » → les fichiers y seront écrits
+    const ex = extractImagePaths(text, S.images.length);               // image glissée-déposée (chemin collé) → [Image #n]
+    if (ex.paths.length) { text = ex.text; for (const p of ex.paths) if (!S.images.includes(p)) S.images.push(p); }
+    const dir = detectTargetDir(text);                                // « … dans C:\Users\moi\Downloads\SITE » → les fichiers y seront écrits
     if (dir && dir !== S.targetDir) { S.targetDir = dir; println(c.dim(`  ＋ dossier cible : ${dir}  (/target pour voir ou effacer)`)); }
     let message = buildMessage(text);
+    if (S.images.length) message = await sendImages(message);          // images : envoyées sur Files v2 puis jointes au message
     if (cfg.engine === 'chat' && cfg.fileHint && FILE_INTENT.test(text)) {
       message += '\n\n' + formatHint();
       println(c.dim('  ＋ consigne de format jointe : fichiers directs (/hint pour désactiver)'));
@@ -556,7 +599,8 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!keepLast) S.lastUserText = text;
     mem.observe(text, S.cwd);
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);
-    await runAgent(S, message, { signal: turnAbort.signal, ask });
+    try { await runAgent(S, message, { signal: turnAbort.signal, ask }); }
+    finally { S.pendingFileIds = []; }                                  // les images ne partent qu'avec ce message
   } catch (e) {
     if (e.name === 'AbortError' || turnAbort.signal.aborted) {
       ui.spinner.stop();
@@ -646,6 +690,7 @@ function cycleMode() {
 input.on('submit', t => { runInput(t); });
 input.on('interrupt', () => { turnAbort?.abort(); });
 input.on('cycleMode', cycleMode);
+input.on('pasteImage', () => { try { pasteClipboardImage(); } catch (e) { println(c.red('  image : ' + e.message)); } });
 input.on('quit', () => { shutdown(0); });
 process.on('exit', () => { try { input.stop(); } catch {} });
 process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); });
