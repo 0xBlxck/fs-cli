@@ -13,6 +13,7 @@ import { extractBlocks, panelBlocks, pickAutoBlocks } from './blocks.js';
 import { TOOLS, normalizeArgs, riskInfo, resolveP, makeTmp, dropTmp } from './tools.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
+import { isFolderTrusted, trustFolder, isBroadFolder } from './trust.js';
 
 // ── Un échange avec le modèle (affichage en streaming) ────────────────────────
 async function oneStream(S, content, signal) {
@@ -74,22 +75,35 @@ function fitDetail(detail, maxRows = 8) {
   return rows.slice(0, maxRows - 1).join('\n') + `\n… +${hidden.length} ligne(s) masquée(s) (${hidden.join('').length} caractères) — vérifie la commande complète avant d'accepter`;
 }
 
-async function confirm(ask, { title, detail, danger, allowAlways = false }) {
+async function confirm(ask, { title, detail, danger, allowAlways = false, trustDir = null }) {
   detail = fitDetail(detail);
   title = ui.sanitize(title);
+  const TRUST = trustDir ? `Oui, et faire confiance à ce dossier (${ui.shortPath ? ui.shortPath(trustDir, 40) : trustDir})` : null;
   if (selectHandler) {
     const alwaysOk = !danger || allowAlways;
     const options = ['Oui'];
-    if (alwaysOk) options.push(danger ? 'Oui, et ne plus demander (règle enregistrée)' : 'Oui, et ne plus demander pendant cette session');
+    if (TRUST) options.push(TRUST);
+    else if (alwaysOk) options.push(danger ? 'Oui, et ne plus demander (règle enregistrée)' : 'Oui, et ne plus demander pendant cette session');
     options.push('Non');
     const plainTitle = (danger ? '⚠ ' : '') + title.replace(/\x1b\[[0-9;]*m/g, '');
-    const idx = await selectHandler({ title: plainTitle, detail: detail || '', options, defaultIndex: danger ? options.length - 1 : 0 });
-    if (idx === null) return { allow: false };                       // Échap = refuser ; Ctrl+C interrompt le tour (signal) en parallèle
+    const idx = await selectHandler({ title: plainTitle, detail: detail || '', options, defaultIndex: TRUST ? 1 : danger ? options.length - 1 : 0 });
+    if (idx === null || !options[idx]) return { allow: false };      // Échap (ou choix invalide) = refuser ; Ctrl+C interrompt le tour (signal) en parallèle
     if (options[idx] === 'Non') {
       const why = await ask('raison / alternative pour le modèle (Entrée = rien)');
       return { allow: false, feedback: (why || '').trim() };
     }
+    if (options[idx] === TRUST) return { allow: true, trust: true };
     return options[idx].startsWith('Oui, ') ? { allow: true, always: true } : { allow: true };
+  }
+  if (TRUST) {                                                        // mode texte
+    ui.println(`  ${c.yellow('?')} ${c.bold(title)}`);
+    if (detail) for (const l of detail.split('\n')) ui.println(`    ${c.dim(l)}`);
+    const a = await ask(`  ${c.accent('›')} Autoriser ? ${c.dim('[o]ui / [d]ossier de confiance / [N]on')} `);
+    if (a === null) return { allow: false, aborted: true };
+    const s = a.trim().toLowerCase();
+    if (/^(d|dossier|c|confiance)$/.test(s)) return { allow: true, trust: true };
+    if (/^(o|oui|y|yes)$/.test(s)) return { allow: true };
+    return { allow: false };
   }
   ui.println(`  ${danger ? c.red('⚠') : c.yellow('?')} ${c.bold(title)}`);
   if (detail) for (const l of detail.split('\n')) ui.println(`    ${c.dim(l)}`);
@@ -155,7 +169,11 @@ export async function execCall(S, call, { signal, ask, root = null }) {
   if (root && args.path && ['write_file', 'edit_file', 'read_file', 'list_dir', 'grep', 'glob'].includes(call.name)) {   // chemins limités au workspace : le reste demande confirmation
     const rp = resolveP(args.path, root);
     const rel = path.relative(realish(root), realish(rp)), rel0 = path.relative(root, rp);   // symlink / jonction qui sort du workspace = hors workspace
-    if (rel.startsWith('..') || path.isAbsolute(rel) || rel0.startsWith('..') || path.isAbsolute(rel0)) risk.protectedPath = risk.protectedPath || `hors du workspace : ${rp}`;
+    if (rel.startsWith('..') || path.isAbsolute(rel) || rel0.startsWith('..') || path.isAbsolute(rel0)) {
+      // dossier du fichier (ou le dossier lui-même pour list_dir / grep / glob)
+      let dir = rp; try { if (!fs.statSync(rp).isDirectory()) dir = path.dirname(rp); } catch { dir = ['list_dir', 'grep', 'glob'].includes(call.name) ? rp : path.dirname(rp); }
+      if (!isFolderTrusted(dir) && !risk.protectedPath) { risk.protectedPath = `hors du dossier de travail : ${rp}`; risk.outsideDir = dir; }
+    }
   }
   const secrets = call.name === 'write_file' ? scanSecrets(args.content || '') : call.name === 'edit_file' ? scanSecrets(args.new_string || '') : [];
   if (secrets.length) risk.secrets = secrets;
@@ -167,13 +185,16 @@ export async function execCall(S, call, { signal, ask, root = null }) {
       : risk.protectedPath ? `Chemin sensible : ${risk.protectedPath}`
       : `${call.name} demande ton accord`;
     const detail = risk.secrets ? risk.secrets.slice(0, 5).map(s => `${s.name} : ${s.sample}`).join('\n') : tool.preview?.(args, ctx);
-    const r = await confirm(ask, { title, detail, danger, allowAlways: !!risk.judgement && !risk.protectedPath && !risk.secrets });
+    // seul souci = dossier hors du dossier de travail → on propose de faire confiance à ce dossier (plus de question ensuite, même en auto)
+    const trustDir = risk.outsideDir && !risk.danger && !risk.secrets && !isBroadFolder(risk.outsideDir) ? risk.outsideDir : null;
+    const r = await confirm(ask, { title, detail, danger, allowAlways: !!risk.judgement && !risk.protectedPath && !risk.secrets, trustDir });
     if (r.aborted || signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     if (!r.allow) {
       ui.toolNote('refusé', 'yellow');
       return { name: call.name, ok: false, output: `L'utilisateur a REFUSÉ cette action.${r.feedback ? ' Il précise : ' + r.feedback : ' Propose une alternative ou demande-lui.'}` };
     }
-    if (r.always && risk.judgement) { addRulesForJudgement(risk.judgement, S.cwd, 'projet'); ui.toolNote('règle enregistrée pour ce dossier (/permissions)', 'dim'); }
+    if (r.trust && trustDir) { trustFolder(trustDir); ui.toolNote(`dossier approuvé : ${trustDir} (plus de question pour ce dossier)`, 'dim'); }
+    else if (r.always && risk.judgement) { addRulesForJudgement(risk.judgement, S.cwd, 'projet'); ui.toolNote('règle enregistrée pour ce dossier (/permissions)', 'dim'); }
     else if (r.always) S.allow[risk.kind] = true;
   }
 
