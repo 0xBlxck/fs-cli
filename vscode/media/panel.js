@@ -495,9 +495,10 @@
   function send() {
     const text = ta.value;
     if (!text.trim()) return;
-    if (/^\s*\/(usage|mcp|resume|sessions|history)\s*$/i.test(text) && !S.busy) {   // ces commandes ouvrent une fenêtre : rien dans le fil
+    if (/^\s*\/(usage|mcp|resume|sessions|history|skills|commands)\s*$/i.test(text) && !S.busy) {   // ces commandes ouvrent une fenêtre : rien dans le fil
       ta.value = ''; autosize(); closeMenu();
       if (/resume|sessions|history/i.test(text)) return histOpen();
+      if (/skills|commands/i.test(text)) return skOpen();
       return post({ type: 'command', text: text.trim() });
     }
     closeMenu();
@@ -548,7 +549,8 @@
 
   bSend.onclick = () => (S.busy && !ta.value.trim() ? post({ type: 'interrupt' }) : send());
   bPlus.onclick = () => post({ type: 'pickFiles' });
-  bSlash.onclick = () => { if (!ta.value.startsWith('/')) { ta.value = '/'; } ta.focus(); autosize(); slashMenu(); };
+  bSlash.onclick = skOpen;
+  bSlash.title = 'Commandes & skills';
   bModel.onclick = modelMenu;
   bMode.onclick = modeMenu;
   btnNew.onclick = () => { if (!S.busy) post({ type: 'send', text: '/new' }); };
@@ -643,7 +645,8 @@
       if (s.source) d.append(h('div', 'mk', 'Source'), h('div', 'mv', s.source));
       if (s.description) d.append(h('div', 'mk', 'Rôle'), h('div', 'mv', s.description));
       if (s.error) d.append(h('div', 'mk', 'Erreur'), h('div', 'mv err', s.error));
-      if (s.status === 'auth') d.append(h('div', 'mk', ''), h('div', 'mv', 'Ce serveur demande une connexion à un compte (OAuth). Une connexion faite dans Claude Code reste chez Claude Code : ajoute une clé dans la config (en-tête Authorization) si le service en fournit une.'));
+      if (s.status === 'auth') d.append(h('div', 'mk', ''), h('div', 'mv', 'Ce serveur demande une connexion à ton compte. « Se connecter » ouvre sa page de connexion dans ton navigateur ; FS-CLI garde ensuite sa propre clé sur ton PC.'));
+      if (s.loginUrl) { const a = h('a', null, 'la page de connexion ne s\'est pas ouverte ? clique ici'); a.onclick = e => { e.stopPropagation(); post({ type: 'openLink', url: s.loginUrl }); }; d.append(h('div', 'mk', ''), a); }
       if (s.tools?.length) {
         const tl = h('div', 'mtools');
         for (const t of s.tools) { const it = h('div', 'mtool'); it.append(h('span', 'mtn', t.name)); if (t.description) it.append(h('span', 'mtd', t.description)); tl.append(it); }
@@ -651,7 +654,8 @@
       }
       const acts = h('div', 'macts');
       const btn = (label, action, sec) => { const b = h('button', 'btn' + (sec ? ' sec' : ''), label); b.onclick = e => { e.stopPropagation(); post({ type: 'mcpAction', action, name: s.name }); }; acts.append(b); };
-      if (s.status === 'approve') btn('Autoriser et connecter', 'approve');
+      if (s.status === 'auth') btn('Se connecter', 'login');
+      else if (s.status === 'approve') btn('Autoriser et connecter', 'approve');
       else if (s.status === 'untrusted') btn('Approuver les serveurs du projet', 'trust');
       else if (s.status !== 'disabled') btn(s.status === 'connected' ? 'Reconnecter' : 'Connecter', 'connect', s.status === 'connected');
       btn(s.status === 'disabled' ? 'Activer' : 'Désactiver', 'toggle', true);
@@ -768,6 +772,71 @@
     stick = true; log.scrollTop = log.scrollHeight;
   }
 
+  // ── fenêtre « Commandes & skills » (bouton « / »), comme « Slash commands » de Claude Code ──
+  const SK = { el: null, list: null, filter: null, data: null, tab: 'skills' };
+  const ktok = n => (n >= 1000 ? `≈ ${(n / 1000).toFixed(1).replace('.0', '').replace('.', ',')}k tokens` : `≈ ${n} tokens`);
+  function skClose() { if (SK.el) { SK.el.remove(); SK.el = null; ta.focus(); } }
+  function skOpen() {
+    if (SK.el) return skClose();
+    post({ type: 'skillsOpen' });
+    skShow(null);
+  }
+  function skShow(data) {
+    if (data) SK.data = data;
+    if (!SK.el) {
+      const bg = h('div', 'modal-bg'); bg.onclick = e => { if (e.target === bg) skClose(); };
+      const card = h('div', 'modal');
+      const top = h('div', 'mh'); top.append(h('div', 'mt', 'Commandes & skills'));
+      const x = h('button', 'icon-btn', '✕'); x.title = 'Fermer (Échap)'; x.onclick = skClose; top.append(x);
+      const tabs = h('div', 'ptabs sk-tabs');
+      const f = h('input', 'mf'); f.placeholder = 'Filtrer…'; f.oninput = skRender;
+      f.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); skClose(); } };
+      const list = h('div', 'ml');
+      card.append(top, tabs, f, list); bg.append(card); document.body.append(bg);
+      SK.el = bg; SK.list = list; SK.filter = f; SK.tabs = tabs; f.focus();
+    }
+    skRender();
+  }
+  function skRender() {
+    if (!SK.el) return;
+    const d = SK.data;
+    const tabsDef = [['skills', 'Skills du PC', d?.skills?.length], ['commands', 'Commandes', d?.commands?.length], ['fs', 'France Student', d?.fs?.length]];
+    SK.tabs.textContent = '';
+    for (const [id, label, n] of tabsDef) {
+      const b = h('button', 'ptab' + (SK.tab === id ? ' on' : ''), n == null ? label : `${label} (${n})`);
+      b.onclick = () => { SK.tab = id; skRender(); };
+      SK.tabs.append(b);
+    }
+    const list = SK.list; list.textContent = '';
+    if (!d) { list.append(h('div', 'mnote', 'Chargement…')); return; }
+    const q = SK.filter.value.trim().toLowerCase();
+    const items = (d[SK.tab] || []).filter(x => !q || x.name.toLowerCase().includes(q) || String(x.label || '').toLowerCase().includes(q) || String(x.description || '').toLowerCase().includes(q));
+    if (SK.tab === 'skills') list.append(h('div', 'mnote', 'Choisis automatiquement selon ta demande, ou appelés avec /nom. Désactivé = jamais joint au modèle.'));
+    if (SK.tab === 'commands' && !items.length && !q) list.append(h('div', 'mnote', 'Aucune commande perso. Crée un fichier ma-commande.md dans .fs-cli/commands/ (ou ~/.fs-cli/commands/) : il devient /ma-commande. Tes commandes de Claude Code (.claude/commands/) marchent aussi.'));
+    if (SK.tab === 'fs') list.append(h('div', 'mnote', 'Compétences de France Student : celles activées sont jointes au début de chaque conversation.'));
+    if (!items.length && q) list.append(h('div', 'mnote', 'Rien ne correspond.'));
+    for (const it of items.slice(0, 300)) {
+      const row = h('div', 'skrow');
+      const main = h('div', 'skm');
+      main.append(h('div', 'skn', SK.tab === 'fs' ? (it.label || it.name) : '/' + it.name));
+      const meta = [it.source, it.tokens ? ktok(it.tokens) : ''].filter(Boolean).join(' · ');
+      if (meta) main.append(h('div', 'skd', meta));
+      if (it.description) main.title = it.description;
+      if (SK.tab !== 'fs') main.onclick = () => { skClose(); ta.value = '/' + it.name + ' '; autosize(); ta.focus(); };
+      else main.classList.add('noclick');
+      row.append(main);
+      if (SK.tab !== 'commands') {
+        const t = h('button', 'sktog' + (it.enabled ? ' on' : ''), it.enabled ? 'On' : 'Off');
+        t.title = it.enabled ? 'Désactiver' : 'Activer';
+        t.onclick = () => post({ type: 'skillToggle', kind: SK.tab === 'fs' ? 'fs' : 'skill', name: it.name });
+        row.append(t);
+      }
+      list.append(row);
+    }
+    if (items.length > 300) list.append(h('div', 'mnote', `… ${items.length - 300} de plus : affine avec le filtre`));
+  }
+  document.addEventListener('keydown', e => { if (SK.el && e.key === 'Escape') { e.preventDefault(); skClose(); } });
+
   // ── messages de l'extension ──
   window.addEventListener('message', ({ data: m }) => {
     if (!m || typeof m !== 'object') return;
@@ -806,9 +875,11 @@
       case 'select': mcpClose(); selectCard(ev); break;
       case 'mcpPanel': mcpPanel(ev); break;
       case 'card': card(ev); break;
+      case 'skills': skShow(ev); break;
       case 'history': histShow(ev); break;
       case 'transcript': transcript(ev); break;
       case 'mcpStatus': mcpStatus(ev); break;
+      case 'mcpLoginUrl': mcpStatus({ name: ev.name, loginUrl: ev.url }); break;
       case 'ask': askCard(ev); break;
       case 'flash': showFlash(ev.text); break;
       case 'insert': insert(ev.text); break;

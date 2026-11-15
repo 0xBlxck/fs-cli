@@ -154,7 +154,7 @@ async function mcpCommand(arg, env) {
   const cwd = S.cwd, mgr = getMcp(cwd);
   let [sub = 'list', ...rest] = splitArgs(arg);
   // « /mcp blender » = « /mcp tools blender » : démarre le serveur et montre ses outils
-  if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust|ask)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
+  if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust|ask|login|logout)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
   const target = rest[0];
   // serveur importé d'un autre assistant (Claude Code, Codex…) : ton accord avant de le démarrer
   if (/^(tools|test|call)$/i.test(sub) && target) {
@@ -192,6 +192,24 @@ async function mcpCommand(arg, env) {
       if (ov.cloud.length) println('\n  ' + c.bold('claude.ai') + c.dim(` (${ov.cloud.length}) — connecteurs de ton compte Claude : ils restent chez Anthropic, FS-CLI ne peut pas les utiliser\n    `) + c.dim(ov.cloud.map(n => n.replace(/^claude\.ai /, '')).join(' · ')));
       if (ov.error) println(c.yellow('\n  ⚠ ' + ov.error));
       println(c.dim('\n  /mcp <nom> : ses outils · /mcp toggle <nom> · /mcp ask on : demander avant de lancer un serveur importé · /mcp add <nom> <commande|url> · /mcp presets\n'));
+      return;
+    }
+    case 'login': case 'logout': {                                    // connexion OAuth d'un serveur MCP distant (page de connexion dans le navigateur)
+      const sv = loadMcpConfig(cwd).mcpServers?.[target];
+      if (!sv) return println(c.red(`  serveur inconnu : ${target || '?'}`) + c.dim('  (/mcp pour la liste)'));
+      if (!sv.url) return println(c.dim(`  ${target} tourne sur ton PC (stdio) : il n'a pas de connexion à un compte`));
+      const { login, logout } = await import('./mcp-oauth.js');
+      if (sub.toLowerCase() === 'logout') { println(logout(sv.url) ? c.green(`  ✓ déconnecté de ${target}`) : c.dim('  aucune connexion enregistrée')); await mgr.closeAll(); return; }
+      await withAbort(async signal => {
+        ui.spinner.start(`connexion à ${target}…`);
+        try {
+          await login(sv.url, { signal, onUrl: u => { ui.spinner.stop(); println(c.dim(`  page de connexion ouverte dans ton navigateur (sinon ouvre ce lien) :\n  ${u}`)); ui.spinner.start('en attente de ta connexion dans le navigateur…'); } });
+          ui.spinner.stop();
+          await mgr.closeAll();
+          const r = await mgr.test(target, 20000);
+          println(r.ok ? c.green(`  ✓ connecté à ${target} : ${r.tools.length} outils`) : c.yellow(`  connecté, mais le serveur répond : ${r.error}`));
+        } catch (e) { ui.spinner.stop(); println(c.red(`  ✗ ${e.message}`)); }
+      });
       return;
     }
     case 'ask': {                                                     // /mcp ask on : demander ton accord avant de démarrer un serveur importé d'un autre assistant

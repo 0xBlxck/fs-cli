@@ -145,6 +145,8 @@ class Chat {
       case 'command': { const t = String(m.text || ''); if (/^\/[\w-]+( |$)/.test(t)) this.toCli({ type: 'submit', text: t }); return; }
       case 'mcpAction': return this.toCli({ type: 'mcpAction', action: String(m.action || ''), name: String(m.name || '') });
       case 'historyOpen': return this.toCli({ type: 'historyOpen' });
+      case 'skillsOpen': return this.toCli({ type: 'skillsOpen' });
+      case 'skillToggle': return this.toCli({ type: 'skillToggle', kind: String(m.kind || ''), name: String(m.name || '') });
       case 'resumeChat': return this.toCli({ type: 'resumeChat', chatId: String(m.chatId || '') });
       case 'ask': return this.toCli({ type: 'ask', id: m.id, text: String(m.text ?? '') });
       case 'interrupt': return this.toCli({ type: 'interrupt' });

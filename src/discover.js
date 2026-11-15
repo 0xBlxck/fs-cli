@@ -128,9 +128,11 @@ function findSkillFiles(root, maxDepth, limit = 3000) {
 
 let skillCache = null;
 /** Skills trouvés : [{ name, description, file, dir, source }]. Mis en cache pour la session. */
-export function discoverSkills(cwd, { refresh = false } = {}) {
+export function discoverSkills(cwd, { refresh = false, all = false } = {}) {
+  const off = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase()));
+  const keep = list => (all || !off.size ? list : list.filter(s => !off.has(s.name.toLowerCase())));
   const key = `${importHome()}|${cwd}`;
-  if (skillCache && skillCache.key === key && !refresh) return skillCache.list;
+  if (skillCache && skillCache.key === key && !refresh) return keep(skillCache.list);
   const home = importHome();
   const roots = [];
   if (cwd) roots.push([path.join(cwd, '.claude', 'skills'), 'projet', 3], [path.join(cwd, '.agents', 'skills'), 'projet', 3]);
@@ -151,7 +153,7 @@ export function discoverSkills(cwd, { refresh = false } = {}) {
   }
   const list = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   skillCache = { key, list };
-  return list;
+  return keep(list);
 }
 
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -217,5 +219,5 @@ const TECH = new Set(['src', 'json', 'package', 'index', 'html', 'css', 'node', 
 /** Un chemin est-il dans un dossier de skill découvert ? (lecture autorisée sans question) */
 export function isSkillPath(p, cwd) {
   const r = path.resolve(p).toLowerCase();
-  return discoverSkills(cwd).some(s => { const d = s.dir.toLowerCase(); return r === d || r.startsWith(d + path.sep); });
+  return discoverSkills(cwd, { all: true }).some(s => { const d = s.dir.toLowerCase(); return r === d || r.startsWith(d + path.sep); });
 }

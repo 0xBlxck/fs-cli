@@ -128,6 +128,8 @@ Pour l'ouvrir : l'icône ✻ dans la barre latérale, ou **Ctrl+Alt+I** pour un 
 - **Mémoire** : notes par dossier, préprompt, faits appris, compétences (`/skills`), compactage automatique avant que le contexte soit plein.
 - **Instructions du projet** : `/init` crée `FSCLI.md` (ou utilise un `AGENTS.md` existant), lu au début de chaque conversation.
 - **Projets France Student** : `/projet` (ou « travaille dans mon projet Marketing ») choisit un de tes projets du site. Les conversations y sont rangées et le modèle suit les **instructions personnalisées** du projet. Par défaut : le projet **FS-CLI** ; `/projet off` pour aucun.
+- **MCP avec compte (OAuth)** : pour un serveur qui demande une connexion (Meta Ads, Trendtrack…), tape `/mcp login <nom>` ou clique « Se connecter » dans la fenêtre Serveurs MCP. La page de connexion s'ouvre dans ton navigateur, et FS-CLI garde sa propre clé sur ton PC (`~/.fs-cli/mcp-oauth.json`), renouvelée toute seule. `/mcp logout <nom>` pour la retirer.
+- **Commandes & skills** : le bouton « / » du panneau (ou `/skills`) liste tes skills du PC, tes commandes perso et les compétences France Student, avec un interrupteur On/Off. `/nom-du-skill ta demande` joint ce guide à la demande.
 - **Serveurs locaux sans fenêtre** : « ouvre le site en local » lance le serveur en arrière-plan, sans fenêtre de console, et donne son adresse. `/jobs` le montre, `/jobs stop <n>` l'arrête, et il s'arrête aussi en quittant FS-CLI.
 - **Images** : colle une capture avec **Alt+V** (ou `/image`), glisse-dépose une image dans le terminal, ou écris `@capture.png` : le modèle la voit.
 - **Web** : une URL citée est lue automatiquement ; `/search` et `/fetch` (adresses locales refusées).

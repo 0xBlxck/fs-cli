@@ -287,3 +287,15 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .card-modal { max-width: 440px; }
 .card-modal .card { border: 0; background: none; padding: 0 18px 16px; overflow-y: auto; }
 .card-modal .card .cs:first-child { margin-top: 0; }
+
+/* ── fenêtre « Commandes & skills » ── */
+.sk-tabs { margin: 0 16px 6px; grid-template-columns: repeat(3, 1fr); }
+.skrow { display: flex; gap: 8px; align-items: stretch; margin-bottom: 6px; }
+.skm { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--box); padding: 7px 11px; cursor: pointer; }
+.skm:hover { border-color: var(--focus); }
+.skm.noclick { cursor: default; } .skm.noclick:hover { border-color: var(--border); }
+.skn { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skd { font-size: 11px; color: var(--dim); margin-top: 1px; }
+.sktog { flex: none; width: 44px; border: 1px solid var(--border); border-radius: 7px; font-size: 11.5px; color: var(--dim); background: var(--box); }
+.sktog.on { color: var(--fg); border-color: var(--brand); }
+.sktog:hover { border-color: var(--focus); }

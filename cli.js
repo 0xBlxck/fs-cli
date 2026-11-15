@@ -787,6 +787,8 @@ async function command(line) {
       if (await extraCommand(cmd, arg, extraEnv())) return;
       const custom = loadCustomCommands(S.cwd).find(x => '/' + x.name === cmd.toLowerCase());   // commande perso : son texte part comme une demande
       if (custom) { println(c.dim(`  ↳ commande perso /${custom.name} (${custom.source})`)); return chatTurn(expandCommand(custom, arg)); }
+      const skill = discoverSkills(S.cwd).find(x => '/' + x.name.toLowerCase() === cmd.toLowerCase());   // skill du PC appelé par son nom
+      if (skill) { println(c.dim(`  ↳ skill ${skill.name} (${skill.source})`)); S.forceSkills = [skill]; S.skillsSent?.delete(skill.name); return chatTurn(arg || `Utilise le guide « ${skill.name} » pour la suite de ce projet.`); }
       return println(c.red(`  commande inconnue: ${cmd}`) + c.dim('  (/help)'));
     }
   }
@@ -867,7 +869,8 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!keepLast) {                                                   // skills choisis automatiquement pour cette demande (correspondance nette seulement)
       S.skillsSent ||= new Set();
       let budget = 20000;
-      for (const sk of autoSkills(discoverSkills(S.cwd), text).filter(s => !S.skillsSent.has(s.name))) {
+      const forced = S.forceSkills || []; S.forceSkills = null;        // /nom-du-skill : joint en premier, même sans correspondance
+      for (const sk of [...forced, ...autoSkills(discoverSkills(S.cwd), text).filter(s => !forced.some(f => f.name === s.name))].filter(s => !S.skillsSent.has(s.name))) {
         let body = ''; try { body = fs.readFileSync(sk.file, 'utf8').replace(/^﻿/, ''); } catch { continue; }
         body = body.length > Math.min(12000, budget) ? body.slice(0, Math.min(12000, budget)) + '\n[… guide tronqué ; la suite est dans ' + sk.file + ']' : body;
         if (budget <= 1000) break;
@@ -1033,6 +1036,22 @@ if (opts.stdio) {                                                    // commande
     stdioSend('diffBefore', { id, path: d ? (fileDiff(S.undo, abs) ? abs : path.resolve(S.cwd, String(file || ''))) : abs, ok: !!d, before: d ? d.before : '', created: d ? d.created : false });
   });
   // ── fenêtre « Conversations » (horloge du panneau) : liste des sessions, reprise avec réaffichage des messages ──
+  // ── fenêtre « Commandes & skills » (bouton « / » du panneau) ──
+  const skillsPayload = () => {
+    const off = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase()));
+    const size = f => { try { return Math.round(fs.statSync(f).size / 3.5); } catch { return 0; } };
+    return {
+      skills: discoverSkills(S.cwd, { all: true }).map(s => ({ name: s.name, source: s.source, description: s.description.slice(0, 200), tokens: size(s.file), enabled: !off.has(s.name.toLowerCase()) })),
+      commands: loadCustomCommands(S.cwd).map(x => ({ name: x.name, source: x.source, description: String(x.description || '').slice(0, 200) })),
+      fs: mem.loadSkills().map(s => ({ name: s.id, label: s.name, source: 'France Student', description: String(s.description || '').slice(0, 200), enabled: cfg.skills.includes(s.id) })),
+    };
+  };
+  input.on('skillsOpen', () => stdioSend('skills', skillsPayload()));
+  input.on('skillToggle', (kind, name) => {
+    if (kind === 'fs') { const set = new Set(cfg.skills); if (set.has(name)) set.delete(name); else set.add(name); cfg.skills = [...set]; }
+    else { const n = name.toLowerCase(), set = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase())); if (set.has(n)) set.delete(n); else set.add(n); cfg.disabledSkills = [...set]; S.toolsHintSig = ''; }
+    saveCfg(); stdioSend('skills', skillsPayload());
+  });
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
     stdioSend('history', { sessions: (await liveSessions(50)).map(s => ({
@@ -1059,6 +1078,13 @@ if (opts.stdio) {                                                    // commande
         action = 'connect';
       }
       if (action === 'connect') { stdioSend('mcpStatus', { name, status: 'connecting' }); return stdioSend('mcpStatus', await connectOne(mgr, name)); }
+      if (action === 'login') {                                        // connexion au compte : page de connexion dans le navigateur
+        const { login } = await import('./src/mcp-oauth.js');
+        stdioSend('mcpStatus', { name, status: 'connecting', note: 'connexion dans ton navigateur…' });
+        await login(sv.url, { onUrl: u => stdioSend('mcpLoginUrl', { name, url: u }) });
+        await mgr.closeAll();
+        return stdioSend('mcpStatus', await connectOne(mgr, name));
+      }
       if (action === 'toggle') { await extraCommand('/mcp', `toggle ${name}`, extraEnv()); return openMcpPanel(); }
       if (action === 'trust') { await extraCommand('/mcp', 'trust', extraEnv()); return openMcpPanel(); }
     } catch (e) { stdioSend('mcpStatus', { name, status: 'error', error: String(e?.message || e) }); }

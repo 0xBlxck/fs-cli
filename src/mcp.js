@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { discoverMcpServers } from './discover.js';
+import { bearerFor, hasLogin } from './mcp-oauth.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const CLIENT_INFO = { name: 'fs-cli', version: '3.1.0' };
@@ -439,14 +440,16 @@ class HttpTransport {
 
   _headers() {
     const h = { Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json', ...this.headers };
+    if (this.bearer && !Object.keys(this.headers).some(k => k.toLowerCase() === 'authorization')) h.Authorization = `Bearer ${this.bearer}`;   // connexion faite dans FS-CLI (/mcp login)
     if (this.sessionId) h['Mcp-Session-Id'] = this.sessionId;
     if (this.protocolVersion) h['MCP-Protocol-Version'] = this.protocolVersion;
     return h;
   }
 
-  async _post(body, signal) {
+  async _post(body, signal, retried = false) {
     let res;
     try {
+      if (this.bearer === undefined) this.bearer = await bearerFor(this.url).catch(() => null);   // une fois par connexion (renouvelé s'il expire)
       res = await fetch(this.url, { method: 'POST', headers: this._headers(), body: JSON.stringify(body), signal, redirect: 'error' });
     } catch (e) {
       if (signal?.aborted) throw e;
@@ -462,8 +465,12 @@ class HttpTransport {
         throw new McpError(`Le serveur répond HTTP ${res.status} sur ${this.url} : l'ancien transport SSE (HTTP+SSE de 2024-11-05) n'est pas supporté. `
           + 'Utilise un serveur « Streamable HTTP » (URL en /mcp) ou un serveur stdio.', 'http', { status: res.status });
       }
+      if (res.status === 401 && !retried && hasLogin(this.url)) {        // jeton expiré : renouvelé, puis un seul nouvel essai
+        this.bearer = await bearerFor(this.url, { force: true }).catch(() => null);
+        if (this.bearer) return this._post(body, signal, true);
+      }
       if (res.status === 401 || res.status === 403) {
-        throw new McpError(`HTTP ${res.status} : ce serveur demande une connexion à un compte (OAuth). Si tu l'as connecté dans Claude Code ou un autre assistant, cette connexion reste chez lui : FS-CLI ne peut pas la réutiliser. Sinon, ajoute un en-tête "headers": {"Authorization": "Bearer …"} dans la config`, 'http', { status: res.status });
+        throw new McpError(`HTTP ${res.status} : ce serveur demande une connexion à ton compte. Connecte-le avec « /mcp login ${this.name} » (ou le bouton « Se connecter » de la fenêtre Serveurs MCP) : la page de connexion s'ouvre dans ton navigateur.`, 'http', { status: res.status });
       }
       if (res.status === 404 && this.sessionId) {
         throw new McpError('Session MCP expirée (HTTP 404) : reconnecte le serveur', 'http', { status: 404 });

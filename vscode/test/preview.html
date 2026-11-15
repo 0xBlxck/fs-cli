@@ -49,6 +49,15 @@ const steps = [
   () => E({ type: 'busy', busy: false }),
 ];
 if (location.hash === "#accueil") steps.length = 3;
+if (location.hash === "#skills") { steps.length = 2; steps.push(() => E({ type: 'skills',
+  skills: [
+    { name: 'api-designer', source: 'Claude Code', tokens: 2300, enabled: true, description: 'Concevoir des API REST' },
+    { name: 'frontend-design', source: 'Claude Code', tokens: 1800, enabled: true },
+    { name: 'pdf', source: 'plugin Claude Code', tokens: 4200, enabled: true },
+    { name: 'humanizer', source: 'Codex', tokens: 950, enabled: false },
+    { name: 'security-reviewer', source: 'Claude Code', tokens: 3100, enabled: true }],
+  commands: [{ name: 'deploy', source: 'Claude Code' }],
+  fs: [{ name: 'fullstack', label: 'Fullstack & Clean Architecture', source: 'France Student', enabled: false }] })); }
 if (location.hash === "#historique") { steps.length = 2; steps.push(() => E({ type: 'history', sessions: [
   { chatId: 'a', title: 'Ajoute un formulaire de contact', model: 'Claude Sonnet 5.5', cwd: 'C:\Projets\monsite', here: true, current: true, updatedAt: 1794784016158 - 120000 },
   { chatId: 'b', title: 'Corrige le menu mobile', model: 'Claude Opus 5.5', cwd: 'C:\Projets\monsite', here: true, updatedAt: 1794784016158 - 3 * 3600000 },
