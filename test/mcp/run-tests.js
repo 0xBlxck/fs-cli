@@ -131,7 +131,7 @@ t('http annulation', !c.ok && c.aborted, c);
 tr = await mgr.test('legacy');
 t('/sse 405 -> message explicite', !tr.ok && /ancien transport SSE/.test(tr.error), tr);
 tr = await mgr.test('auth');
-t('401 message', !tr.ok && /authentification/.test(tr.error), tr);
+t('401 message', !tr.ok && /OAuth/.test(tr.error) && /Authorization/.test(tr.error), tr);
 {
   const f = path.join(proj, '.mcp.json');
   const j = JSON.parse(fs.readFileSync(f, 'utf8'));
