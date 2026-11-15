@@ -94,3 +94,8 @@ test('affichage : gras + lien dans la même phrase restent propres (plus de « 1
   assert.match(vis, /1\. Installe Playwright \(https:\/\/exemple\.fr\/x\)\. puis relance/);
   assert.doesNotMatch(vis, /\d+m[A-Za-z]|\[Playwright/);
 });
+
+test('jeton de l\'extension Chrome collé : intercepté (jamais envoyé au modèle)', () => {
+  const r = detectIntent('PLAYWRIGHT_MCP_EXTENSION_TOKEN=abcdefghijklmnopqrstuvwxyz123');   // scan-ignore (faux jeton de test)
+  assert.equal(r.cmd, '/navigateur'); assert.match(r.arg, /^chrome PLAYWRIGHT_MCP_EXTENSION_TOKEN=/);
+});

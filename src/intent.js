@@ -60,6 +60,10 @@ export function detectIntent(raw) {
   if (/\b(contexte|m[ée]moire\s+de\s+la\s+conv\w*)\b/i.test(head) && /\b(plein|rempli|o[ùu]\s+en\s+est|combien|taille|niveau|reste)\b/i.test(head) && head.length < 160) {
     return { cmd: '/context', arg: '', label: 'état du contexte' };
   }
+  // ── jeton de l'extension Playwright collé tel quel : enregistré localement, JAMAIS envoyé au modèle
+  if (/PLAYWRIGHT_MCP_EXTENSION_TOKEN\s*=\s*["']?[\w-]{16,}/.test(text) && text.length < 300) {
+    return { cmd: '/navigateur', arg: `chrome ${text}`, label: 'jeton de l\'extension Chrome (gardé sur ton PC)' };
+  }
   // ── retour en arrière : « reviens en arrière », « annule tout ce que tu as fait »
   if (head.length < 90 && /^(?:stp\s+|s['’]il te pla[iî]t\s+)?(?:reviens\s+en\s+arri[eè]re|retour\s+en\s+arri[eè]re|annule\s+(?:tout\s+)?(?:ce\s+que\s+tu\s+as\s+fait|tes\s+(?:derni[eè]res\s+)?modif\w*|les\s+modif\w*)|d[ée]fais\s+(?:tout|tes\s+modif\w*))(?:\s+(?:stp|svp|s['’]il\s+te\s+pla[iî]t))?\s*[.!]*$/i.test(head)) {
     return { cmd: '/rewind', arg: '', label: 'retour en arrière sur les fichiers' };

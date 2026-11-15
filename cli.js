@@ -302,7 +302,7 @@ function suggest(buf, cur) {
 const interactive = !!process.stdin.isTTY && !!process.stdout.isTTY && !opts.classic && !opts.print;
 const input = createInput({
   interactive, history: histLines, completer, promptStr, suggester: suggest,
-  onHistory: t => { if (t && !opts.print) try { fs.appendFileSync(FILES.hist, t + '\n', { mode: 0o600 }); } catch {} },
+  onHistory: t => { if (t && !opts.print && !/TOKEN\s*=|session-token|sk-[A-Za-z0-9]{20}|ghp_[A-Za-z0-9]{20}/i.test(t)) try { fs.appendFileSync(FILES.hist, t + '\n', { mode: 0o600 }); } catch {} },
 });
 
 let busy = false, turnAbort = null;
@@ -407,7 +407,7 @@ const extraEnv = () => ({
 
 async function command(line) {
   const [cmd, ...rest] = line.split(/\s+/);
-  const arg = line.slice(cmd.length).trim();
+  let arg = line.slice(cmd.length).trim();
   switch (cmd) {
     case '/quit': case '/exit': case '/q': return shutdown(0);
     case '/help': case '/?': return help();
@@ -479,6 +479,15 @@ async function command(line) {
     }
     case '/navigateur': case '/browser': {                            // contrôle du navigateur (Playwright MCP) : ajout + démarrage
       const cfgAll = loadMcpConfig(S.cwd);
+      // jeton de l'extension collé (« PLAYWRIGHT_MCP_EXTENSION_TOKEN=… ») : gardé dans la config privée, jamais envoyé au modèle
+      const tok = arg.match(/PLAYWRIGHT_MCP_EXTENSION_TOKEN\s*=\s*["']?([\w-]{16,})["']?/);
+      if (tok) {
+        arg = arg.replace(tok[0], '').trim();
+        cfgAll.mcpServers.playwright = { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--extension'], env: { PLAYWRIGHT_MCP_EXTENSION_TOKEN: tok[1] }, description: 'ton Chrome (extension Playwright MCP Bridge)', _scope: 'user' };
+        const sv = saveMcpConfig('user', S.cwd, cfgAll);
+        println(sv.ok ? c.green('  ✓ jeton de l\'extension enregistré (config privée ~/.fs-cli) : le modèle pilote TON Chrome sans redemander l\'autorisation') : c.red('  ✗ ' + sv.error));
+        if (!arg) return;
+      }
       // 1er mot = mode éventuel (chrome / separe / off) ; le reste = une demande à faire tout de suite avec le navigateur
       const [first = '', ...more] = arg.split(/\s+/).filter(Boolean);
       const MODE_CHROME = /^(chrome|mon[- ]?chrome|extension)$/i, MODE_SEP = /^(separe|séparé|normal|playwright)$/i;
@@ -766,7 +775,7 @@ async function handleInput(text) {
     if (!t) return;
     if (!t.includes('\n') && t.startsWith('/')) await command(t);
     else if (!t.includes('\n') && t.startsWith('!')) await direct(t.slice(1));
-    else if (cfg.intents !== false && await naturalIntent(t)) return;
+    else if ((cfg.intents !== false || /PLAYWRIGHT_MCP_EXTENSION_TOKEN/.test(t)) && await naturalIntent(t)) return;   // un jeton collé ne part jamais au modèle
     else {
       if (cfg.intents !== false && cfg.engine === 'native') {     // le modèle n'a pas d'accès web : une URL citée est lue et jointe
         if (!wantsBrowser(t)) for (const u of urlsIn(t)) await extraCommand('/fetch', u, extraEnv());   // « va sur … dans le navigateur » : c'est le navigateur qui ira, pas un téléchargement
