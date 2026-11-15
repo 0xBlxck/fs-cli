@@ -104,9 +104,9 @@ Le même agent dans un panneau de chat de ton éditeur :
 - Un bilan des fichiers modifiés, avec **Annuler** par fichier.
 - Les tâches, le modèle et le mode sont accessibles en un clic.
 
-1. Installe FS-CLI (ci-dessus) et lance `fs-cli` une fois pour te connecter.
-2. Télécharge `fs-cli-vscode-*.vsix` dans les [releases](https://github.com/0xBlxck/fs-cli/releases).
-3. Dans l'éditeur, ouvre les Extensions, puis **⋯ › Installer depuis un VSIX…**.
+L'extension est livrée avec FS-CLI. Pour l'installer, tape **`/vscode`** dans FS-CLI (ou `fs-cli --vscode` dans un terminal) : il trouve tes éditeurs (VS Code, Cursor, Windsurf, Antigravity) et l'y installe. Recharge ensuite la fenêtre de l'éditeur.
+
+Sans le CLI sous la main, tu peux aussi télécharger `fs-cli-vscode-*.vsix` dans les [releases](https://github.com/0xBlxck/fs-cli/releases), puis dans l'éditeur : Extensions › **⋯ › Installer depuis un VSIX…**.
 
 Pour l'ouvrir : l'icône ✻ dans la barre latérale, ou **Ctrl+Alt+I** pour un onglet. Pour envoyer la sélection : **Ctrl+Alt+K**, ou clic droit › *Demander à FS-CLI*.
 
@@ -155,6 +155,7 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 
 | Thème | Commandes |
 |---|---|
+| Éditeur | `/vscode` (panneau de chat dans VS Code, Cursor, Windsurf, Antigravity) |
 | Conversation | `/usage` · `/changes` · `/messages` · `/plan <demande>` · `/rewind` · `/doctor` · `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |

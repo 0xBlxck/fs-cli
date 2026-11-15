@@ -79,6 +79,8 @@ for (const [name, data] of entries) {
 const cd = Buffer.concat(central);
 const end = Buffer.alloc(22);
 end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
-const out = path.join(root, `${pkg.name}-${pkg.version}.vsix`);
+const outDir = process.argv[2] ? path.resolve(process.argv[2]) : root;   // dossier de sortie (FS-CLI : dossier temporaire)
+fs.mkdirSync(outDir, { recursive: true });
+const out = path.join(outDir, `${pkg.name}-${pkg.version}.vsix`);
 fs.writeFileSync(out, Buffer.concat([...parts, cd, end]));
 console.log(`✓ ${path.basename(out)} · ${entries.length} fichiers · ${(fs.statSync(out).size / 1024).toFixed(1)} Ko`);

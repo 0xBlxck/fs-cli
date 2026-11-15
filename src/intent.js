@@ -49,6 +49,13 @@ export function detectIntent(raw) {
     return { cmd: '/remember', arg: mem[1].trim().replace(/[.!]+$/, ''), label: 'je retiens cette information (mémoire du dossier)' };
   }
 
+  // ── extension de l'éditeur : « installe l'extension vs code », « mets fs-cli dans cursor »
+  if (head.length < 140 && /\b(install\w*|ajoute|mets?|active)\b/i.test(head) && /\b(extension|vs ?code|vscode|cursor|windsurf|antigravity)\b/i.test(head)
+      && /\bfs-?cli\b|\bfrance\s*student\b|\bpanneau\b|\bl['’]extension\s+(?:vs ?code|vscode|cursor|windsurf|antigravity)\b|^\s*(?:installe|ajoute|mets?)\s+l['’]extension\s*$/i.test(head)
+      && !/\b(npm|pip|package|paquet|librairie|biblioth[eè]que|prettier|eslint|python|copilot)\b/i.test(head)) {
+    return { cmd: '/vscode', arg: '', label: 'installer l\'extension FS-CLI dans ton éditeur' };
+  }
+
   // ── quota / conversations restantes
   if (/\b(combien|reste[- ]?t[- ]?il|il\s+me\s+reste|mon\s+quota|ma\s+limite|mon\s+budget|ma\s+consommation)\b/i.test(head)
       && /\b(conv\w*|chats?|messages?|requ[êe]tes?|quota|limite|budget|cr[ée]dits?|consomm\w*)\b/i.test(head) && head.length < 160) {

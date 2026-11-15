@@ -15,6 +15,7 @@ import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob,
 import { runAgent, runBlock, setSelectHandler } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
 import { StdioInput, send as stdioSend } from './src/stdio.js';
+import { findEditors, buildVsix, installInto } from './src/vscode-install.js';
 import { detectTargetDir } from './src/target.js';
 import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
@@ -52,13 +53,15 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--cwd') opts.cwd = argv[++i];
   else if (a === '--web') opts.web = true;
   else if (a === '--classic') opts.classic = true;
-  else if (a === '--stdio') opts.stdio = true;                   // mode machine : extension VS Code
+  else if (a === '--stdio') opts.stdio = true;
+  else if (a === '--vscode') opts.vscode = true;                 // installe l'extension dans les éditeurs détectés, puis quitte                   // mode machine : extension VS Code
   else if (a === '--login') opts.login = true;
   else if (a === '-h' || a === '--help') opts.help = true;
   else if (a === '-v' || a === '--version') opts.version = true;
   else opts.prompt.push(a);
 }
 if (opts.version) { console.log(`fs-cli ${VERSION}`); process.exit(0); }
+if (opts.vscode) { process.exit(installVscode({ all: true, log: t => console.log(t) }) ? 0 : 1); }
 if (opts.stdio) {                                                   // tout passe en événements JSON : rien d'autre ne doit polluer la sortie
   console.log = (...a) => stdioSend('print', { text: a.join(' ') + '\n' });
   console.error = (...a) => stdioSend('print', { text: a.join(' ') + '\n' });
@@ -248,7 +251,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/navigateur ', '/doctor', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/navigateur ', '/doctor', '/vscode', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -363,7 +366,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/vscode', 'installer le panneau de chat FS-CLI dans VS Code, Cursor, Windsurf, Antigravity'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
@@ -547,6 +550,19 @@ async function command(line) {
       if (request) return chatTurn(/navigateur|chrome|browser/i.test(request) ? request : `${request} (dans le navigateur)`);   // la demande part directement
       println(c.dim('  Demande simplement : « va sur youtube.com et cherche … », ou /navigateur ouvre quick.fr'));
       return println(c.dim(mineChrome ? '  /navigateur separe pour le navigateur séparé · /navigateur off pour retirer' : '  /navigateur chrome pour piloter TON Chrome (comptes connectés) · /navigateur off pour retirer'));
+    }
+    case '/vscode': case '/extension': {                            // installe l'extension (panneau de chat) dans VS Code, Cursor, Windsurf, Antigravity…
+      const eds = findEditors();
+      if (!eds.length) return println(c.yellow('  aucun éditeur compatible trouvé (VS Code, Cursor, Windsurf, Antigravity)') + c.dim('\n  installe-en un, ou télécharge le .vsix dans les releases GitHub'));
+      let pick = eds;
+      if (eds.length > 1 && input.select && interactive && !/^(tous|all)$/i.test(arg)) {
+        const idx = await input.select({ title: 'Installer l\'extension FS-CLI dans quel éditeur ?', detail: 'Elle ajoute un panneau de chat FS-CLI (icône France Student dans la barre latérale).', options: ['Tous : ' + eds.map(e => e.name).join(', '), ...eds.map(e => e.name), 'Annuler'] });
+        if (idx == null || idx > eds.length) return println(c.dim('  rien n\'a été installé'));
+        pick = idx === 0 ? eds : [eds[idx - 1]];
+      }
+      ui.spinner.start('installation de l\'extension…');
+      try { installVscode({ editors: pick, log: println }); } finally { ui.spinner.stop(); }
+      return;
     }
     case '/doctor': {                                                 // vérifie l'installation et dit quoi corriger
       ui.spinner.start('vérification…');
@@ -952,6 +968,22 @@ if (opts.stdio) {                                                    // commande
 process.on('exit', () => { try { input.stop(); } catch {} });
 process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); });
 
+/** Fabrique le .vsix depuis le dossier vscode/ du CLI et l'installe dans les éditeurs choisis. Renvoie true si au moins une installation a réussi. */
+function installVscode({ editors = null, all = false, log }) {
+  const eds = editors || findEditors();
+  if (!eds.length) { log(c.yellow('  aucun éditeur compatible trouvé (VS Code, Cursor, Windsurf, Antigravity)')); return false; }
+  let v;
+  try { v = buildVsix(); } catch (e) { log(c.red('  ' + e.message)); return false; }
+  let ok = 0;
+  for (const ed of eds) {
+    const r = installInto(ed, v.file);
+    if (r.ok) ok++;
+    log(r.ok ? c.green(`  ✓ extension FS-CLI ${v.version} installée dans ${ed.name}`) : c.red(`  ✗ ${ed.name} : ${r.out || 'échec'}`));
+  }
+  if (ok) log(c.dim('  → recharge la fenêtre de l\'éditeur (Ctrl+Maj+P › « Reload Window ») puis clique sur l\'icône France Student à gauche'));
+  return ok > 0;
+}
+
 /** Première ouverture d'un dossier : on demande la confiance avant que le modèle puisse y agir. */
 async function ensureFolderTrust(dir) {
   if (isFolderTrusted(dir)) return true;
@@ -1000,6 +1032,10 @@ banner();
 if (!(await ensureFolderTrust(S.cwd))) {
   println(c.dim('  Dossier non approuvé : relance FS-CLI depuis le dossier de ton projet (ou --cwd <dossier>).'));
   saveSession(); input.stop(); process.exit(0);
+}
+if (!opts.stdio && !cfg.vscodeTip) {                                 // une seule fois : le panneau de chat existe aussi pour l'éditeur
+  try { const eds = findEditors(); if (eds.length) println(c.dim('  💡 FS-CLI existe aussi en panneau de chat dans ' + eds.map(e => e.name).join(', ') + ' : tape ') + c.accent('/vscode')); } catch {}
+  cfg.vscodeTip = true; saveCfg();
 }
 // nouvelle version disponible ? (en arrière-plan, au plus une fois toutes les 12 h, n'empêche jamais de démarrer)
 checkUpdate().then(u => {

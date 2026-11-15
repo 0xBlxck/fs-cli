@@ -40,3 +40,10 @@ test('URL citées', () => {
   assert.deepEqual(urlsIn('résume https://exemple.fr/page. merci'), ['https://exemple.fr/page']);
   assert.deepEqual(urlsIn('rien ici'), []);
 });
+
+test('extension de l\'éditeur : la nôtre seulement', () => {
+  assert.equal(detectIntent("installe l'extension vs code")?.cmd, '/vscode');
+  assert.equal(detectIntent('mets fs-cli dans cursor')?.cmd, '/vscode');
+  assert.equal(detectIntent("installe l'extension prettier dans vscode"), null);
+  assert.equal(detectIntent('installe express avec npm'), null);
+});
