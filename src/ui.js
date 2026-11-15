@@ -295,6 +295,27 @@ export function describeAction(name, summary = '') {
 const stripLen = s => s.replace(/\x1b\[[0-9;]*m/g, '').length;
 const EXPLORE = new Set(['read_file', 'list_dir', 'grep', 'glob']);
 
+// ── Ctrl+O : déplier les sorties résumées et la pensée du modèle (comme Claude Code) ──
+const expandable = [];                                               // [{ title, lines }] : contenus coupés à l'écran, gardés en entier
+let thinking = '';
+function remember(title, lines) { expandable.push({ title, lines }); if (expandable.length > 20) expandable.shift(); }
+export function rememberThinking(d) { thinking += d; if (thinking.length > 200_000) thinking = thinking.slice(-200_000); }
+export function resetThinking() { thinking = ''; }
+export const thinkingLength = () => thinking.trim().length;
+/** Affiche en entier ce qui a été résumé depuis le dernier Ctrl+O (et la pensée du modèle). */
+export function showExpanded() {
+  const items = expandable.splice(0);
+  if (thinking.trim()) items.unshift({ title: 'pensée du modèle', lines: thinking.trim().split('\n') });
+  thinking = '';
+  if (!items.length) return println(c.dim('  (rien de replié à afficher)'));
+  for (const it of items) {
+    println(c.dim(`\n  ── ${it.title} (${it.lines.length} ligne${it.lines.length > 1 ? 's' : ''}) ──`));
+    for (const l of it.lines.slice(0, 2000)) println(c.dim('  ') + clip(sanitize(l), cols() - 4));
+    if (it.lines.length > 2000) println(c.dim(`  … +${it.lines.length - 2000} lignes`));
+  }
+  println(c.dim('  ──'));
+}
+
 // ── Action en cours (inspiré de Codex) ─────────────────────────────────────────
 // Avec l'interface plein écran, l'action en cours est affichée dans la zone du bas (avec sa sortie en direct),
 // puis écrite dans l'historique UNE FOIS TERMINÉE, puce verte (réussie) ou rouge (échec).
@@ -326,7 +347,8 @@ function cellLines(final) {
   const live = cell.live;
   if (live.length) {
     const show = final ? (live.length > 8 ? [...live.slice(0, 5), null, ...live.slice(-2)] : live) : live.slice(-4);
-    show.forEach((l, i) => out.push(l === null ? `     ${c.dim(`… +${live.length - 7} lignes`)}` : `  ${i === 0 ? c.dim('⎿') : ' '}  ${(cell.ok === false && final ? c.red : c.dim)(clip(l, cols() - 6))}`));
+    if (final && live.length > 8) remember(`${cell.label} ${cell.detail || ''}`.trim(), live.slice());
+    show.forEach((l, i) => out.push(l === null ? `     ${c.dim(`… +${live.length - 7} lignes (ctrl+o pour tout voir)`)}` : `  ${i === 0 ? c.dim('⎿') : ' '}  ${(cell.ok === false && final ? c.red : c.dim)(clip(l, cols() - 6))}`));
   }
   return out;
 }
@@ -371,7 +393,7 @@ export function toolBody(text, { max = 8, error = false } = {}) {
   const paint = error ? c.red : c.dim;
   const shown = lines.slice(0, max);
   shown.forEach((l, i) => println(`  ${i === 0 ? c.dim('⎿') : ' '}  ${paint(clip(l, cols() - 6))}`));
-  if (lines.length > max) println(`     ${c.dim(`… +${lines.length - max} lignes`)}`);
+  if (lines.length > max) { remember('sortie', lines); println(`     ${c.dim(`… +${lines.length - max} lignes (ctrl+o pour tout voir)`)}`); }
 }
 
 export function toolNote(text, kind = 'dim') {
@@ -448,7 +470,10 @@ export function diffView(oldStr, newStr, { max = 30, context = 2 } = {}) {
   let shown = 0, last = -2;
   for (let i = 0; i < ops.length; i++) {
     if (!keep.has(i)) continue;
-    if (shown >= max) { println(`     ${c.dim(`… +${[...keep].filter(k => k >= i).length} lignes`)}`); break; }
+    if (shown >= max) {
+      remember('diff complet', ops.filter((_, k) => keep.has(k)).map(x => `${x.t === '-' ? x.o : x.n} ${x.t} ${x.line}`));
+      println(`     ${c.dim(`… +${[...keep].filter(k => k >= i).length} lignes (ctrl+o pour tout voir)`)}`); break;
+    }
     if (last >= 0 && i > last + 1) println(`     ${c.dim('⋮')}`);
     const x = ops[i], num = String(x.t === '-' ? x.o : x.n).padStart(width);
     const text = clip(sanitize(x.line).replace(/\t/g, '  '), W);

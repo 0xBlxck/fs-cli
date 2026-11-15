@@ -73,6 +73,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
         onChat: id => { if (!S.chatId) S.chatId = id; },
         onText: d => md.push(d),
         onReasoning: d => {
+          ui.rememberThinking(d);                                       // gardée pour Ctrl+O
           if (!cfg.showThinking) return;
           thinkBuf += d; let i;
           while ((i = thinkBuf.indexOf('\n')) >= 0) { ui.println(c.dim(c.italic('  ✻ ' + thinkBuf.slice(0, i)))); thinkBuf = thinkBuf.slice(i + 1); }

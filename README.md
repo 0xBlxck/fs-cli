@@ -88,6 +88,7 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 | **Alt+V** | coller une image (capture Win+Maj+S…) ; glisser-déposer une image ou `@image.png` marche aussi |
 | ↑ ↓ · Ctrl+R | historique · recherche dans l'historique |
 | `?` · `# info` | afficher les raccourcis · retenir une info en mémoire |
+| Ctrl+O | déplier les sorties résumées et la pensée du modèle |
 | Échap × 2 | revenir en arrière (état des fichiers avant une demande) |
 
 ---
@@ -97,6 +98,9 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 - **Agent natif** : le modèle utilise les outils officiels « outils client » de France Student (lire, chercher, écrire, éditer, lancer une commande) ; le CLI les exécute sur ton PC avec ses garde-fous.
 - **Suivi des tâches** : sur une tâche longue, le modèle écrit son plan et le coche au fur et à mesure ; il reste affiché au-dessus de la zone de saisie (☐ à faire · ◐ en cours · ☑ fait).
 - **Skills choisis automatiquement** : selon ta demande (« fais un beau site », « un tableur Excel », « ma lettre de motivation »…), FS-CLI joint tout seul le guide le plus adapté parmi tes skills installés.
+- **Diff coloré** : chaque modification montre les lignes retirées (rouge) et ajoutées (vert), avec les numéros de ligne.
+- **Mode plan** : le modèle propose un plan en lecture seule, puis te demande s'il doit l'appliquer (automatiquement ou en validant chaque action).
+- **Commandes perso** : un fichier `ma-commande.md` dans `.fs-cli/commands/` (projet) ou `~/.fs-cli/commands/` devient `/ma-commande` (`$ARGUMENTS` = ce que tu tapes après). Tes commandes de Claude Code (`.claude/commands/`) marchent aussi.
 - **Retour en arrière** : `/rewind` (ou « reviens en arrière ») remet tous les fichiers dans l'état d'avant la demande de ton choix.
 - **Plusieurs agents** : `/team` répartit une tâche entre agents (jusqu'à 8), **à la suite dans la même conversation** (défaut) ou **en parallèle** ; `/compare` pose la même question à deux modèles.
 - **Interface type Claude Code** : saisie ancrée en bas de la fenêtre, suggestions, menus à flèches, file d'attente de messages, code replié en une ligne.

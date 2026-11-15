@@ -25,7 +25,7 @@ export class Tui {
     this.flashText = ''; this.flashTimer = null; this.lastCtrlC = 0;
     this.sug = { items: [], idx: -1, start: 0 }; this.sugOff = null;
     this.search = null; this.ask = null; this.askSaved = null; this.select_ = null;
-    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [] };
+    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [] };
     this.started = false;
     // zone de saisie ancrée en bas de la fenêtre si le terminal annonce sa hauteur ; sinon affichage « en ligne » classique
     const pin = pinned && (stdout.rows || 0) >= 8;
@@ -223,7 +223,7 @@ export class Tui {
     if (this.buf === '?' && !this.ask && !this.search) {
       const keys = [['/', 'commandes'], ['@', 'joindre un fichier'], ['!', 'commande shell directe'], ['#', 'retenir une info (mémoire)'],
         ['alt+v', 'coller une image'], ['maj+tab', 'changer de mode'], ['échap ×2', 'revenir en arrière (/rewind)'], ['ctrl+r', 'chercher dans l\'historique'],
-        ['\\ + entrée', 'nouvelle ligne'], ['ctrl+c', 'interrompre · ×2 quitter']];
+        ['\\ + entrée', 'nouvelle ligne'], ['ctrl+o', 'déplier sorties et pensée'], ['ctrl+c', 'interrompre · ×2 quitter']];
       const half = Math.ceil(keys.length / 2), cw = Math.floor((W - 4) / 2);
       for (let i = 0; i < half; i++) {
         const cell = k => k ? padAnsi(`${c.accent(k[0].padEnd(11))}${c.dim(k[1])}`, cw) : '';
@@ -339,7 +339,8 @@ export class Tui {
         case 'w': return this.cutBetween(this.wordLeft(), this.cur);
         case 'c': return this.ctrlC();
         case 'd': return this.ctrlD();
-        case 'v': if (!this.ask) this.emit('pasteImage'); return;     // Ctrl+V qui arrive jusqu'ici = le terminal n'a pas collé de texte (image)
+        case 'v': if (!this.ask) this.emit('pasteImage'); return;
+        case 'o': if (!this.ask) this.emit('expand'); return;           // Ctrl+O : déplier les sorties résumées et la pensée (comme Claude Code)     // Ctrl+V qui arrive jusqu'ici = le terminal n'a pas collé de texte (image)
         case 'l': return this.screen.clearScreen();
         case 'r': if (this.ask) return; this.search = { q: '', idx: null, match: null }; return this.render();
         case 'p': return this.up();

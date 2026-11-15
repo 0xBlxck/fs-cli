@@ -154,3 +154,29 @@ test('diff : exact ligne à ligne, ancienne ligne avant la nouvelle, numéros de
   assert.equal(ops.find(o => o.t === '-').o, 2);
   assert.deepEqual(ui.lineDiff('x\r\ny', 'x\ny').map(o => o.t), [' ', ' '], 'fins de ligne Windows ignorées');
 });
+
+test('commandes perso : fichier .md → /commande, $ARGUMENTS et $1 remplacés', async () => {
+  const { loadCustomCommands, expandCommand } = await import('../src/commands.js');
+  const p = path.join(tmp, 'projcmd'); fs.mkdirSync(path.join(p, '.fs-cli', 'commands', 'git'), { recursive: true });
+  fs.writeFileSync(path.join(p, '.fs-cli', 'commands', 'review.md'), '---\ndescription: relis le code\n---\nRelis $ARGUMENTS et liste les bugs.');
+  fs.writeFileSync(path.join(p, '.fs-cli', 'commands', 'git', 'commit.md'), 'Fais un commit pour $1');
+  fs.mkdirSync(path.join(p, '.claude', 'commands'), { recursive: true });
+  fs.writeFileSync(path.join(p, '.claude', 'commands', 'test.md'), 'Lance les tests');
+  const l = loadCustomCommands(p);
+  assert.deepEqual(l.map(x => x.name), ['git:commit', 'review', 'test']);
+  assert.equal(l.find(x => x.name === 'review').description, 'relis le code');
+  assert.equal(expandCommand(l.find(x => x.name === 'review'), 'src/app.js'), 'Relis src/app.js et liste les bugs.');
+  assert.equal(expandCommand(l.find(x => x.name === 'git:commit'), 'le header'), 'Fais un commit pour le');
+  assert.equal(expandCommand(l.find(x => x.name === 'test'), 'unitaires'), 'Lance les tests\n\nunitaires', 'sans variable : arguments ajoutés à la fin');
+});
+
+test('ctrl+o : les sorties résumées et la pensée du modèle sont gardées puis affichées en entier', () => {
+  let out = ''; ui.attachSink({ print: s => out += s, spinner: () => {} });
+  ui.toolBody(Array.from({ length: 20 }, (_, i) => `ligne ${i + 1}`).join('\n'), { max: 5 });
+  assert.match(out, /\+15 lignes \(ctrl\+o pour tout voir\)/);
+  ui.rememberThinking('je réfléchis à la question');
+  out = ''; ui.showExpanded();
+  assert.match(out, /pensée du modèle/); assert.match(out, /ligne 20/);
+  out = ''; ui.showExpanded(); assert.match(out, /rien de replié/);
+  ui.attachSink(null);
+});

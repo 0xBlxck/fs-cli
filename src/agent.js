@@ -32,6 +32,7 @@ async function oneStream(S, content, signal) {
       agentId: S.agentId, chatId: S.chatId, content, files: S.pendingFileIds, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: 'main' },
       onChat: id => { if (!S.chatId) S.chatId = id; },
       onReasoning: d => {
+        ui.rememberThinking(d);
         if (!cfg.showThinking) return;
         thinkBuf += d;
         let i;

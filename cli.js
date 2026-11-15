@@ -20,6 +20,7 @@ import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
 import { runDoctor } from './src/doctor.js';
+import { loadCustomCommands, expandCommand } from './src/commands.js';
 import { startBridge } from './src/bridge.js';
 import { chromeExtensionInstalled, playwrightServer } from './src/browser.js';
 import { checkUpdate, INSTALL_CMD } from './src/update.js';
@@ -282,8 +283,11 @@ function suggest(buf, cur) {
   let m = /^\/(\S*)$/.exec(upto);
   if (m && cur === buf.length) {
     const q = m[1].toLowerCase();
-    const items = COMMANDS.filter(x => x.name.slice(1).startsWith(q)).concat(q.length > 1 ? COMMANDS.filter(x => !x.name.slice(1).startsWith(q) && x.name.includes(q)) : [])
-      .map(x => ({ label: x.usage.length > 30 ? x.name : x.usage, insert: x.name + (/[<\[]/.test(x.usage) ? ' ' : ''), desc: x.desc }));
+    // commandes perso (.fs-cli/commands, .claude/commands…) proposées en premier
+    const custom = loadCustomCommands(S.cwd).filter(x => x.name.startsWith(q) || (q.length > 1 && x.name.includes(q)))
+      .map(x => ({ label: '/' + x.name + (x.argumentHint ? ' ' + x.argumentHint : ''), insert: '/' + x.name + ' ', desc: `${x.description} ${c.dim('(' + x.source + ')')}` }));
+    const items = custom.concat(COMMANDS.filter(x => x.name.slice(1).startsWith(q)).concat(q.length > 1 ? COMMANDS.filter(x => !x.name.slice(1).startsWith(q) && x.name.includes(q)) : [])
+      .map(x => ({ label: x.usage.length > 30 ? x.name : x.usage, insert: x.name + (/[<\[]/.test(x.usage) ? ' ' : ''), desc: x.desc })));
     return { start: 0, items };
   }
   if ((m = /^(\/cd |\/read |\/project |\/tree )(.*)$/.exec(upto))) {
@@ -642,9 +646,12 @@ async function command(line) {
     case '/intent':                                                   // compréhension des demandes en langage naturel
       cfg.intents = arg ? /^(on|1|oui|true)$/i.test(arg) : cfg.intents === false; saveCfg();
       return println(c.dim(`  → demandes en langage naturel ${cfg.intents ? 'ON (« fais ce site avec plusieurs agents » lance une équipe…)' : 'OFF (seules les /commandes déclenchent les fonctions)'}`));
-    default:
+    default: {
       if (await extraCommand(cmd, arg, extraEnv())) return;
+      const custom = loadCustomCommands(S.cwd).find(x => '/' + x.name === cmd.toLowerCase());   // commande perso : son texte part comme une demande
+      if (custom) { println(c.dim(`  ↳ commande perso /${custom.name} (${custom.source})`)); return chatTurn(expandCommand(custom, arg)); }
       return println(c.red(`  commande inconnue: ${cmd}`) + c.dim('  (/help)'));
+    }
   }
 }
 
@@ -657,6 +664,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
   println();
   try {
     ui.tasks.clear();                                                  // nouvelle demande : le panneau de tâches repart de zéro
+    ui.resetThinking();
     if (!keepLast) { S.turnMarks ||= []; S.turnMarks.push({ at: S.undo.length, text: text.replace(/\s+/g, ' ').trim().slice(0, 70), t: Date.now() }); if (S.turnMarks.length > 50) S.turnMarks.shift(); }   // repère pour /rewind
     await maybeAutoCompact(S, turnAbort.signal);                       // contexte plein → résumé + nouvelle conversation
     const ex = extractImagePaths(text, S.images.length);               // image glissée-déposée (chemin collé) → [Image #n]
@@ -719,10 +727,21 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);
     try {
       await runAgent(S, message, { signal: turnAbort.signal, ask });
+      if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));
       if (ui.tasks.blocks > 1 && ui.tasks.list.length) {               // liste mise à jour pendant le travail : état final écrit une seule fois
         const L = ui.tasks.list, done = L.filter(t => t.state === 'done').length;
         println(`  ${c.bold('Tâches')} ${c.dim(`${done}/${L.length}`)}`);
         for (const t of L) println(`  ${t.state === 'done' ? c.green('☑') + ' ' + c.dim(t.text) : t.state === 'doing' ? c.yellow('◐') + ' ' + t.text : c.dim('☐') + ' ' + t.text}`);
+      }
+      // mode plan : le modèle a proposé un plan → on demande s'il faut l'appliquer (comme Claude Code)
+      if (cfg.mode === 'plan' && interactive && input.select && (S.lastResponse || '').trim()) {
+        const idx = await input.select({
+          title: 'Appliquer ce plan ?',
+          detail: 'Le modèle a travaillé en lecture seule. Choisis comment il doit maintenant l\'exécuter.',
+          options: ['Oui, et accepter les modifications automatiquement (mode auto)', 'Oui, en validant chaque action (mode confirmer)', 'Non, continuer à planifier'],
+          defaultIndex: 0,
+        });
+        if (idx === 0 || idx === 1) S.afterPlan = idx === 0 ? 'auto' : 'ask';
       }
     }
     finally { S.pendingFileIds = []; }                                  // les images ne partent qu'avec ce message
@@ -737,6 +756,11 @@ async function chatTurn(text, { keepLast = false } = {}) {
     saveSession();
   }
   println();
+  if (S.afterPlan) {                                                   // plan approuvé : on change de mode et on lance l'exécution
+    cfg.mode = S.afterPlan; S.afterPlan = null; saveCfg(); S.allow = {}; refreshPrompt();
+    println(c.green(`  ✓ plan approuvé : exécution en mode ${cfg.mode === 'auto' ? 'auto' : 'confirmer'}`));
+    return chatTurn('Le plan est approuvé : exécute-le maintenant, étape par étape, en tenant la liste de tâches à jour.');
+  }
 }
 
 async function direct(cmdline) {
@@ -819,6 +843,7 @@ input.on('cycleMode', cycleMode);
 ui.tasks.on(list => input.setTasks?.(list));                          // liste de tâches du modèle → panneau épinglé
 await startBridge({ getManager: () => getMcp(S.cwd), getCwd: () => S.cwd });   // pont local : fs-mcp garde les serveurs MCP ouverts (navigateur…)
 input.on('rewind', () => { if (!busy) runInput('/rewind'); });      // Échap ×2 : revenir en arrière
+input.on('expand', () => ui.showExpanded());                          // Ctrl+O : déplier les sorties résumées et la pensée
 input.on('pasteImage', () => { try { pasteClipboardImage(); } catch (e) { println(c.red('  image : ' + e.message)); } });
 input.on('quit', () => { shutdown(0); });
 process.on('exit', () => { try { input.stop(); } catch {} });
