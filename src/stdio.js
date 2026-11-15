@@ -67,7 +67,8 @@ export class StdioInput {
   event(type, data) { send(type, data); }
   select({ title, detail = '', options, defaultIndex = 0 }) {
     const id = ++this.seq;
-    send('select', { id, title, detail, options, defaultIndex });
+    const plain = s => String(s ?? '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+    send('select', { id, title: plain(title), detail: plain(detail), options: (options || []).map(plain), defaultIndex });
     return new Promise(resolve => this.pending.set(id, resolve));
   }
   askLine(label) {

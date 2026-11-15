@@ -73,7 +73,7 @@ test('erreurs : outil inconnu, fichier absent, texte à éditer introuvable → 
   assert.match(r[0].output, /inconnu/i);
 });
 
-test('garde-fous : commande interdite refusée, suppression → menu (refus = isError), secret → confirmation', async () => {
+test('garde-fous : commande interdite refusée, suppression → menu (refus = isError), secret → confirmation', { skip: process.platform !== 'win32' && 'commandes PowerShell (Windows)' }, async () => {
   const { dir, S } = mk();
   fs.writeFileSync(path.join(dir, 'x.txt'), 'garde-moi');
   const asked = [];

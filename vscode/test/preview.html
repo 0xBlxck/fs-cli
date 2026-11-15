@@ -49,6 +49,21 @@ const steps = [
   () => E({ type: 'busy', busy: false }),
 ];
 if (location.hash === "#accueil") steps.length = 3;
+if (location.hash === "#entree") { steps.length = 1; steps.push(
+  () => E({ type: 'select', id: 7, title: 'Lancer cette commande ? rm -rf build', detail: '', options: ['Oui', 'Non'], defaultIndex: 0 }),
+  () => { const ta = document.querySelector('textarea'); ta.focus(); ta.value = 'attends non'; ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); },
+  () => { const ta = document.querySelector('textarea'); ta.focus(); ta.value = ''; ta.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true, cancelable: true })); },
+  () => { const out = document.createElement('pre'); out.id = 'resultat'; out.textContent = JSON.stringify(window.sent.filter(m => m.type === 'send' || m.type === 'select')); document.body.append(out); }); }
+if (location.hash === "#usage") { steps.length = 2; steps.push(() => E({ type: 'card', title: 'Consommation', sections: [
+  { title: 'Compte France Student', rows: [
+    { label: 'Budget de chat', pct: 38, value: '62 % restant', note: 'remise à zéro lun. 16 nov. 04:59' },
+    { label: 'Nouvelles conversations', pct: 2, value: "1 / 50 aujourd'hui", note: 'remise à zéro lun. 16 nov. 05:00 · les conversations supprimées comptent aussi' },
+    { label: 'Transcriptions (jour)', pct: 0, value: '0 / 5', note: 'remise à zéro lun. 16 nov. 00:26' },
+    { label: 'Invitations (mois)', pct: 20, value: '1 / 5', note: 'remise à zéro mar. 15 déc. 02:22' }] },
+  { title: 'Cette session', rows: [
+    { label: 'Durée', value: '15 min' }, { label: 'Échanges', value: '3 demandes · 7 requêtes · 12 outils' }, { label: 'Tokens', value: '18.2k envoyés · 4.1k reçus' },
+    { label: 'Contexte', pct: 8, value: '8 %', note: 'compactage auto à 80 %' }] }],
+  footnote: 'France Student indique que le décompte du budget peut être approximatif.' })); }
 if (location.hash === "#mcp") { steps.length = 2; steps.push(() => E({ type: 'mcpPanel', servers: [
   { name: 'supabase', group: 'Ce projet', status: 'connecting', transport: 'http', target: 'https://mcp.supabase.com/mcp' },
   { name: 'playwright', group: 'FS-CLI', status: 'connected', toolCount: 45, transport: 'stdio', target: 'npx -y @playwright/mcp@latest' },

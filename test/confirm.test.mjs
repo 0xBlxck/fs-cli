@@ -30,7 +30,7 @@ function setup() {
 }
 const waitFor = async (cond, ms = 5000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (cond()) return true; await new Promise(r => setTimeout(r, 25)); } return false; };
 
-test('suppression : menu → Non (avec raison) garde le fichier, « toujours » enregistre une règle', async () => {
+test('suppression : menu → Non (avec raison) garde le fichier, « toujours » enregistre une règle', { skip: process.platform !== 'win32' && 'commandes PowerShell (Windows)' }, async () => {
   const { sim, type, tui, ask } = setup();
   const dir = fs.mkdtempSync(path.join(tmp, 'w-'));
   fs.writeFileSync(path.join(dir, 'x.txt'), 'a'); fs.writeFileSync(path.join(dir, 'y.txt'), 'b');
@@ -64,7 +64,7 @@ test('suppression : menu → Non (avec raison) garde le fichier, « toujours » 
   tui.stop();
 });
 
-test('commande refusée par la politique : aucun menu', async () => {
+test('commande refusée par la politique : aucun menu', { skip: process.platform !== 'win32' && 'commandes PowerShell (Windows)' }, async () => {
   const { sim, tui, ask } = setup();
   const S = { cwd: tmp, undo: [], allow: {}, pendingResults: [] };
   const r = await runBlock(S, { action: 'shell', lang: 'powershell', code: 'Format-Volume -DriveLetter D' }, { signal: new AbortController().signal, ask, auto: true });
@@ -88,7 +88,7 @@ test('secret détecté : menu à 2 options, Échap = fichier non écrit', async 
   tui.stop();
 });
 
-test('Ctrl+C dans un menu : refus + interruption', async () => {
+test('Ctrl+C dans un menu : refus + interruption', { skip: process.platform !== 'win32' && 'commandes PowerShell (Windows)' }, async () => {
   const { sim, type, tui, ask } = setup();
   let interrupted = 0; tui.on('interrupt', () => interrupted++);
   const dir = fs.mkdtempSync(path.join(tmp, 'w-'));

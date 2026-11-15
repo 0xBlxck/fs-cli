@@ -60,7 +60,7 @@ export function hasExtension(editor) {
 export function buildVsix() {
   const pack = path.join(ROOT, 'vscode', 'scripts', 'pack.mjs');
   if (!fs.existsSync(pack)) throw new Error('dossier vscode/ absent de cette installation : mets FS-CLI à jour');
-  const dir = path.join(os.tmpdir(), 'fs-cli-vscode');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fs-cli-vscode-'));   // dossier unique : rien ne peut être glissé à la place du .vsix
   const r = spawnSync(process.execPath, [pack, dir], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   if (r.status !== 0) throw new Error(`fabrication de l'extension impossible : ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`);
   const ver = JSON.parse(fs.readFileSync(path.join(ROOT, 'vscode', 'package.json'), 'utf8')).version;

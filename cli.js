@@ -12,7 +12,7 @@ import { execSync, spawnSync } from 'node:child_process';
 import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession } from './src/config.js';
 import { fetchAgents } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, IS_WIN } from './src/tools.js';
-import { runAgent, runBlock, setSelectHandler } from './src/agent.js';
+import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
 import { StdioInput, send as stdioSend } from './src/stdio.js';
 import { findEditors, buildVsix, installInto } from './src/vscode-install.js';
@@ -429,6 +429,7 @@ const extraEnv = () => ({
   select: input.select ? o => input.select(o) : null,
   chatTurn: (t, o) => chatTurn(t, o),
   ...(opts.stdio && panelAtLeast('0.4.0') ? { mcpPanel: () => openMcpPanel() } : {}),
+  ...(opts.stdio && panelAtLeast('0.5.0') ? { card: data => stdioSend('card', data) } : {}),
 });
 
 const PANEL_VER = String(process.env.FS_CLI_PANEL || '');            // version de l'extension qui pilote ce CLI (vide = ancienne extension)
@@ -606,7 +607,7 @@ async function command(line) {
       if (/^\d+$/.test(arg)) pick = marks[parseInt(arg, 10) - 1] || null;
       else if (input.select && interactive) {
         const idx = await input.select({ title: 'Revenir à l\'état des fichiers d\'avant quelle demande ?', detail: 'Les fichiers modifiés par le modèle depuis cette demande reprennent leur ancien contenu ; ceux qu\'il a créés partent dans la corbeille du CLI. Les effets des commandes (npm install…) ne sont pas annulés.', options: [...marks.slice(0, 9).map(label), 'Annuler'], defaultIndex: 0 });
-        pick = idx == null ? null : marks[idx] || null;
+        pick = idx == null || idx >= Math.min(9, marks.length) ? null : marks[idx];
       } else { marks.slice(0, 9).forEach((m, i) => println(`  ${c.accent(String(i + 1))}  ${label(m)}`)); return println(c.dim('\n  /rewind <n°> pour revenir à ce point\n')); }
       if (!pick) return println(c.dim('  rien n\'a été annulé'));
       const done = [];
@@ -639,7 +640,7 @@ async function command(line) {
       if (sub === 'diff' && num) return showDiff(at(num));
       if (input.select && interactive) {
         const idx = await input.select({ title: `Fichiers modifiés dans cette session · ${files.length}`, detail: 'Choisis un fichier pour voir son diff ou l\'annuler.', options: [...files.slice(0, 9).map(f => changeLine(f, S.cwd, c)), 'Fermer'] });
-        const f = idx == null ? null : files[idx];
+        const f = idx == null || idx >= Math.min(9, files.length) ? null : files[idx];
         if (!f) return;
         showDiff(f);
         const act = await input.select({ title: `Annuler les modifications de ${path.basename(f.path)} ?`, detail: f.created ? 'Le fichier a été créé par le modèle : il partira dans la corbeille du CLI (récupérable).' : 'Le fichier reprendra son contenu d\'avant la première modification du modèle. Les autres fichiers ne bougent pas.', options: ['Non, garder', 'Oui, annuler ce fichier'] });
@@ -975,8 +976,9 @@ if (opts.stdio) {                                                    // commande
   input.on('setMode', m => { if (MODES.includes(m)) { cfg.mode = m; saveCfg(); S.allow = {}; refreshPrompt(); } });
   input.on('setModel', id => { const r = resolveModel(id); if (r !== null) { S.agentId = r; cfg.agentId = r; saveCfg(); saveSession(); refreshPrompt(); } });
   input.on('diffBefore', (id, file) => {                               // contenu d'avant d'un fichier modifié (diff natif de VS Code) : seulement les fichiers touchés par le modèle
-    const d = fileDiff(S.undo, String(file || ''));
-    stdioSend('diffBefore', { id, path: file, ok: !!d, before: d ? d.before : '', created: d ? d.created : false });
+    const abs = path.resolve(baseDir(S), String(file || ''));                 // relatif au dossier de travail (ou au dossier cible)
+    const d = fileDiff(S.undo, abs) || fileDiff(S.undo, path.resolve(S.cwd, String(file || '')));
+    stdioSend('diffBefore', { id, path: d ? (fileDiff(S.undo, abs) ? abs : path.resolve(S.cwd, String(file || ''))) : abs, ok: !!d, before: d ? d.before : '', created: d ? d.created : false });
   });
   input.on('mcpAction', async (action, name) => {                    // boutons de la fenêtre « Serveurs MCP »
     const mgr = getMcp(S.cwd), sv = loadMcpConfig(S.cwd).mcpServers?.[name];
@@ -994,7 +996,8 @@ if (opts.stdio) {                                                    // commande
   });
   input.on('undoFile', file => {                                       // bouton « Annuler » d'un fichier du bilan
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour annuler un fichier' });
-    const r = undoFile(S, file, FILES.trash);
+    let r;
+    try { r = undoFile(S, file, FILES.trash); } catch (e) { return stdioSend('flash', { text: `impossible d'annuler : ${e.code || e.message}` }); }
     if (!r) return stdioSend('flash', { text: 'rien à annuler pour ce fichier' });
     S.notes.push(`L'utilisateur a annulé tes modifications du fichier ${file} (retour à son état d'avant). Relis-le avant de le modifier.`);
     stdioSend('fileUndone', { path: file, message: r });
@@ -1064,10 +1067,12 @@ if (interactive) {
 }
 refreshPrompt();
 banner();
+if (opts.stdio) input.setBusy(true);                                 // panneau : rien ne part au modèle tant que la confiance n'est pas décidée
 if (!(await ensureFolderTrust(S.cwd))) {
   println(c.dim('  Dossier non approuvé : relance FS-CLI depuis le dossier de ton projet (ou --cwd <dossier>).'));
   saveSession(); input.stop(); process.exit(0);
 }
+if (opts.stdio) { input.setBusy(false); const q = input.takeQueued(); if (q) runInput(q); }
 if (!opts.stdio && !cfg.vscodeTip) {                                 // une seule fois : le panneau de chat existe aussi pour l'éditeur
   try { const eds = findEditors(); if (eds.length) println(c.dim('  💡 FS-CLI existe aussi en panneau de chat dans ' + eds.map(e => e.name).join(', ') + ' : tape ') + c.accent('/vscode')); } catch {}
   cfg.vscodeTip = true; saveCfg();

@@ -51,7 +51,7 @@ export const statusOfError = msg => (/\b401\b|OAuth|unauthori[sz]ed|authenticat/
 export async function connectAll(mgr, servers, onStatus, { timeoutMs = 20000 } = {}) {
   const todo = servers.filter(s => s.status === 'idle' || s.status === 'connected' || s.status === 'error' || s.status === 'auth');
   await Promise.all(todo.map(async s => {
-    onStatus({ name: s.name, status: 'connecting' });
+    onStatus({ name: s.name, status: 'connecting', error: undefined });
     onStatus(await connectOne(mgr, s.name, { timeoutMs }));
   }));
 }
@@ -60,7 +60,7 @@ export async function connectOne(mgr, name, { timeoutMs = 20000 } = {}) {
   try {
     const info = await mgr.connect(name, { timeoutMs });
     const tools = (await mgr.listTools?.(name).catch(() => null)) || null;
-    return { name, status: 'connected', toolCount: info.toolCount, tools: Array.isArray(tools) ? tools.slice(0, 80).map(t => ({ name: t.name, description: String(t.description || '').replace(/\s+/g, ' ').slice(0, 160) })) : undefined };
+    return { name, status: 'connected', error: undefined, toolCount: info.toolCount, tools: Array.isArray(tools) ? tools.slice(0, 80).map(t => ({ name: t.name, description: String(t.description || '').replace(/\s+/g, ' ').slice(0, 160) })) : undefined };
   } catch (e) {
     const msg = String(e?.message || e).slice(0, 400);
     return { name, status: statusOfError(msg), error: msg };

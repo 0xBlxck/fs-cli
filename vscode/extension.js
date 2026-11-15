@@ -101,7 +101,12 @@ class Chat {
     p.stderr.setEncoding('utf8');
     let errTail = '';
     p.stderr.on('data', d => { errTail = (errTail + d).slice(-2000); });
-    p.on('error', e => { this.post({ type: 'exit', code: -1, message: /ENOENT/.test(e.message) ? 'FS-CLI introuvable. Installe-le : npm install -g github:0xBlxck/fs-cli' : e.message }); });
+    p.stdin.on('error', () => {});                                      // processus déjà terminé : écriture perdue, pas d'erreur dans l'éditeur
+    p.on('error', e => {
+      if (this.proc === p) this.proc = null;                            // sinon start() croirait le CLI encore lancé
+      const missing = /ENOENT/.test(e.message);
+      this.post({ type: 'exit', code: -1, message: missing ? (cmd === 'node' ? 'Node.js introuvable dans le PATH de l\'éditeur. Installe Node.js (nodejs.org) puis redémarre l\'éditeur.' : 'FS-CLI introuvable. Installe-le : npm install -g github:0xBlxck/fs-cli') : e.message });
+    });
     p.on('exit', code => {
       if (this.proc !== p) return;
       this.proc = null;
@@ -164,7 +169,7 @@ class Chat {
         const ext = /png|jpe?g|gif|webp/i.exec(String(m.mime || ''))?.[0]?.replace('jpeg', 'jpg') || 'png';
         const data = String(m.data || '');
         if (!data || data.length > 14_000_000) return;
-        const dir = path.join(os.tmpdir(), 'fs-cli-images');
+        const dir = (this.imgDir ||= fs.mkdtempSync(path.join(os.tmpdir(), 'fs-cli-images-')));   // dossier unique par panneau
         fs.mkdirSync(dir, { recursive: true });
         const file = path.join(dir, `collage-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
         fs.writeFileSync(file, Buffer.from(data, 'base64'));
@@ -187,11 +192,11 @@ class Chat {
 
   /** diff natif de VS Code : contenu d'avant (donné par le CLI, seulement pour un fichier qu'il a modifié) ↔ fichier actuel */
   async openDiff(p) {
-    p = this.abs(p);
     if (!p || !this.proc) return this.openFile(p);
     const id = crypto.randomBytes(6).toString('hex');
     const ev = await new Promise(res => { this.pendingDiff.set(id, res); this.toCli({ type: 'diffBefore', id, path: p }); setTimeout(() => { if (this.pendingDiff.delete(id)) res(null); }, 5000); });
     if (!ev || !ev.ok) return this.openFile(p);
+    p = ev.path || this.abs(p);
     const name = path.basename(p);
     const left = vscode.Uri.from({ scheme: 'fs-cli-before', path: `/${id}/${name}` });
     beforeDocs.set(left.toString(), ev.before);

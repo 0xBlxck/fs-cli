@@ -378,7 +378,8 @@
     S.ask = card; add(el); inp.focus();
   }
   document.addEventListener('keydown', e => {
-    if (S.ask && (document.activeElement === S.ask.el || document.activeElement === document.body || (document.activeElement === ta && !ta.value))) S.ask.key(e);
+    if (e.defaultPrevented || !S.ask) return;                          // touche déjà traitée (ex. Entrée qui envoie un message) : jamais une réponse
+    if (document.activeElement === S.ask.el || document.activeElement === document.body) S.ask.key(e);
   });
 
   // ── indicateur d'attente ──
@@ -526,7 +527,14 @@
     const uris = (e.dataTransfer?.getData('text/uri-list') || '').split(/\r?\n/).filter(u => /^file:/.test(u));
     if (!uris.length) return;
     e.preventDefault();
-    const paths = uris.map(u => decodeURIComponent(u.replace(/^file:\/\/\/?/, '')).replace(/^([a-zA-Z]):/, '$1:').replace(/\//g, navigator.platform.startsWith('Win') ? '\\' : '/'));
+    const win = navigator.platform.startsWith('Win');
+    const paths = uris.map(u => {
+      try {
+        const url = new URL(u); let p = decodeURIComponent(url.pathname);
+        if (win) { p = p.replace(/^\/([a-zA-Z]:)/, '$1').replace(/\//g, '\\'); if (url.host) p = '\\\\' + url.host + p; }   // C:\… ou \\serveur\partage\…
+        return p;
+      } catch { return ''; }
+    }).filter(Boolean);
     insert(paths.map(p => '@' + (p.includes(' ') ? `"${p}"` : p)).join(' ') + ' ');
   });
   function insert(text) { const s = ta.selectionStart ?? ta.value.length; ta.value = ta.value.slice(0, s) + text + ta.value.slice(ta.selectionEnd ?? s); ta.selectionStart = ta.selectionEnd = s + text.length; autosize(); ta.focus(); }
@@ -586,6 +594,7 @@
   function mcpStatus(r) {
     const s = MCP.data?.servers.find(x => x.name === r.name);
     if (!s) return;
+    if (r.status !== 'error' && r.status !== 'auth') delete s.error;   // reconnecté : l'ancienne erreur disparaît (JSON ne transmet pas « error: undefined »)
     Object.assign(s, r);
     if (MCP.el) mcpRender();
   }
@@ -646,6 +655,32 @@
   }
   document.addEventListener('keydown', e => { if (MCP.el && e.key === 'Escape') { e.preventDefault(); mcpClose(); } });
 
+  // ── carte d'infos (/usage…) : sections de lignes, barres de progression colorées selon le niveau ──
+  function card(data) {
+    aiEnd(); thinkEnd();
+    const el = h('div', 'card');
+    if (data.title) el.append(h('div', 'ct', data.title));
+    for (const sec of data.sections || []) {
+      if (sec.title) el.append(h('div', 'cs', sec.title));
+      for (const r of sec.rows || []) {
+        const row = h('div', 'cr');
+        row.append(h('div', 'cl', r.label));
+        const v = h('div', 'cv' + (r.ok ? ' ok' : ''));
+        if (typeof r.pct === 'number' && isFinite(r.pct)) {
+          const p = Math.max(0, Math.min(100, r.pct));
+          const top = h('div', 'bv'); top.append(h('b', null, `${Math.round(p)} %`), h('span', null, r.value || ''));
+          const bar = h('div', 'bar' + (p > 90 ? ' crit' : p > 75 ? ' warn' : '')); const fill = h('i'); fill.style.width = p + '%'; bar.append(fill);
+          v.append(top, bar);
+        } else v.textContent = r.value || '';
+        row.append(v);
+        if (r.note) row.append(h('div', 'cn', r.note));
+        el.append(row);
+      }
+    }
+    if (data.footnote) el.append(h('div', 'cf', data.footnote));
+    add(el);
+  }
+
   // ── messages de l'extension ──
   window.addEventListener('message', ({ data: m }) => {
     if (!m || typeof m !== 'object') return;
@@ -683,6 +718,7 @@
       }
       case 'select': mcpClose(); selectCard(ev); break;
       case 'mcpPanel': mcpPanel(ev); break;
+      case 'card': card(ev); break;
       case 'mcpStatus': mcpStatus(ev); break;
       case 'ask': askCard(ev); break;
       case 'flash': showFlash(ev.text); break;

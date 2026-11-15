@@ -303,25 +303,10 @@ export async function extraCommand(cmd, arg, env) {
     case '/usage': {                                                  // tout en un : compte, limites du jour, session, conversation
       ui.spinner.start('consommation…');
       const [u, chatU] = await Promise.all([fetchUserUsage(), fetchChatUsage(S.chatId)]);
-      ui.spinner.stop();
-      const bar = (p, w = 24) => {
-        const v = Math.max(0, Math.min(100, Number(p) || 0)), n = Math.round(v / 100 * w);
-        const col = v > 90 ? c.red : v > 75 ? c.yellow : c.accent;
-        return col('█'.repeat(n)) + c.dim('░'.repeat(w - n)) + ' ' + (col === c.accent ? c.bold : col)(`${Math.round(v)} %`);
-      };
       const local = iso => { const d = new Date(iso); if (isNaN(d)) return '?'; const today = new Date().toDateString() === d.toDateString();
         return (today ? 'aujourd\'hui ' : d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' }) + ' ') + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); };
       const k = n => (n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + 'k' : String(n || 0));
-      const NAMES = { TRANSCRIPT_UPLOAD: 'transcriptions (jour)', USER_INVITES: 'invitations (mois)' };
-      const row = (label, value) => println(`  ${c.dim(label.padEnd(24))} ${value}`);
-      println();
-      println(`  ${c.bold('Compte France Student')}`);
-      if (u?.chatBudget) {
-        row('budget de chat', bar(u.chatBudget.usedPercent));
-        row('', c.dim(`${Math.round(u.chatBudget.remainingPercent)} % restant · remise à zéro ${local(u.chatBudget.resetAt)}`));
-      } else row('budget de chat', c.dim('indisponible'));
-      for (const rl of u?.rateLimits || []) row(NAMES[rl.type] || String(rl.type || '?').toLowerCase().replace(/_/g, ' '), `${rl.used}/${rl.limit}  ${c.dim('· remise à zéro ' + local(rl.resetAt))}`);
-      if (u?.rateLimitPowerUpActive) row('power-up', c.green('actif (limites doublées)'));
+      const NAMES = { TRANSCRIPT_UPLOAD: 'Transcriptions (jour)', USER_INVITES: 'Invitations (mois)' };
       // conversations créées depuis la remise à zéro (04:00 UTC) : liste du compte + projet FS-CLI (exclu de la liste), et compteur local
       const since = lastReset();
       const seen = new Map();
@@ -332,22 +317,45 @@ export async function extraCommand(cmd, arg, env) {
         const pid = cfg.fsProject?.id || (await listFsProjects().catch(() => [])).find(p => String(p?.name || '').toLowerCase() === want)?.id;
         if (pid) addAll((await requestJson('GET', `/projects/${encodeURIComponent(pid)}/chats`).catch(() => ({}))).data?.chats);
       }
+      ui.spinner.stop();
       const made = Math.max(seen.size, createdToday());
-      row('nouvelles conversations', `${made} créée${made > 1 ? 's' : ''} aujourd'hui ${c.dim(`(limite ${DAILY_LIMIT}/jour · remise à zéro ${local(new Date(since + 86400000).toISOString())})`)}`);
-      row('', c.dim('les conversations supprimées comptent aussi dans la limite mais ne sont plus visibles'));
-      println();
-      println(`  ${c.bold('Cette session')}`);
+
+      // ── données : une carte = des sections de lignes { label, value, pct?, note? } ──
+      const account = [];
+      if (u?.chatBudget) account.push({ label: 'Budget de chat', pct: Number(u.chatBudget.usedPercent) || 0, value: `${Math.round(u.chatBudget.remainingPercent)} % restant`, note: `remise à zéro ${local(u.chatBudget.resetAt)}` });
+      else account.push({ label: 'Budget de chat', value: 'indisponible' });
+      account.push({ label: 'Nouvelles conversations', pct: made / DAILY_LIMIT * 100, value: `${made} / ${DAILY_LIMIT} aujourd'hui`, note: `remise à zéro ${local(new Date(since + 86400000).toISOString())} · les conversations supprimées comptent aussi` });
+      for (const rl of u?.rateLimits || []) account.push({ label: NAMES[rl.type] || String(rl.type || '?').toLowerCase().replace(/_/g, ' '), pct: rl.limit ? rl.used / rl.limit * 100 : undefined, value: `${rl.used} / ${rl.limit}`, note: `remise à zéro ${local(rl.resetAt)}` });
+      if (u?.rateLimitPowerUpActive) account.push({ label: 'Power-up', value: 'actif (limites doublées)', ok: true });
       const st = S.stats || { turns: 0, requests: 0, tools: 0 }, mins = Math.round((Date.now() - (S.startedAt || Date.now())) / 60000);
-      row('durée', `${mins < 60 ? mins + ' min' : Math.floor(mins / 60) + ' h ' + (mins % 60) + ' min'}`);
-      row('échanges', `${st.turns} demande${st.turns > 1 ? 's' : ''} · ${st.requests} requête${st.requests > 1 ? 's' : ''} · ${st.tools} outil${st.tools > 1 ? 's' : ''} lancé${st.tools > 1 ? 's' : ''}`);
-      row('tokens', `${k(S.tokens?.in)}↑ envoyés · ${k(S.tokens?.out)}↓ reçus`);
+      const session = [
+        { label: 'Durée', value: mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min` },
+        { label: 'Échanges', value: `${st.turns} demande${st.turns > 1 ? 's' : ''} · ${st.requests} requête${st.requests > 1 ? 's' : ''} · ${st.tools} outil${st.tools > 1 ? 's' : ''}` },
+        { label: 'Tokens', value: `${k(S.tokens?.in)} envoyés · ${k(S.tokens?.out)} reçus` },
+      ];
       if (S.chatId) {
         const pctCtx = Number(chatU?.contextUsagePercent);
-        row('contexte de la conversation', Number.isFinite(pctCtx) ? bar(pctCtx) + c.dim(cfg.autoCompact ? `  (compactage auto à ${cfg.compactThreshold} %)` : '') : c.dim('indisponible'));
-        const t = chatU?.tokenUsage;
-        if (t?.totalTokenCount) row('tokens de la conversation', c.dim(`${k(t.totalTokenCount)} au total`));
-      } else row('conversation', c.dim('pas encore commencée'));
-      if (u?.chatBudget?.accountingUncertain) println(c.dim('\n  (France Student indique que le décompte du budget peut être approximatif)'));
+        session.push(Number.isFinite(pctCtx) ? { label: 'Contexte', pct: pctCtx, value: 'utilisé', note: cfg.autoCompact ? `compactage auto à ${cfg.compactThreshold} %` : '' } : { label: 'Contexte', value: 'indisponible' });
+        if (chatU?.tokenUsage?.totalTokenCount) session.push({ label: 'Tokens de la conversation', value: `${k(chatU.tokenUsage.totalTokenCount)} au total` });
+      } else session.push({ label: 'Conversation', value: 'pas encore commencée' });
+      const card = { title: 'Consommation', sections: [{ title: 'Compte France Student', rows: account }, { title: 'Cette session', rows: session }],
+        footnote: u?.chatBudget?.accountingUncertain ? 'France Student indique que le décompte du budget peut être approximatif.' : '' };
+
+      if (env.card) { env.card(card); return true; }                 // panneau VS Code : vraie carte avec barres
+      // ── terminal ──
+      const bar = (p, w = 24) => {
+        const v = Math.max(0, Math.min(100, Number(p) || 0)), n = Math.round(v / 100 * w);
+        const col = v > 90 ? c.red : v > 75 ? c.yellow : c.accent;
+        return col('█'.repeat(n)) + c.dim('░'.repeat(w - n)) + ' ' + (col === c.accent ? c.bold : col)(`${Math.round(v)} %`);
+      };
+      for (const sec of card.sections) {
+        println(`\n  ${c.bold(sec.title)}`);
+        for (const r of sec.rows) {
+          println(`  ${c.dim(r.label.toLowerCase().padEnd(26))} ${r.pct !== undefined ? bar(r.pct) + '  ' + c.dim(r.value) : r.ok ? c.green(r.value) : r.value}`);
+          if (r.note) println(`  ${' '.repeat(26)} ${c.dim(r.note)}`);
+        }
+      }
+      if (card.footnote) println(c.dim(`\n  (${card.footnote})`));
       println();
       return true;
     }

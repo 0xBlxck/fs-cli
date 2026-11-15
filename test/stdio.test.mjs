@@ -77,3 +77,17 @@ test('serveurs MCP importés : actifs par défaut, demande seulement avec /mcp a
     assert.equal(isImportApproved('x', { command: 'node', args: ['a.js'] }), false);
   } finally { cfg.mcpAskImported = prev; }
 });
+
+test('menus envoyés au panneau : sans codes couleur du terminal', async () => {
+  const { StdioInput } = await import('../src/stdio.js');
+  const writes = [], orig = process.stdout.write;
+  process.stdout.write = s => { writes.push(String(s)); return true; };
+  let inp;
+  try {
+    inp = new StdioInput();
+    inp.select({ title: '\x1b[1mTitre\x1b[22m', options: ['\x1b[32m＋\x1b[39m a.js', 'Fermer'] });
+    const ev = JSON.parse(writes.at(-1).slice(1));
+    assert.equal(ev.title, 'Titre');
+    assert.deepEqual(ev.options, ['＋ a.js', 'Fermer']);
+  } finally { process.stdout.write = orig; inp?.stop(); }
+});

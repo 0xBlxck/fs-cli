@@ -1,6 +1,7 @@
 // Dossier cible : si la demande cite un chemin Windows absolu (ex. « dans C:\Users\moi\Downloads\SITE »), les fichiers à nom relatif y sont écrits
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 const isDir = p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const STOP = /^(avec|et|pour|qui|que|dont|où|ya|il|elle|je|tu|on|stp|svp|merci|puis|ensuite|sans|dans|sur|and|with|for|please|then|which|that|the)$/i;
@@ -9,8 +10,11 @@ const trimTail = s => s.replace(/[\s.,;:!?)\]}»"'`]+$/g, '');
 /** Cherche dans `text` un dossier cible ; renvoie un chemin absolu ou null. Les chemins avec espaces sont reconnus par essais sur le disque. */
 export function detectTargetDir(text) {
   const cands = [];
-  for (const m of text.matchAll(/["'`]([A-Za-z]:[\\/][^"'`\r\n]+)["'`]/g)) cands.push(m[1]);          // chemin entre guillemets
-  for (const m of text.matchAll(/(?:^|[\s(])([A-Za-z]:[\\/][^\r\n]*)/g)) cands.push(m[1]);               // reste de la ligne : on teste les préfixes
+  // racine d'un chemin absolu : C:\ ou C:/ partout ; /… et ~/… seulement hors Windows (sous Windows « /api » serait pris pour C:\api)
+  const ROOT = process.platform === 'win32' ? String.raw`[A-Za-z]:[\\/]` : String.raw`(?:[A-Za-z]:[\\/]|~\/|\/(?=[^\s/]))`;
+  const home = s => (s.startsWith('~/') ? path.join(os.homedir(), s.slice(2)) : s);
+  for (const m of text.matchAll(new RegExp(String.raw`["'\`](${ROOT}[^"'\`\r\n]+)["'\`]`, 'g'))) cands.push(home(m[1]));   // chemin entre guillemets
+  for (const m of text.matchAll(new RegExp(String.raw`(?:^|[\s(])(${ROOT}[^\r\n]*)`, 'g'))) cands.push(home(m[1]));       // reste de la ligne : on teste les préfixes
   for (const raw of cands) {
     const toks = raw.split(/\s+/);
     for (let k = toks.length; k >= 1; k--) {                                                               // du plus long au plus court

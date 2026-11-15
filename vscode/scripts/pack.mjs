@@ -10,7 +10,7 @@ const xml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;',
 
 // fichiers de l'extension (liste explicite : rien d'autre ne part dans le paquet)
 const files = [['package.json'], ['extension.js'], ['README.md'], ['LICENSE', 'LICENSE.txt'],
-  ...fs.readdirSync(path.join(root, 'media')).map(f => [`media/${f}`])];
+  ...fs.readdirSync(path.join(root, 'media'), { withFileTypes: true }).filter(d => d.isFile()).map(d => [`media/${d.name}`])];
 
 const manifest = `<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
