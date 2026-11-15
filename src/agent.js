@@ -134,6 +134,14 @@ export function needsConfirm(risk, S) {
 }
 
 // ── Exécution d'un appel ──────────────────────────────────────────────────────
+/** fichiers déjà lus dans la conversation en cours (null tant qu'elle n'existe pas : rien n'est réutilisé d'une conversation à l'autre) */
+function readCacheFor(S) {
+  if (!S.chatId) return null;
+  S.readCaches ||= new Map();
+  if (!S.readCaches.has(S.chatId)) { S.readCaches.set(S.chatId, new Map()); if (S.readCaches.size > 20) S.readCaches.delete(S.readCaches.keys().next().value); }
+  return S.readCaches.get(S.chatId);
+}
+
 export async function execCall(S, call, { signal, ask, root = null }) {
   const tool = TOOLS[call.name];
   if (!tool) {
@@ -142,7 +150,7 @@ export async function execCall(S, call, { signal, ask, root = null }) {
     return { name: call.name, ok: false, output: `Outil inconnu: "${call.name}". Outils disponibles: ${Object.keys(TOOLS).join(', ')}.` };
   }
   const { args, missing } = normalizeArgs(tool, call.args);
-  const ctx = { cwd: root || S.cwd, signal, undo: S.undo };      // root = racine du workspace (moteur natif)
+  const ctx = { cwd: root || S.cwd, signal, undo: S.undo, readCache: readCacheFor(S) };      // root = racine du workspace (moteur natif)
   if (missing.length) {
     ui.toolHeader(call.name, '');
     ui.toolBody(`paramètre manquant: ${missing.join(', ')}`, { error: true });

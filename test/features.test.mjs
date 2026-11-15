@@ -197,3 +197,22 @@ test('serveurs locaux : reconnus, lancés en arrière-plan ; Start-Process d\'un
     assert.equal(hideConsoleLaunch('Start-Process node a.js -NoNewWindow'), 'Start-Process node a.js -NoNewWindow');
   }
 });
+
+test('relecture d\'un fichier inchangé : pas renvoyé ; renvoyé si redemandé aussitôt ou s\'il a changé', async () => {
+  const os = await import('node:os'), fs = await import('node:fs'), path = await import('node:path');
+  const { TOOLS } = await import('../src/tools.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-reread-'));
+  const f = path.join(dir, 'a.js'); fs.writeFileSync(f, 'const a = 1;\nconst b = 2;\n');
+  const ctx = { cwd: dir, readCache: new Map() };
+  const read = () => TOOLS.read_file.run({ path: 'a.js' }, ctx);
+  assert.match((await read()).output, /const a = 1/);                     // 1re lecture : en entier
+  const again = await read();
+  assert.match(again.output, /inchangé depuis ta lecture précédente/);       // relecture identique : pas renvoyé
+  assert.ok(again.output.length < 400);
+  assert.match((await read()).output, /const a = 1/);                     // redemandé aussitôt : en entier (soupape)
+  assert.match((await read()).output, /inchangé/);
+  fs.writeFileSync(f, 'const a = 42;\n');
+  assert.match((await read()).output, /const a = 42/);                    // modifié : en entier
+  assert.match((await TOOLS.read_file.run({ path: 'a.js', offset: 1, limit: 1 }, ctx)).output, /const a = 42/);   // autre plage : en entier
+  assert.match((await TOOLS.read_file.run({ path: 'a.js' }, { cwd: dir })).output, /const a = 42/);   // pas de conversation : jamais de cache
+});

@@ -1,4 +1,5 @@
 // Outils exécutés sur la machine
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -64,6 +65,7 @@ export function resolveP(p, cwd) {
 }
 const rel = (p, cwd) => { const r = path.relative(cwd, p); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p; };
 const ok = (output, display) => ({ ok: true, output, display });
+const sha1 = buf => createHash('sha1').update(buf).digest('hex');
 const err = (msg) => ({ ok: false, output: msg, display: msg });
 
 export function clipMiddle(text, max = 12000) {
@@ -443,6 +445,15 @@ export const TOOLS = {
       if (st.size > 8_000_000) return err(`Fichier trop gros (${human(st.size)}) — utilise grep, ou shell pour en extraire une partie.`);
       const buf = fs.readFileSync(fp);
       noteSeen(fp);
+      // Économie de contexte : même fichier, même plage, contenu identique, déjà lu DANS CETTE conversation → on ne le renvoie pas.
+      // Soupape : si le modèle redemande juste après, il le reçoit en entier (il l'avait peut-être perdu de vue).
+      const rStart = Math.max(1, a.offset || 1), rMax = Math.max(1, a.limit || 2000), rKey = `${fp}|${rStart}|${rMax}`, rHash = sha1(buf);
+      const seen = ctx.readCache?.get(rKey);
+      if (seen && seen.hash === rHash && !seen.skipped) {
+        seen.skipped = true;
+        return ok(`[Fichier inchangé depuis ta lecture précédente dans cette conversation (${rel(fp, ctx.cwd)}, à partir de la ligne ${rStart}) : contenu identique à ce que tu as déjà reçu, non renvoyé pour économiser le contexte. Si tu ne l'as plus en mémoire, relance exactement la même lecture : il te sera renvoyé en entier.]`, 'inchangé depuis ta dernière lecture');
+      }
+      if (ctx.readCache) { ctx.readCache.set(rKey, { hash: rHash, skipped: false }); if (ctx.readCache.size > 400) ctx.readCache.delete(ctx.readCache.keys().next().value); }
       let text;
       if (buf[0] === 0xFF && buf[1] === 0xFE) text = buf.toString('utf16le').slice(1);
       else if (looksBinary(buf)) return err(`Fichier binaire (${human(st.size)}) — impossible de l'afficher en texte.`);
