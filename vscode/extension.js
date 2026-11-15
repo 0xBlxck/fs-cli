@@ -222,7 +222,7 @@ class Chat {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="${media('panel.css')}">
 <title>FS-CLI</title></head>
-<body><div id="app"></div><script nonce="${nonce}" src="${media('panel.js')}"></script></body></html>`;
+<body data-logo="${media('logo.png')}"><div id="app"></div><script nonce="${nonce}" src="${media('panel.js')}"></script></body></html>`;
   }
 }
 
@@ -246,7 +246,7 @@ function activate(context) {
     vscode.window.registerWebviewViewProvider('fsCli.chat', sidebar, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('fsCli.open', () => {
       const panel = vscode.window.createWebviewPanel('fsCli.tab', 'FS-CLI', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
-      panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'sidebar.svg');
+      panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
       const chat = new Chat(context, panel.webview, t => { panel.title = t ? `FS-CLI · ${t.slice(0, 30)}` : 'FS-CLI'; });
       tabs.add(chat); lastActive = chat;
       panel.onDidChangeViewState(e => { if (e.webviewPanel.active) lastActive = chat; });

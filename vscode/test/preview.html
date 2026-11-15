@@ -10,7 +10,7 @@
 }
 </style>
 <link rel="stylesheet" href="../media/panel.css"></head>
-<body><div id="app"></div>
+<body data-logo="../media/logo.png"><div id="app"></div>
 <script>
 window.sent = [];
 window.acquireVsCodeApi = () => ({ postMessage: m => window.sent.push(m), setState() {}, getState() {} });
@@ -47,5 +47,6 @@ const steps = [
   () => E({ type: 'changes', files: [{ path: 'C:\\Users\\moi\\monsite\\index.html', rel: 'index.html', added: 3, removed: 1 }, { path: 'C:\\Users\\moi\\monsite\\style.css', rel: 'style.css', added: 12, removed: 0, created: true }] }),
   () => E({ type: 'busy', busy: false }),
 ];
+if (location.hash === "#accueil") steps.length = 3;
 let k = 0; (function next() { if (k < steps.length) { steps[k++](); setTimeout(next, 30); } else document.title = 'fini'; })();
 </script></body></html>

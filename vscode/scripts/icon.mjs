@@ -1,3 +1,4 @@
+// ANCIENNE icône provisoire (remplacée par le logo officiel France Student) : ne plus lancer, elle écraserait media/icon.png.
 // Génère media/icon.png (128×128) : carré arrondi orange + étoile blanche à 8 branches. Zéro dépendance.
 import fs from 'node:fs';
 import zlib from 'node:zlib';

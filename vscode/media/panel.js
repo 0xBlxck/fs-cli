@@ -69,7 +69,8 @@
   let welcome = null;
   function showWelcome() {
     log.textContent = ''; welcome = h('div', 'welcome');
-    welcome.innerHTML = '<div class="logo">✻</div><h1>FS-CLI</h1><div>L\'agent France Student AI dans ton éditeur. Il lit et modifie ton projet ; tu valides ce qui est sensible.</div>';
+    welcome.innerHTML = '<h1>FS-CLI</h1><div>L\'agent France Student AI dans ton éditeur. Il lit et modifie ton projet ; tu valides ce qui est sensible.</div>';
+    const logo = h('img', 'logo'); logo.src = document.body.dataset.logo || ''; logo.alt = 'France Student'; welcome.prepend(logo);
     const tips = h('div', 'tips');
     for (const [t, d] of [['Explique-moi ce projet', 'il lit les fichiers et résume'], ['Corrige les erreurs de ce fichier', 'sélectionne du code : il est joint au message'], ['/plan ajoute une page de contact', 'il propose un plan avant de toucher aux fichiers']]) {
       const tip = h('div', 'tip', t); tip.append(h('small', null, d));
