@@ -18,6 +18,7 @@ process.env.APPDATA = path.join(home, 'AppData', 'Roaming');
 
 const fake = path.join(here, 'mcp', 'fake-mcp-stdio.js');
 const w = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
+w(path.join(tmp, 'fscli', 'config.json'), JSON.stringify({ mcpAskImported: true }));   // ces tests vérifient le mode « demander avant » (/mcp ask on)
 w(path.join(home, '.claude.json'), JSON.stringify({
   mcpServers: { faux: { type: 'stdio', command: process.execPath, args: [fake], env: { CLE_SECRETE: 'ne-doit-pas-partir' } }, web: { type: 'http', url: 'https://exemple.invalid/mcp' } },
   projects: { [proj]: { mcpServers: { local: { command: 'node', args: ['x.js'] } } } },

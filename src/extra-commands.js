@@ -149,7 +149,7 @@ async function mcpCommand(arg, env) {
   const cwd = S.cwd, mgr = getMcp(cwd);
   let [sub = 'list', ...rest] = splitArgs(arg);
   // « /mcp blender » = « /mcp tools blender » : démarre le serveur et montre ses outils
-  if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
+  if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust|ask)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
   const target = rest[0];
   // serveur importé d'un autre assistant (Claude Code, Codex…) : ton accord avant de le démarrer
   if (/^(tools|test|call)$/i.test(sub) && target) {
@@ -186,8 +186,14 @@ async function mcpCommand(arg, env) {
       }
       if (ov.cloud.length) println('\n  ' + c.bold('claude.ai') + c.dim(` (${ov.cloud.length}) — connecteurs de ton compte Claude : ils restent chez Anthropic, FS-CLI ne peut pas les utiliser\n    `) + c.dim(ov.cloud.map(n => n.replace(/^claude\.ai /, '')).join(' · ')));
       if (ov.error) println(c.yellow('\n  ⚠ ' + ov.error));
-      println(c.dim('\n  /mcp <nom> : ses outils · /mcp toggle <nom> · /mcp add <nom> <commande|url> · /mcp presets\n'));
+      println(c.dim('\n  /mcp <nom> : ses outils · /mcp toggle <nom> · /mcp ask on : demander avant de lancer un serveur importé · /mcp add <nom> <commande|url> · /mcp presets\n'));
       return;
+    }
+    case 'ask': {                                                     // /mcp ask on : demander ton accord avant de démarrer un serveur importé d'un autre assistant
+      if (/^(on|oui|1|true)$/i.test(target || '')) cfg.mcpAskImported = true; else if (/^(off|non|0|false)$/i.test(target || '')) cfg.mcpAskImported = false;
+      else cfg.mcpAskImported = !cfg.mcpAskImported;
+      saveCfg();
+      return println(c.dim(cfg.mcpAskImported ? '  → les serveurs importés (Claude Code, Codex…) demanderont ton accord avant leur premier démarrage' : '  → les serveurs importés (Claude Code, Codex…) sont actifs directement'));
     }
     case 'trust': {
       const cfgP = loadMcpConfig(cwd);

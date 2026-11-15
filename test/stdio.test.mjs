@@ -65,3 +65,15 @@ test('serveurs MCP : erreur de compte (OAuth) distinguée d\'une panne', async (
   assert.equal(statusOfError('HTTP 401 : ce serveur demande une connexion à un compte (OAuth)'), 'auth');
   assert.equal(statusOfError('Commande introuvable : "x"'), 'error');
 });
+
+test('serveurs MCP importés : actifs par défaut, demande seulement avec /mcp ask on', async () => {
+  const { isImportApproved } = await import('../src/approvals.js');
+  const { cfg } = await import('../src/config.js');
+  const prev = cfg.mcpAskImported;
+  try {
+    delete cfg.mcpAskImported;
+    assert.equal(isImportApproved('x', { command: 'node', args: ['a.js'] }), true);
+    cfg.mcpAskImported = true;
+    assert.equal(isImportApproved('x', { command: 'node', args: ['a.js'] }), false);
+  } finally { cfg.mcpAskImported = prev; }
+});

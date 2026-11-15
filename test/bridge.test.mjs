@@ -16,6 +16,7 @@ const fake = path.join(here, 'mcp', 'fake-mcp-stdio.js');
 fs.writeFileSync(path.join(home, 'mcp.json'), JSON.stringify({ mcpServers: { faux: { command: process.execPath, args: [fake] } } }));
 fs.writeFileSync(path.join(imp, '.claude.json'), JSON.stringify({ mcpServers: { importe: { command: process.execPath, args: [fake] } } }));
 
+(await import('../src/config.js')).cfg.mcpAskImported = true;   // ce test vérifie le mode « demander avant » (/mcp ask on)
 const { McpManager } = await import('../src/mcp.js');
 const { startBridge, bridgeRequest } = await import('../src/bridge.js');
 const mgr = new McpManager({ cwd: proj });

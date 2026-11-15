@@ -4,14 +4,17 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { HOME_DIR } from './config.js';
+import { HOME_DIR, cfg } from './config.js';
 
 const FILE = () => path.join(HOME_DIR, 'approved-mcp.json');
 export const serverSig = s => crypto.createHash('sha256').update(JSON.stringify([s.command || '', s.args || [], s.url || ''])).digest('hex').slice(0, 16);
 
 function read() { try { const o = JSON.parse(fs.readFileSync(FILE(), 'utf8')); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { return {}; } }
 
-export function isImportApproved(name, s) { return read()[name] === serverSig(s); }
+// Par défaut, un serveur importé est actif tout de suite : il vient de TES réglages (Claude Code, Codex…) sur ce PC.
+// « /mcp ask on » (cfg.mcpAskImported) rétablit la demande d'accord avant le premier démarrage.
+// Les serveurs d'un .mcp.json de projet ne passent pas par ici : ils demandent toujours une approbation (/mcp trust).
+export function isImportApproved(name, s) { return cfg.mcpAskImported !== true || read()[name] === serverSig(s); }
 
 export function approveImport(name, s) {
   const o = read(); o[name] = serverSig(s);
