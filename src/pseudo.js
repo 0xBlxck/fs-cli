@@ -16,7 +16,11 @@ import * as ui from './ui.js';
 /** Commande exacte pour lancer fs-mcp (chemin absolu : marche même sans installation globale). */
 export const FS_MCP = `node "${path.join(ROOT, 'mcp-cli.js')}"`;
 
-const RULE = 'N\'affirme jamais avoir cherché, trouvé ou vérifié quelque chose (annonces, prix, données…) sans avoir réellement lancé l\'outil dans cette réponse ; sinon dis-le clairement.';
+/** Liste de tâches : simple mise en forme Markdown, que FS-CLI affiche comme un suivi de progression épinglé. */
+const TASKS_RULE = '- Pour toute tâche en plusieurs étapes (3 ou plus), écris d\'abord ton plan sous forme de liste de tâches Markdown, une ligne par étape : « - [ ] étape ». ' +
+  'Au fil du travail, réécris la liste COMPLÈTE avec « - [x] » pour ce qui est fait et « - [~] » pour l\'étape en cours. FS-CLI l\'affiche à l\'utilisateur comme un suivi de progression. Pour une demande simple, pas de liste.';
+
+const RULE ='N\'affirme jamais avoir cherché, trouvé ou vérifié quelque chose (annonces, prix, données…) sans avoir réellement lancé l\'outil dans cette réponse ; sinon dis-le clairement.';
 
 /** Accord pour un serveur importé (Claude Code, Codex…) : enregistré, car fs-mcp le vérifie à chaque lancement. */
 export async function approveServer(S, name, s, io) {
@@ -46,9 +50,10 @@ function describeTools(server, tools) {
 export function toolsHint(cwd, userText) {
   const servers = Object.entries(loadMcpConfig(cwd).mcpServers || {}).filter(([, s]) => !s.disabled).map(([n]) => n);
   const skills = discoverSkills(cwd);
-  if (!servers.length && !skills.length) return { text: '', label: '', sig: '' };
-  const sig = crypto.createHash('sha256').update(JSON.stringify([servers, skills.length, FS_MCP])).digest('hex').slice(0, 12);
-  const lines = [`[Info de FS-CLI : sur ce PC, le programme fs-mcp (installé avec FS-CLI) donne accès aux serveurs MCP et aux guides (skills) de l'utilisateur. Lance-le avec run_command comme n'importe quel programme, par exemple : ${FS_MCP} list`];
+  const sig = crypto.createHash('sha256').update(JSON.stringify([servers, skills.length, FS_MCP, 'taches-v1'])).digest('hex').slice(0, 12);
+  const lines = [`[Info de FS-CLI (le programme qui exécute tes outils chez l'utilisateur) :`, TASKS_RULE];
+  if (!servers.length && !skills.length) { lines.push(`${RULE}]`); return { text: lines.join('\n'), label: 'suivi des tâches', sig }; }
+  lines.push(`- Sur ce PC, le programme fs-mcp (installé avec FS-CLI) donne accès aux serveurs MCP et aux guides (skills) de l'utilisateur. Lance-le avec run_command comme n'importe quel programme, par exemple : ${FS_MCP} list`);
   if (servers.length) lines.push(`- Serveurs MCP : ${servers.join(', ')}. \`${FS_MCP} tools <serveur>\` liste les outils ; \`${FS_MCP} call <serveur> <outil> cle=valeur …\` en appelle un. Pour du code ou un long texte (ex. un script Blender), écris-le d'abord dans un fichier du dossier de travail avec write_file, puis passe \`cle=@fichier\` (ex. code=@scene.py).`);
   if (skills.length) {
     const near = searchSkills(skills, userText, 4);

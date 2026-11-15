@@ -43,10 +43,11 @@ Au premier lancement, un **assistant** connecte ton compte France Student : il o
 
 | Besoin | Commande |
 |---|---|
-| Mettre à jour | relance la commande de l'étape 2 |
+| Mettre à jour | relance la commande de l'étape 2 (FS-CLI te prévient quand une nouvelle version sort) |
 | Changer de compte / clé expirée | `fs-cli --login` |
 | Reprendre la dernière session du dossier | `fs-cli -c` |
 | Une seule demande, puis quitter | `fs-cli -p "résume ce dossier"` |
+| Vérifier que tout marche | `fs-cli` puis `/doctor` |
 | Désinstaller | `npm uninstall -g fs-cli` (tes réglages restent dans `~/.fs-cli`) |
 
 Linux et macOS devraient fonctionner (bash) mais ne sont pas testés en continu.
@@ -92,6 +93,9 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 ## Fonctions
 
 - **Agent natif** : le modèle utilise les outils officiels « outils client » de France Student (lire, chercher, écrire, éditer, lancer une commande) ; le CLI les exécute sur ton PC avec ses garde-fous.
+- **Suivi des tâches** : sur une tâche longue, le modèle écrit son plan et le coche au fur et à mesure ; il reste affiché au-dessus de la zone de saisie (☐ à faire · ◐ en cours · ☑ fait).
+- **Skills choisis automatiquement** : selon ta demande (« fais un beau site », « un tableur Excel », « ma lettre de motivation »…), FS-CLI joint tout seul le guide le plus adapté parmi tes skills installés.
+- **Retour en arrière** : `/rewind` (ou « reviens en arrière ») remet tous les fichiers dans l'état d'avant la demande de ton choix.
 - **Plusieurs agents** : `/team` répartit une tâche entre agents (jusqu'à 8), **à la suite dans la même conversation** (défaut) ou **en parallèle** ; `/compare` pose la même question à deux modèles.
 - **Interface type Claude Code** : saisie ancrée en bas de la fenêtre, suggestions, menus à flèches, file d'attente de messages, code replié en une ligne.
 - **Mémoire** : notes par dossier, préprompt, faits appris, compétences (`/skills`), compactage automatique avant que le contexte soit plein.
@@ -123,7 +127,7 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 
 | Thème | Commandes |
 |---|---|
-| Conversation | `/usage` · `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
+| Conversation | `/usage` · `/rewind` · `/doctor` · `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |
 | Mémoire | `/remember` · `/forget` · `/memory` · `/preprompt` · `/profil` · `/skills` |

@@ -169,6 +169,38 @@ export function searchSkills(list, query, max = 10) {
   }).filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, max).map(x => x.s);
 }
 
+// mots français courants → mots des descriptions (souvent en anglais) des skills
+const FR_EN = {
+  site: 'website web', page: 'page landing web', landing: 'landing page', beau: 'design beautiful ui visual', belle: 'design beautiful ui visual', joli: 'design ui visual',
+  design: 'design ui visual', interface: 'ui interface frontend', jeu: 'game', jeux: 'game', video: 'video', presentation: 'slides presentation pptx deck', diapo: 'slides presentation pptx',
+  tableur: 'spreadsheet excel xlsx', excel: 'spreadsheet excel xlsx', cv: 'resume cv', lettre: 'cover letter', motivation: 'cover letter', securite: 'security',
+  donnees: 'data database', graphique: 'chart dataviz visualization', tableau: 'table dashboard', recherche: 'research', traduire: 'translate', traduction: 'translate',
+  animation: 'animation motion', logo: 'logo brand design', document: 'document docx', word: 'docx document', pdf: 'pdf', mail: 'email', email: 'email',
+  boutique: 'shop shopify ecommerce', serveur: 'server backend', bdd: 'database sql', test: 'test testing', tests: 'test testing', mobile: 'mobile app',
+};
+const GENERIC = new Set(['code', 'fichier', 'fichiers', 'projet', 'script', 'programme', 'application', 'app', 'truc', 'chose', 'faire', 'cree', 'creer', 'ecris', 'ecrire', 'corrige', 'aide', 'help']);
+
+/**
+ * Skills à joindre AUTOMATIQUEMENT à une demande : seulement en cas de correspondance nette
+ * (au moins 2 mots qui correspondent et un score suffisant), 2 au maximum.
+ */
+export function autoSkills(list, query, max = 2) {
+  const words = [...new Set(norm(query).split(/[^a-z0-9]+/).filter(w => (w.length > 2 || FR_EN[w]) && !STOP.has(w) && !GENERIC.has(w)))];
+  if (!words.length) return [];
+  const terms = [...new Set(words.flatMap(w => [w, ...(FR_EN[w] ? FR_EN[w].split(' ') : [])]))];
+  const scored = list.map(s => {
+    const n = norm(s.name), d = norm(s.description);
+    let score = 0; const hit = new Set();
+    for (const t of terms) {
+      if (n.includes(t)) { score += 3; hit.add(t); }
+      else if (new RegExp(`\\b${t}`).test(d)) { score += 1; hit.add(t); }
+    }
+    return { s, score, hits: hit.size };
+  }).filter(x => x.hits >= 2 && x.score >= 4).sort((a, b) => b.score - a.score);
+  if (!scored.length) return [];
+  return scored.filter(x => x.score >= scored[0].score * 0.75).slice(0, max).map(x => x.s);
+}
+
 /** Un chemin est-il dans un dossier de skill découvert ? (lecture autorisée sans question) */
 export function isSkillPath(p, cwd) {
   const r = path.resolve(p).toLowerCase();

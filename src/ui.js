@@ -41,6 +41,14 @@ process.on('exit', () => { if (TTY) process.stdout.write('\x1b[?25h'); });
 let sink = null;
 export function attachSink(s) { sink = s; }
 
+/** Liste de tâches courante (la dernière écrite par le modèle) : affichée en panneau épinglé au-dessus de la saisie. */
+export const tasks = {
+  list: [], listeners: [],
+  set(list) { this.list = list; for (const fn of this.listeners) try { fn(list); } catch {} },
+  clear() { this.set([]); },
+  on(fn) { this.listeners.push(fn); },
+};
+
 /** Retire d'un texte venant du modèle ou d'une commande toute séquence de contrôle du terminal (OSC : titre de fenêtre / liens / presse-papiers,
  *  CSI, DCS/APC, touches C1…) : le texte non fiable ne doit jamais piloter le terminal. Garde \n, \r et \t. */
 export function sanitize(s) {
@@ -195,6 +203,16 @@ export class MdStream {
       return;
     }
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { this.emit(c.dim('─'.repeat(Math.min(48, cols() - 4)))); return; }
+    if ((m = line.match(/^(\s*)[-*+]\s+\[( |x|X|~|>|-)\]\s+(.*)$/))) {   // liste de tâches du modèle : ☐ à faire · ◐ en cours · ☑ fait
+      const st = m[2] === ' ' ? 'todo' : /[xX]/.test(m[2]) ? 'done' : 'doing';
+      const icon = st === 'done' ? c.green('☑') : st === 'doing' ? c.yellow('◐') : c.dim('☐');
+      this.emit(`${m[1]}${icon} ${st === 'done' ? c.dim(inline(m[3])) : inline(m[3])}`);
+      if (!this.inTasks) { this.inTasks = true; this.taskList = []; }
+      this.taskList.push({ text: m[3].replace(/[*_`]/g, '').trim(), state: st });
+      tasks.set(this.taskList.slice());
+      return;
+    }
+    this.inTasks = false;
     if ((m = line.match(/^(\s*)[-*+]\s+(.*)$/))) { this.emit(`${m[1]}${c.accent('•')} ${inline(m[2])}`); return; }
     if ((m = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/))) { this.emit(`${m[1]}${c.accent(m[2] + '.')} ${inline(m[3])}`); return; }
     if ((m = line.match(/^\s*>\s?(.*)$/))) { this.emit(`${c.dim('▎')} ${c.italic(inline(m[1]))}`); return; }

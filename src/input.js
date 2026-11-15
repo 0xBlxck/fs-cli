@@ -25,6 +25,7 @@ class ReadlineInput {
   start() {}
   stop() { try { this.rl.close(); } catch {} }
   setStatus() {}
+  setTasks() {}
   setBusy(b) { this.busy = !!b; }
   setPrompt(s) { this.rl.setPrompt(s); }
   prompt() { this.rl.prompt(); }

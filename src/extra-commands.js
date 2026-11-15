@@ -39,7 +39,7 @@ export async function compactSession(S, { instruction = '', signal } = {}) {
     S.sid ||= newSid();
     await streamChat({ agentId: S.agentId, chatId: null, content: (cfg.tagChats !== false ? tag(S.sid, 'suite') : '') + compactSeed(summary), webSearch: false, signal, register: { sid: S.sid, role: 'suite' }, onChat: id => { newId = id; } });
     if (!newId) throw new Error('impossible d\'ouvrir la nouvelle conversation');
-    S.chatId = newId; S.ctxSent = false; S.toolsHintSig = ''; S.blocks = []; S.pendingResults = [];
+    S.chatId = newId; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
     S.ctxPercent = await contextPercent(newId).catch(() => null);
     return { chars: summary.length, previous: prev, chatId: newId, percent: S.ctxPercent };
   } finally { ui.spinner.stop(); }

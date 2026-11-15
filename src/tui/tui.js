@@ -17,7 +17,7 @@ export class Tui {
     this.stdin = stdin; this.stdout = stdout; this.onHistory = onHistory; this.suggester = suggester; this.maxInputLines = maxInputLines;
     this.buf = ''; this.cur = 0;
     this.hist = history.slice(); this.histIdx = -1; this.draft = '';
-    this.queue = []; this.busy = false; this.spinnerText = null;
+    this.queue = []; this.busy = false; this.spinnerText = null; this.tasks = [];
     this.status = { model: '', mode: 'auto', cwd: '', ctx: null };
     this.flashText = ''; this.flashTimer = null; this.lastCtrlC = 0;
     this.sug = { items: [], idx: -1, start: 0 }; this.sugOff = null;
@@ -68,6 +68,7 @@ export class Tui {
   spinner(text) { this.spinnerText = text; this.render(); }
   setBusy(b) { this.busy = !!b; this.render(); }
   setStatus(s) { Object.assign(this.status, s); this.render(); }
+  setTasks(list) { this.tasks = Array.isArray(list) ? list : []; this.render(); }
   flash(text, ms = 2200) {
     this.flashText = text; clearTimeout(this.flashTimer);
     this.flashTimer = setTimeout(() => { this.flashText = ''; this.render(); }, ms);
@@ -118,6 +119,23 @@ export class Tui {
     const lines = [];
 
     for (const q of this.queue.slice(-3)) lines.push('  ' + c.dim('⧗ en file : ' + q.replace(/\s+/g, ' ').slice(0, Math.max(10, W - 20))));
+
+    // liste de tâches du modèle, épinglée : on voit où il en est sur les longues tâches
+    if (this.tasks.length) {
+      const done = this.tasks.filter(t => t.state === 'done').length;
+      lines.push('  ' + c.bold('Tâches') + c.dim(` ${done}/${this.tasks.length}`));
+      let items = this.tasks;
+      if (items.length > 7) {                                         // longue liste : fenêtre autour de la première étape non faite
+        const open = Math.max(0, items.findIndex(t => t.state !== 'done'));
+        const start = Math.max(0, Math.min(open - 1, items.length - 7));
+        items = items.slice(start, start + 7);
+      }
+      const max = Math.max(10, W - 8);
+      for (const t of items) {
+        const txt = t.text.length > max ? t.text.slice(0, max - 1) + '…' : t.text;
+        lines.push('  ' + (t.state === 'done' ? c.green('☑ ') + c.dim(txt) : t.state === 'doing' ? c.yellow('◐ ') + txt : c.dim('☐ ') + txt));
+      }
+    }
 
     // ligne du haut : spinner à gauche, modèle · contexte à droite (toujours présente : la zone ne change pas de hauteur)
     const right = [st.model, st.ctx != null ? `ctx ${Math.round(st.ctx)}%` : ''].filter(Boolean).join(' · ');

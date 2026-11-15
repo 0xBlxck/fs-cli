@@ -19,10 +19,12 @@ import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
+import { runDoctor } from './src/doctor.js';
+import { checkUpdate, INSTALL_CMD } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
 import { toolsHint, mentionedServers, serverBrief } from './src/pseudo.js';
-import { discoverMcpServers, discoverSkills } from './src/discover.js';
+import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
@@ -234,7 +236,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/doctor', '/rewind', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -345,7 +347,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
@@ -412,7 +414,7 @@ async function command(line) {
     case '/id': return println(c.dim('  ' + (S.chatId || 'aucune conversation')));
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
-      S.chatId = null; S.toolsHintSig = ''; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      S.chatId = null; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
       println(); Object.entries(AGENTS).forEach(([id, n], i) =>
@@ -472,6 +474,39 @@ async function command(line) {
     case '/undo': {
       const r = undoLast({ undo: S.undo }, FILES.trash);
       return println(r ? c.green('  ✓ ' + r) : c.dim('  rien à annuler'));
+    }
+    case '/doctor': {                                                 // vérifie l'installation et dit quoi corriger
+      ui.spinner.start('vérification…');
+      const checks = await runDoctor(S);
+      ui.spinner.stop();
+      println();
+      for (const k of checks) {
+        const icon = k.level === 'ok' ? c.green('✓') : k.level === 'warn' ? c.yellow('⚠') : c.red('✗');
+        println(`  ${icon} ${c.bold(k.label.padEnd(20))} ${k.level === 'ok' ? c.dim(k.detail) : k.detail}`);
+        if (k.fix) println(`    ${' '.repeat(20)} ${c.dim('→')} ${c.accent(k.fix)}`);
+      }
+      const bad = checks.filter(k => k.level !== 'ok').length;
+      return println(bad ? c.dim(`\n  ${bad} point${bad > 1 ? 's' : ''} à regarder\n`) : c.green('\n  tout est en ordre\n'));
+    }
+    case '/rewind': {                                                 // revenir à l'état d'avant une demande : tous ses fichiers d'un coup
+      const marks = (S.turnMarks || []).map((m, i) => ({ ...m, i, changes: S.undo.length - m.at })).filter(m => m.changes > 0).reverse();
+      if (!marks.length) return println(c.dim('  rien à annuler : aucune modification de fichier depuis le début de la session'));
+      const label = m => `avant « ${m.text}${m.text.length >= 70 ? '…' : ''} » · ${m.changes} modif${m.changes > 1 ? 's' : ''} annulée${m.changes > 1 ? 's' : ''} · ${new Date(m.t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+      let pick = null;
+      if (/^\d+$/.test(arg)) pick = marks[parseInt(arg, 10) - 1] || null;
+      else if (input.select && interactive) {
+        const idx = await input.select({ title: 'Revenir à l\'état des fichiers d\'avant quelle demande ?', detail: 'Les fichiers modifiés par le modèle depuis cette demande reprennent leur ancien contenu ; ceux qu\'il a créés partent dans la corbeille du CLI. Les effets des commandes (npm install…) ne sont pas annulés.', options: [...marks.slice(0, 9).map(label), 'Annuler'], defaultIndex: 0 });
+        pick = idx == null ? null : marks[idx] || null;
+      } else { marks.slice(0, 9).forEach((m, i) => println(`  ${c.accent(String(i + 1))}  ${label(m)}`)); return println(c.dim('\n  /rewind <n°> pour revenir à ce point\n')); }
+      if (!pick) return println(c.dim('  rien n\'a été annulé'));
+      const done = [];
+      while (S.undo.length > pick.at) { const r = undoLast({ undo: S.undo }, FILES.trash); if (!r) break; done.push(r); }
+      S.turnMarks = S.turnMarks.slice(0, pick.i + 1);
+      S.notes.push(`L'utilisateur a annulé (/rewind) toutes les modifications de fichiers faites depuis sa demande « ${pick.text} » : ces fichiers sont revenus à leur état d'avant. Relis-les avant de les modifier.`);
+      println(c.green(`  ✓ retour à l'état d'avant « ${pick.text} » : ${done.length} modification${done.length > 1 ? 's' : ''} annulée${done.length > 1 ? 's' : ''}`));
+      for (const d of done.slice(0, 12)) println(c.dim('    ' + d));
+      if (done.length > 12) println(c.dim(`    … +${done.length - 12}`));
+      return;
     }
     case '/tools': {
       println(); for (const [n, t] of Object.entries(TOOLS)) println(`  ${c.accent(n.padEnd(11))} ${c.dim(t.risk.padEnd(6))} ${t.desc().split('.')[0]}`);
@@ -562,6 +597,8 @@ async function chatTurn(text, { keepLast = false } = {}) {
   turnAbort = new AbortController();
   println();
   try {
+    ui.tasks.clear();                                                  // nouvelle demande : le panneau de tâches repart de zéro
+    if (!keepLast) { S.turnMarks ||= []; S.turnMarks.push({ at: S.undo.length, text: text.replace(/\s+/g, ' ').trim().slice(0, 70), t: Date.now() }); if (S.turnMarks.length > 50) S.turnMarks.shift(); }   // repère pour /rewind
     await maybeAutoCompact(S, turnAbort.signal);                       // contexte plein → résumé + nouvelle conversation
     const ex = extractImagePaths(text, S.images.length);               // image glissée-déposée (chemin collé) → [Image #n]
     if (ex.paths.length) { text = ex.text; for (const p of ex.paths) if (!S.images.includes(p)) S.images.push(p); }
@@ -598,6 +635,19 @@ async function chatTurn(text, { keepLast = false } = {}) {
       for (const name of mentionedServers(S.cwd, text)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
+      }
+    }
+    if (!keepLast) {                                                   // skills choisis automatiquement pour cette demande (correspondance nette seulement)
+      S.skillsSent ||= new Set();
+      let budget = 20000;
+      for (const sk of autoSkills(discoverSkills(S.cwd), text).filter(s => !S.skillsSent.has(s.name))) {
+        let body = ''; try { body = fs.readFileSync(sk.file, 'utf8').replace(/^﻿/, ''); } catch { continue; }
+        body = body.length > Math.min(12000, budget) ? body.slice(0, Math.min(12000, budget)) + '\n[… guide tronqué ; la suite est dans ' + sk.file + ']' : body;
+        if (budget <= 1000) break;
+        budget -= body.length;
+        message += `\n\n[Guide « ${sk.name} » : skill installé sur le PC de l'utilisateur, choisi automatiquement par FS-CLI pour cette demande. Applique-le s'il est pertinent (sans le recopier) ; ses autres fichiers sont dans ${sk.dir}.\n${body}]`;
+        S.skillsSent.add(sk.name);
+        println(c.dim(`  ＋ skill : ${sk.name}`));
       }
     }
     if (!keepLast) S.lastUserText = text;
@@ -694,6 +744,7 @@ function cycleMode() {
 input.on('submit', t => { runInput(t); });
 input.on('interrupt', () => { turnAbort?.abort(); });
 input.on('cycleMode', cycleMode);
+ui.tasks.on(list => input.setTasks?.(list));                          // liste de tâches du modèle → panneau épinglé
 input.on('pasteImage', () => { try { pasteClipboardImage(); } catch (e) { println(c.red('  image : ' + e.message)); } });
 input.on('quit', () => { shutdown(0); });
 process.on('exit', () => { try { input.stop(); } catch {} });
@@ -748,4 +799,11 @@ if (!(await ensureFolderTrust(S.cwd))) {
   println(c.dim('  Dossier non approuvé : relance FS-CLI depuis le dossier de ton projet (ou --cwd <dossier>).'));
   saveSession(); input.stop(); process.exit(0);
 }
+// nouvelle version disponible ? (en arrière-plan, au plus une fois toutes les 12 h, n'empêche jamais de démarrer)
+checkUpdate().then(u => {
+  if (!u.newer) return;
+  println(c.yellow(`  ⬆ FS-CLI v${u.latest} est disponible (tu as la v${u.current}). Pour mettre à jour :`));
+  println(`    ${c.accent(INSTALL_CMD)}`);
+  if (!busy) input.prompt();
+}).catch(() => {});
 if (initial) await runInput(initial); else input.prompt();

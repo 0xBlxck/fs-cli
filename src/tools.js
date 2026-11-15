@@ -628,9 +628,11 @@ export function riskInfo(tool, args, ctx) {
 export function undoLast(ctx, trashDir) {
   const u = ctx.undo.pop();
   if (!u) return null;
-  if (u.prev) { fs.writeFileSync(u.path, u.prev); noteSeen(u.path); return `restauré: ${u.path}`; }
+  if (u.prev) { fs.mkdirSync(path.dirname(u.path), { recursive: true }); fs.writeFileSync(u.path, u.prev); noteSeen(u.path); return `restauré: ${u.path}`; }
+  if (!fs.existsSync(u.path)) return `déjà absent : ${u.path}`;
   fs.mkdirSync(trashDir, { recursive: true });
   const dest = path.join(trashDir, `${Date.now()}_${path.basename(u.path)}`);
-  try { fs.renameSync(u.path, dest); } catch { fs.copyFileSync(u.path, dest); fs.unlinkSync(u.path); }
+  try { fs.renameSync(u.path, dest); }
+  catch { try { fs.copyFileSync(u.path, dest); fs.unlinkSync(u.path); } catch (e) { return `impossible de retirer ${u.path} (${e.code || e.message})`; } }
   return `fichier créé retiré (copie dans ${dest})`;
 }
