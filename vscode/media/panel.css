@@ -255,3 +255,12 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .card .bv { display: flex; justify-content: space-between; gap: 8px; }
 .card .bv b { font-weight: 600; }
 .card .cf { margin-top: 10px; font-size: 11.5px; color: var(--dim); }
+
+/* ── fenêtre « Conversations » ── */
+.hrow { padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px; margin-bottom: 6px; background: var(--box); cursor: pointer; }
+.hrow:hover { border-color: var(--focus); }
+.hrow.cur { border-color: var(--brand); }
+.ht { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm { font-size: 11.5px; color: var(--dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mh .btn { font-size: 12px; padding: 3px 10px; }
+.hold { text-align: center; font-size: 11.5px; color: var(--dim); }

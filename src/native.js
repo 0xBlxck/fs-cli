@@ -17,7 +17,7 @@ import { c } from './ui.js';
 export const READ_TOOLS = CLIENT_TOOLS.slice(0, 3);
 // Certains modèles de France Student refusent de servir d'agent à un outil externe (« ne peut pas servir de moteur à ton outil externe »,
 // « colle ici le contenu »…). FS-CLI ne contourne pas ce refus : il l'explique et propose un modèle qui accepte les outils.
-const TOOL_REFUSAL = /servir de moteur|outil externe|ne (?:peux|peut|pouvons) pas (?:acc[ée]der|modifier|[ée]crire|lire|ex[ée]cuter|cr[ée]er|lancer|ouvrir)\b[^.]{0,60}\b(?:fichiers?|disque|dossier|commandes?|ordinateur|PC|machine)|(?:je )?n'ai pas (?:d'|l')?acc[èe]s (?:à|aux) (?:tes |ton |vos |votre |ce |tes )?(?:fichiers?|disque|dossier|syst[èe]me|ordinateur|PC|machine)|colle[rz]? (?:ici )?(?:le )?contenu/i;
+const TOOL_REFUSAL = /servir de moteur|outil externe|agent externe|(?:ne (?:peux|peut|pouvons) pas|impossible de) (?:piloter|contr[ôo]ler|utiliser) (?:FS-CLI|tes outils|les outils|ton (?:PC|ordinateur|disque))|ne (?:peux|peut|pouvons) pas (?:acc[ée]der|modifier|[ée]crire|lire|ex[ée]cuter|cr[ée]er|lancer|ouvrir)\b[^.]{0,60}\b(?:fichiers?|disque|dossier|commandes?|ordinateur|PC|machine)|(?:je )?n'ai pas (?:d'|l')?acc[èe]s (?:à|aux) (?:tes |ton |vos |votre |ce |tes )?(?:fichiers?|disque|dossier|syst[èe]me|ordinateur|PC|machine)|colle[rz]? (?:ici )?(?:le )?contenu/i;
 export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || ''));   // list_directory, read_file, search_files : seuls outils proposés en mode plan
 const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi

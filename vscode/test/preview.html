@@ -49,6 +49,19 @@ const steps = [
   () => E({ type: 'busy', busy: false }),
 ];
 if (location.hash === "#accueil") steps.length = 3;
+if (location.hash === "#historique") { steps.length = 2; steps.push(() => E({ type: 'history', sessions: [
+  { chatId: 'a', title: 'Ajoute un formulaire de contact', model: 'Claude Sonnet 5.5', cwd: 'C:\Projets\monsite', here: true, current: true, updatedAt: 1794784016158 - 120000 },
+  { chatId: 'b', title: 'Corrige le menu mobile', model: 'Claude Opus 5.5', cwd: 'C:\Projets\monsite', here: true, updatedAt: 1794784016158 - 3 * 3600000 },
+  { chatId: 'c', title: 'Script Python qui trie mes factures', model: 'GPT 6.1 Sol', cwd: 'C:\Projets\factures', here: false, updatedAt: 1794784016158 - 26 * 3600000 },
+  { chatId: 'd', title: 'Explique-moi ce projet', model: 'Claude Sonnet 5.5', cwd: 'C:\Projets\api', here: false, updatedAt: 1794784016158 - 5 * 86400000 }] })); }
+if (location.hash === "#reprise") { steps.length = 2; steps.push(() => E({ type: 'transcript', title: 'Corrige le menu mobile', model: 'Claude Opus 5.5', older: 6, messages: [
+  { role: 'user', text: 'Le menu ne se ferme pas sur mobile' },
+  { role: 'assistant', text: `Le bouton ouvre le menu mais aucun clic ne le referme. Je corrige \`menu.js\` :
+
+- fermeture au clic sur un lien
+- fermeture avec **Échap**` },
+  { role: 'user', text: 'parfait merci' },
+  { role: 'assistant', text: 'Avec plaisir ! Le menu se ferme maintenant dans les deux cas.' }] })); }
 if (location.hash === "#entree") { steps.length = 1; steps.push(
   () => E({ type: 'select', id: 7, title: 'Lancer cette commande ? rm -rf build', detail: '', options: ['Oui', 'Non'], defaultIndex: 0 }),
   () => { const ta = document.querySelector('textarea'); ta.focus(); ta.value = 'attends non'; ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); },

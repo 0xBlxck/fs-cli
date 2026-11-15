@@ -436,6 +436,24 @@ const PANEL_VER = String(process.env.FS_CLI_PANEL || '');            // version 
 const verNum = v => String(v || '0').split('.').map(n => parseInt(n, 10) || 0).reduce((a, n) => a * 1000 + n, 0);
 const panelAtLeast = v => !!PANEL_VER && verNum(PANEL_VER) >= verNum(v);
 
+/** messages d'une conversation, sans les ajouts internes de FS-CLI (étiquette, notes, consignes jointes) */
+function transcriptOf(chat) {
+  const clean = (role, t) => {
+    let s = String(t || '');
+    if (role === 'user') {
+      s = s.replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '');                        // étiquette de session « [7f3a] »
+      for (let k = 0; k < 4 && /^\[(?:L'utilisateur|Dossier courant|Info de FS-CLI|Résultats|Contenu de la page|Contexte VS Code)[\s\S]*?\]\s*\n/.test(s); k++) s = s.replace(/^\[[\s\S]*?\]\s*\n/, '');
+      const cut = s.search(/\n\n\[(?:Info de FS-CLI|Guide «|Format de réponse|Instructions du projet|Sois concis|Outils MCP|Préprompt|Mémoire|Faits|Contexte)/);
+      if (cut > 0) s = s.slice(0, cut);
+    }
+    return s.trim();
+  };
+  return (chat?.chatMessages || [])
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({ role: m.role, text: clean(m.role, m.content).slice(0, 20000) }))
+    .filter(m => m.text);
+}
+
 /** fenêtre « Serveurs MCP » du panneau VS Code : la liste tout de suite, puis l'état de chaque serveur dès qu'il est connu */
 async function openMcpPanel() {
   const mgr = getMcp(S.cwd);
@@ -984,6 +1002,23 @@ if (opts.stdio) {                                                    // commande
     const abs = path.resolve(baseDir(S), String(file || ''));                 // relatif au dossier de travail (ou au dossier cible)
     const d = fileDiff(S.undo, abs) || fileDiff(S.undo, path.resolve(S.cwd, String(file || '')));
     stdioSend('diffBefore', { id, path: d ? (fileDiff(S.undo, abs) ? abs : path.resolve(S.cwd, String(file || ''))) : abs, ok: !!d, before: d ? d.before : '', created: d ? d.created : false });
+  });
+  // ── fenêtre « Conversations » (horloge du panneau) : liste des sessions, reprise avec réaffichage des messages ──
+  input.on('historyOpen', () => {
+    const here = path.resolve(S.cwd).toLowerCase();
+    stdioSend('history', { sessions: loadSessions().slice(0, 50).map(s => ({
+      chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || '',
+      here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
+    })) });
+  });
+  input.on('resumeChat', async chatId => {
+    if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de conversation' });
+    const s = loadSessions().find(x => x.chatId === chatId);
+    if (!s) return stdioSend('flash', { text: 'conversation introuvable' });
+    applySession(s); refreshPrompt(); saveSession();
+    let messages = [];
+    try { messages = transcriptOf(await fetchChat(chatId)); } catch {}
+    stdioSend('transcript', { title: s.title || '', model: modelName(), messages: messages.slice(-40), older: Math.max(0, messages.length - 40) });
   });
   input.on('mcpAction', async (action, name) => {                    // boutons de la fenêtre « Serveurs MCP »
     const mgr = getMcp(S.cwd), sv = loadMcpConfig(S.cwd).mcpServers?.[name];
