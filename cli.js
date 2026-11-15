@@ -21,7 +21,7 @@ import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
 import { runDoctor } from './src/doctor.js';
 import { startBridge } from './src/bridge.js';
-import { chromeExtensionInstalled } from './src/browser.js';
+import { chromeExtensionInstalled, playwrightServer } from './src/browser.js';
 import { checkUpdate, INSTALL_CMD } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
@@ -483,7 +483,7 @@ async function command(line) {
       const tok = arg.match(/PLAYWRIGHT_MCP_EXTENSION_TOKEN\s*=\s*["']?([\w-]{16,})["']?/);
       if (tok) {
         arg = arg.replace(tok[0], '').trim();
-        cfgAll.mcpServers.playwright = { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--extension'], env: { PLAYWRIGHT_MCP_EXTENSION_TOKEN: tok[1] }, description: 'ton Chrome (extension Playwright MCP Bridge)', _scope: 'user' };
+        cfgAll.mcpServers.playwright = { ...playwrightServer({ mineChrome: true, token: tok[1], outDir: path.join(HOME_DIR, 'navigateur') }), _scope: 'user' };
         const sv = saveMcpConfig('user', S.cwd, cfgAll);
         println(sv.ok ? c.green('  ✓ jeton de l\'extension enregistré (config privée ~/.fs-cli) : le modèle pilote TON Chrome sans redemander l\'autorisation') : c.red('  ✗ ' + sv.error));
         if (!arg) return;
@@ -501,7 +501,7 @@ async function command(line) {
       const request = (MODE_CHROME.test(first) || MODE_SEP.test(first) ? more : [first, ...more]).join(' ').trim();
       if (mineChrome && !chromeExtensionInstalled()) {                  // mode « ton Chrome » sans l'extension : on ne bascule pas, on explique
         if (curChrome) {                                               // déjà en mode Chrome sans extension : retour au navigateur séparé pour que ça marche
-          cfgAll.mcpServers.playwright = { command: 'npx', args: ['-y', '@playwright/mcp@latest'], description: 'navigateur piloté (Playwright)', _scope: 'user' };
+          cfgAll.mcpServers.playwright = { ...playwrightServer({ outDir: path.join(HOME_DIR, 'navigateur') }), _scope: 'user' };
           saveMcpConfig('user', S.cwd, cfgAll);
           println(c.dim('  (retour au navigateur séparé en attendant l\'extension)'));
         }
@@ -513,9 +513,9 @@ async function command(line) {
         if (open === 0) { try { spawnSync('cmd', ['/c', 'start', '', STORE], { windowsHide: true }); } catch {} }
         return println(c.dim(cur ? '  (le navigateur actuel reste actif)' : '  En attendant, /navigateur active un navigateur séparé (sans tes comptes).'));
       }
-      const needSetup = !cur || curChrome !== mineChrome;
+      const needSetup = !cur || curChrome !== mineChrome || !cur.args?.includes('--caps');   // ancienne config sans vision/pdf/devtools : mise à niveau
       if (needSetup) {
-        const want = { command: 'npx', args: ['-y', '@playwright/mcp@latest', ...(mineChrome ? ['--extension'] : [])], description: mineChrome ? 'ton Chrome (extension Playwright MCP Bridge)' : 'navigateur piloté (Playwright)' };
+        const want = playwrightServer({ mineChrome, token: mineChrome ? cur?.env?.PLAYWRIGHT_MCP_EXTENSION_TOKEN : '', outDir: path.join(HOME_DIR, 'navigateur') });   // le jeton de l'extension est conservé
         cfgAll.mcpServers.playwright = { ...want, _scope: 'user' };
         const saved = saveMcpConfig('user', S.cwd, cfgAll);
         if (!saved.ok) return println(c.red('  ✗ ' + saved.error));

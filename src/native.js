@@ -2,7 +2,10 @@
 // FS déclare les outils au modèle, nous renvoie les appels dans completed.message.toolCalls, nous les exécutons ICI (avec nos garde-fous :
 // politique de commandes, confirmations, secrets, chemins limités au workspace) et renvoyons les résultats avec toolResults.
 // Documentation FS : « Outils client (mode avancé) », flag 2026_11_client_tools.
-import { streamChat, CLIENT_TOOLS } from './api.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { streamChat, CLIENT_TOOLS, uploadFile } from './api.js';
+import { takeQueuedImages } from './vision.js';
 import { contextPercent } from './account.js';
 import { cfg } from './config.js';
 import { newSid, tag } from './chats.js';
@@ -55,7 +58,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
   if (!S.chatId && cfg.tagChats !== false) content = tag(S.sid) + content;
   const root = baseDir(S);
   const t0 = Date.now();
-  let results = null, nTools = 0, nReq = 0, tokensIn = 0, tokensOut = 0, steps = 0, hitLimit = false, visible = '';
+  let results = null, resultFiles = [], nTools = 0, nReq = 0, tokensIn = 0, tokensOut = 0, steps = 0, hitLimit = false, visible = '';
 
   for (; steps < (cfg.maxSteps || 40); steps++) {
     if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
@@ -66,7 +69,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     try {
       res = await stream({
         agentId: S.agentId, chatId: S.chatId, signal, webSearch: cfg.webSearch, register: { sid: S.sid, role: 'main' },
-        clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results } : { content, files: S.pendingFileIds }),   // images jointes : avec le message, pas avec les résultats
+        clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results, files: resultFiles } : { content, files: S.pendingFileIds }),   // images : avec le message, ou avec les résultats (captures d'outils)
         onChat: id => { if (!S.chatId) S.chatId = id; },
         onText: d => md.push(d),
         onReasoning: d => {
@@ -96,6 +99,12 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
       if (total + r.output.length > MAX_TOTAL) r = { ...r, output: r.output.slice(0, Math.max(500, MAX_TOTAL - total)) + '\n[… coupé : lis une plage plus étroite]' };
       total += r.output.length; results.push(r);
     }
+    // captures renvoyées par les outils (navigateur, Blender…) : envoyées sur Files v2 et jointes à ces résultats → le modèle les VOIT
+    resultFiles = [];
+    for (const img of takeQueuedImages(4)) {
+      try { resultFiles.push(await uploadFile(fs.readFileSync(img.file), path.basename(img.file), img.mime)); } catch {}
+    }
+    if (resultFiles.length) ui.toolNote(`📷 ${resultFiles.length} capture${resultFiles.length > 1 ? 's' : ''} transmise${resultFiles.length > 1 ? 's' : ''} au modèle`);
     if (steps === (cfg.maxSteps || 40) - 1) hitLimit = true;
   }
   if (visible) S.lastResponse = visible;

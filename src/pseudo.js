@@ -96,7 +96,12 @@ export async function serverBrief(S, name, io) {
     ui.spinner.start(`démarrage de ${name}…`);
     const tools = await getMcp(S.cwd).listTools(name, { signal: io.signal });
     ui.spinner.stop();
-    return `[Info de FS-CLI : l'utilisateur veut que tu utilises le serveur MCP « ${name} » de son PC. Lance-le avec run_command via le programme fs-mcp. ${RULE}\n${describeTools(name, tools)}]`;
+    const browser = BROWSER_SERVERS.test(name)
+      ? `\nNavigateur : commence par ${FS_MCP} call ${name} browser_snapshot pour lire la page (chaque élément a un repère « ref=eN » à passer en target=eN pour cliquer ou taper). ` +
+        `Pour VOIR la page (design, image, bug visuel, vérifier le résultat), appelle browser_take_screenshot : FS-CLI joint la capture au résultat et tu la vois. ` +
+        `Travaille étape par étape (une action, puis vérifie), et ne valide jamais d'achat, de paiement ou d'envoi définitif sans l'accord explicite de l'utilisateur.`
+      : '';
+    return `[Info de FS-CLI : l'utilisateur veut que tu utilises le serveur MCP « ${name} » de son PC. Lance-le avec run_command via le programme fs-mcp. Si un outil renvoie une image, elle t'est jointe : tu peux la voir. ${RULE}${browser}\n${describeTools(name, tools)}]`;
   } catch (e) {
     ui.spinner.stop();
     if (e.name === 'AbortError') throw e;

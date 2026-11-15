@@ -17,6 +17,7 @@ import { loadMcpConfig, McpManager } from './src/mcp.js';
 import { discoverSkills, searchSkills } from './src/discover.js';
 import { isImportApproved } from './src/approvals.js';
 import { bridgeRequest } from './src/bridge.js';
+import { captureImages } from './src/vision.js';
 
 const argv = process.argv.slice(2);
 const cwd = process.cwd();
@@ -63,7 +64,8 @@ async function callAny(name, tool, args) {
   if (b) { if (b.error) return { ok: false, text: b.error }; return { ok: !!b.ok, text: b.text }; }
   mgr ||= new McpManager({ cwd });
   const r = await mgr.callTool(name, tool, args, { timeoutMs: 120000 });
-  return { ok: r.ok && !r.isError, text: r.text || r.error || '' };
+  const shots = captureImages(r.content, { queueForModel: false });   // hors session : les captures sont seulement enregistrées
+  return { ok: r.ok && !r.isError, text: (r.text || r.error || '') + (shots.length ? `\n[image${shots.length > 1 ? 's' : ''} enregistrée${shots.length > 1 ? 's' : ''} : ${shots.join(', ')}]` : '') };
 }
 
 function parseArgs(kv, def) {

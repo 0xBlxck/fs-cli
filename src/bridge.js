@@ -7,6 +7,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { loadMcpConfig } from './mcp.js';
 import { isImportApproved } from './approvals.js';
+import { captureImages } from './vision.js';
 
 export function startBridge({ getManager, getCwd }) {
   const token = crypto.randomBytes(24).toString('hex');
@@ -33,7 +34,10 @@ export function startBridge({ getManager, getCwd }) {
         if (q.action === 'tools') return send(200, { tools: await mgr.listTools(q.server) });
         if (q.action === 'call') {
           const r = await mgr.callTool(q.server, q.tool, q.args || {}, { timeoutMs: 180000 });
-          return send(200, { ok: r.ok && !r.isError, text: r.text || r.error || '' });
+          let text = r.text || r.error || '';
+          const shots = captureImages(r.content);                       // capture d'écran… → montrée au modèle avec ce résultat
+          if (shots.length) text += `\n[${shots.length} image${shots.length > 1 ? 's' : ''} jointe${shots.length > 1 ? 's' : ''} à ce résultat : tu peux ${shots.length > 1 ? 'les' : 'la'} voir]`;
+          return send(200, { ok: r.ok && !r.isError, text });
         }
         return send(400, { error: 'action inconnue' });
       } catch (e) { return send(500, { error: e.message }); }

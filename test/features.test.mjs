@@ -99,3 +99,23 @@ test('jeton de l\'extension Chrome collé : intercepté (jamais envoyé au modè
   const r = detectIntent('PLAYWRIGHT_MCP_EXTENSION_TOKEN=abcdefghijklmnopqrstuvwxyz123');   // scan-ignore (faux jeton de test)
   assert.equal(r.cmd, '/navigateur'); assert.match(r.arg, /^chrome PLAYWRIGHT_MCP_EXTENSION_TOKEN=/);
 });
+
+test('vision : les images d\'un outil MCP sont enregistrées et mises en file pour le modèle', async () => {
+  const { captureImages, takeQueuedImages } = await import('../src/vision.js');
+  const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  const files = captureImages([{ type: 'text', text: 'ok' }, { type: 'image', mimeType: 'image/png', data: png }]);
+  assert.equal(files.length, 1); assert.ok(fs.existsSync(files[0]));
+  const q = takeQueuedImages();
+  assert.equal(q.length, 1); assert.equal(q[0].mime, 'image/png');
+  assert.equal(takeQueuedImages().length, 0, 'une capture n\'est envoyée qu\'une fois');
+  assert.equal(captureImages([{ type: 'image', data: png }], { queueForModel: false }).length, 1);
+  assert.equal(takeQueuedImages().length, 0);
+});
+
+test('navigateur : vision, pdf, devtools activés, jeton de l\'extension conservé', async () => {
+  const { playwrightServer } = await import('../src/browser.js');
+  const sep = playwrightServer({ outDir: '/x' });
+  assert.ok(sep.args.includes('vision,pdf,devtools')); assert.ok(!sep.args.includes('--extension')); assert.equal(sep.env, undefined);
+  const mine = playwrightServer({ mineChrome: true, token: 'abc', outDir: '/x' });
+  assert.ok(mine.args.includes('--extension')); assert.equal(mine.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, 'abc');
+});
