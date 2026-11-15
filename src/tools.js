@@ -178,11 +178,71 @@ function shellInvocation(command) {
   return { file: sysEnv.shell, args: [...base, '-File', tmp], tmp };
 }
 
+// ── Serveurs locaux (npx serve, npm run dev, python -m http.server…) ──
+// Ils ne s'arrêtent jamais : lancés tels quels, ils bloqueraient jusqu'au délai ; le modèle les ouvrait alors avec Start-Process
+// (grande fenêtre de console). FS-CLI les lance en tâche de fond, sans fenêtre, et rend l'adresse au modèle.
+const SERVER_RE = new RegExp('^(?:' + [
+  String.raw`npx\s+(?:-y\s+|--yes\s+)?(?:serve|http-server|live-server|vite|next\s+(?:dev|start)|astro\s+dev|nuxi?\s+dev|webpack\s+serve|parcel(?!\s+build))\b`,
+  String.raw`(?:npm|pnpm|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b`, String.raw`yarn\s+(?:run\s+)?(?:dev|start|serve|preview)\b`,
+  String.raw`(?:python3?|py)\s+(?:-\d(?:\.\d+)?\s+)?-m\s+http\.server\b`, String.raw`php\s+-S\b`, String.raw`(?:live-server|http-server|serve)\b`,
+  String.raw`vite(?:\s+(?:dev|serve|preview))?\s*(?:$|--)`, String.raw`flask\s+run\b`, String.raw`uvicorn\s`, String.raw`(?:python3?|py)\s+manage\.py\s+runserver\b`,
+].join('|') + ')', 'i');
+/** commande = (cd …;)* serveur : la dernière partie est un serveur, les précédentes ne font que changer de dossier */
+export function isServerCommand(command) {
+  const parts = String(command || '').trim().split(/\s*(?:;|&&|\r?\n)\s*/).filter(Boolean);
+  if (!parts.length || parts.length > 4) return false;
+  const last = parts[parts.length - 1];
+  return SERVER_RE.test(last) && parts.slice(0, -1).every(p => /^(?:cd|Set-Location|sl|pushd)\s+\S/i.test(p));
+}
+const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|[\w.-]+\.local)(?::\d+)?[^\s'")\]]*/i;
+/** port probable d'un serveur d'après sa commande (option explicite, sinon port par défaut de l'outil) */
+export function guessPort(command) {
+  const c = String(command || '');
+  const m = c.match(/(?:-p|--port|-l|--listen)[\s=]+(\d{2,5})\b/i) || c.match(/http\.server\s+(\d{2,5})\b/i) || c.match(/-S\s+[\w.[\]:-]*:(\d{2,5})\b/i) || c.match(/runserver\s+(?:[\w.]+:)?(\d{2,5})\b/i);
+  if (m) return +m[1];
+  if (/http\.server|runserver/i.test(c)) return 8000;
+  if (/http-server/i.test(c)) return 8080;
+  if (/vite|astro|nuxi?/i.test(c)) return /preview/i.test(c) ? 4173 : 5173;
+  if (/live-server/i.test(c)) return 8080;
+  if (/flask/i.test(c)) return 5000;
+  if (/serve|next|npm|pnpm|yarn|bun/i.test(c)) return 3000;
+  return null;
+}
+const answers = async url => { try { const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 600); await fetch(url, { method: 'HEAD', signal: ac.signal }); clearTimeout(t); return true; } catch { return false; } };
+
+/** lance un serveur en tâche de fond (sans fenêtre) et attend son adresse quelques secondes */
+export async function startServerJob(command, cwd, { onData, waitMs = 8000, signal } = {}) {
+  const job = startJob(command, cwd);
+  const port = guessPort(command), guess = port ? `http://localhost:${port}` : null;
+  const t0 = Date.now();
+  let shown = 0, probed = null;
+  while (Date.now() - t0 < waitMs && !signal?.aborted) {
+    if (job.out.length > shown) { onData?.(job.out.slice(shown)); shown = job.out.length; }
+    if (job.status !== 'running' || URL_RE.test(job.out)) break;
+    if (guess && Date.now() - t0 > 700 && await answers(guess)) { probed = guess; break; }   // le serveur répond déjà, même s'il n'a rien affiché
+    await new Promise(r => setTimeout(r, 250));
+  }
+  if (job.out.length > shown) onData?.(job.out.slice(shown));
+  const url = (job.out.match(URL_RE) || [probed])[0];
+  return { job, url: url && url.replace(/\/\/(?:0\.0\.0\.0|\[::1?\])(?=[:/]|$)/, '//localhost') };   // « [::] » / « 0.0.0.0 » : adresse d'écoute, pas une adresse à ouvrir
+}
+/** Windows : « Start-Process powershell/cmd/node/npm/python… » ouvrirait une console visible → fenêtre cachée (les fichiers et les URL s'ouvrent toujours normalement) */
+export function hideConsoleLaunch(command) {
+  if (!IS_WIN) return command;
+  const CONSOLE = String.raw`['"]?(?:[\w:\\/.-]*[\\/])?(?:powershell|pwsh|cmd|node|npm|npx|pnpm|yarn|bun|deno|python3?|py|php|uvicorn|flask)(?:\.exe|\.cmd|\.bat)?['"]?(?=[\s;]|$)`;
+  const re = new RegExp(String.raw`(^|[;&|(\n]\s*)(Start-Process|saps|start)(\s+(?:-FilePath\s+)?)(${CONSOLE})`, 'gi');
+  return String(command).replace(re, (m, pre, kw, sp, exe, off, all) => {
+    const rest = all.slice(off + m.length).split(/[;\n|]/)[0];
+    if (/-WindowStyle|-NoNewWindow/i.test(rest)) return m;
+    return `${pre}${kw} -WindowStyle Hidden${sp}${exe}`;
+  });
+}
+
 export function startJob(command, cwd) {
   const inv = shellInvocation(command);
   const child = spawn(inv.file, inv.args, {
     cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', NO_COLOR: '1', FORCE_COLOR: '0' },
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', NO_COLOR: '1', FORCE_COLOR: '0' },   // sortie Python immédiate (sinon rien avant le 1er visiteur)
   });
   const job = { id: ++jobSeq, command, cwd, startedAt: Date.now(), endedAt: null, status: 'running', code: null, out: '', child };
   const take = d => { job.out += stripAnsi(d); if (job.out.length > 200_000) job.out = job.out.slice(-150_000); };
@@ -327,7 +387,17 @@ export const TOOLS = {
       const cwd = a.cwd ? resolveP(a.cwd, ctx.cwd) : ctx.cwd;
       if (!fs.existsSync(cwd)) return err(`Dossier introuvable: ${cwd}`);
       const live = createLive(24);
-      const r = await runShell(a.command, { cwd, timeoutMs: timeoutS * 1000, signal: ctx.signal, onData: live.push });
+      if (isServerCommand(a.command)) {                               // serveur local : tâche de fond sans fenêtre, adresse rendue au modèle
+        const { job, url } = await startServerJob(a.command, cwd, { onData: live.push, signal: ctx.signal });
+        live.end();
+        const out = clipMiddle(job.out.trim() || '(pas encore de sortie)', 4000);
+        if (job.status !== 'running') return job.code === 0 ? { ok: true, output: out, display: 'terminé', silent: true }   // commande finie d'elle-même (pas un serveur)
+          : { ok: false, output: `La commande s'est arrêtée tout de suite (code ${job.code}).\n${out}`, display: `arrêtée (code ${job.code})`, silent: true };
+        return { ok: true, silent: true, display: `en arrière-plan · tâche ${job.id}${url ? ' · ' + url : ''}`,
+          output: `Serveur lancé en arrière-plan par FS-CLI (tâche ${job.id}, sans fenêtre). Il tourne toujours.${url ? `\nAdresse : ${url}` : ''}\nSortie :\n${out}\nPour l'ouvrir dans le navigateur : Start-Process <adresse> (ou start <adresse>). Pour l'arrêter : l'utilisateur tape /jobs stop ${job.id}. Ne relance pas le serveur.` };
+      }
+      const command = hideConsoleLaunch(a.command);
+      const r = await runShell(command, { cwd, timeoutMs: timeoutS * 1000, signal: ctx.signal, onData: live.push });
       live.end();
       const output = clipMiddle(formatProc(r, { timeoutS }));
       return { ok: r.code === 0 && !r.timedOut && !r.aborted, output, display: procDisplay(r), silent: true };

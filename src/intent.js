@@ -56,6 +56,10 @@ export function detectIntent(raw) {
     return { cmd: '/vscode', arg: '', label: 'installer l\'extension FS-CLI dans ton éditeur' };
   }
 
+  // ── projet France Student : « travaille dans mon projet Marketing », « passe sur le projet X »
+  const proj = head.match(/^(?:on\s+)?(?:travaille|bosse|parle|passe|va|mets[- ]toi|continue)\s+(?:dans|sur)\s+(?:le|mon)\s+projet\s+(?:fs\s+|france\s*student\s+)?[«"']?\s*([^«»"'\n]{2,60}?)\s*[»"']?\s*[.!]?$/i);
+  if (proj && !text.includes('\n')) return { cmd: '/projet', arg: proj[1].trim(), label: `travailler dans ton projet France Student « ${proj[1].trim()} »` };
+
   // ── quota / conversations restantes
   if (/\b(combien|reste[- ]?t[- ]?il|il\s+me\s+reste|mon\s+quota|ma\s+limite|mon\s+budget|ma\s+consommation)\b/i.test(head)
       && /\b(conv\w*|chats?|messages?|requ[êe]tes?|quota|limite|budget|cr[ée]dits?|consomm\w*)\b/i.test(head) && head.length < 160) {

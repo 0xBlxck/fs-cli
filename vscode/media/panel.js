@@ -418,7 +418,7 @@
     bMode.textContent = MODE_UI[st.mode] || st.mode || '';
     bMode.className = 'pill mode-' + (st.mode || 'auto');
     const dir = String(st.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
-    footL.textContent = dir ? `📁 ${dir}` : '';
+    footL.textContent = [dir ? `📁 ${dir}` : '', st.project ? `◆ projet ${st.project}` : ''].filter(Boolean).join('  ·  ');
     footR.textContent = typeof st.ctx === 'number' ? `contexte ${Math.round(st.ctx)} %` : '';
   }
   function setBusy(b) {

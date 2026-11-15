@@ -47,3 +47,9 @@ test('extension de l\'éditeur : la nôtre seulement', () => {
   assert.equal(detectIntent("installe l'extension prettier dans vscode"), null);
   assert.equal(detectIntent('installe express avec npm'), null);
 });
+
+test('projet France Student : « travaille dans mon projet X »', () => {
+  assert.deepEqual(['cmd', 'arg'].map(k => detectIntent('travaille dans mon projet Marketing')?.[k]), ['/projet', 'Marketing']);
+  assert.equal(detectIntent('passe sur le projet « Site vitrine »')?.arg, 'Site vitrine');
+  assert.equal(detectIntent('crée un projet react avec vite'), null);
+});

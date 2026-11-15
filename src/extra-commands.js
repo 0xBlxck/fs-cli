@@ -415,20 +415,43 @@ export async function extraCommand(cmd, arg, env) {
       await runTeam(env, task, { review, agents, mode }); return true;
     }
     // ── rangement des conversations dans un Projet France Student (barre latérale du site) ──
-    case '/fr-project': case '/projet-fs': {
-      if (!arg) {
-        println(c.dim(cfg.fsProject === false ? '  rangement désactivé — /fr-project <nom> pour ranger les nouvelles conversations dans un projet du site'
-          : `  nouvelles conversations rangées dans le projet « ${cfg.fsProject?.name || 'FS-CLI'} » du site — /fr-project <nom> · /fr-project off`));
-        return true;
-      }
-      if (/^(off|non|aucun|none)$/i.test(arg)) { cfg.fsProject = false; saveCfg(); println(c.dim('  → les nouvelles conversations ne sont plus rangées dans un projet')); return true; }
+    case '/projet': case '/project-fs': case '/fr-project': case '/projet-fs': {   // travailler DANS un projet France Student : conversations rangées là + instructions du projet suivies
+      const use = (p, created) => {
+        cfg.fsProject = { id: p.id, name: p.name || '?' }; saveCfg();
+        S.fsProjInstr = null;                                          // instructions relues au prochain message
+        const instr = String(p.customInstructions || '').trim();
+        if (S.chatId && instr) S.notes.push(`L'utilisateur travaille maintenant dans son projet France Student « ${cfg.fsProject.name} ». Suis désormais ses instructions :\n${instr.slice(0, 8000)}`);
+        if (S.chatId) attachChatToProject(p.id, S.chatId).catch(() => {});
+        env.refreshPrompt?.();
+        println(c.green('  ✓ ') + `projet « ${cfg.fsProject.name} »${created ? ' créé' : ''}` + c.dim(` — conversations rangées dans ce projet du site${instr ? ' · ses instructions sont suivies' : ' · ce projet n\'a pas d\'instructions (ajoute-en sur le site)'}`));
+      };
+      if (/^(off|non|aucun|none)$/i.test(arg)) { cfg.fsProject = false; saveCfg(); S.fsProjInstr = null; env.refreshPrompt?.(); println(c.dim('  → plus de projet : les conversations ne sont plus rangées, aucune instruction de projet')); return true; }
       try {
-        ui.spinner.start('projet France Student…');
-        const { project, created } = await findOrCreateFsProject(arg);
+        ui.spinner.start('projets France Student…');
+        const list = await listFsProjects();
         ui.spinner.stop();
-        cfg.fsProject = { id: project.id, name: project.name || arg }; saveCfg();
-        const moved = S.chatId ? await attachChatToProject(project.id, S.chatId) : false;
-        println(c.green('  ✓ ') + c.dim(`projet « ${cfg.fsProject.name} » ${created ? 'créé' : 'trouvé'} : les nouvelles conversations y seront rangées${moved ? ' (conversation actuelle déplacée)' : ''}`));
+        if (!arg) {                                                    // liste des projets du compte : on choisit
+          const cur = cfg.fsProject === false ? null : cfg.fsProject?.id;
+          if (!list.length) { println(c.dim('  aucun projet sur ton compte — /projet <nom> pour en créer un')); return true; }
+          const label = p => `${p.name || '(sans nom)'}${p.id === cur ? '  ✓ actuel' : ''}${String(p.customInstructions || '').trim() ? '  · avec instructions' : ''}`;
+          if (env.select) {
+            const shown = list.slice(0, 20);
+            const idx = await env.select({ title: 'Travailler dans quel projet France Student ?', detail: 'Les conversations y sont rangées et le modèle suit les instructions personnalisées du projet.', options: [...shown.map(label), 'Aucun projet', 'Annuler'], defaultIndex: Math.max(0, shown.findIndex(p => p.id === cur)) });
+            if (idx == null || idx > shown.length) return true;
+            if (idx === shown.length) { cfg.fsProject = false; saveCfg(); S.fsProjInstr = null; env.refreshPrompt?.(); println(c.dim('  → plus de projet')); return true; }
+            use(shown[idx]); return true;
+          }
+          println(); list.forEach(p => println(`  ${p.id === cur ? c.green('●') : c.dim('○')} ${label(p)}`)); println(c.dim('\n  /projet <nom> pour choisir · /projet off\n')); return true;
+        }
+        const want = arg.trim().toLocaleLowerCase('fr-FR');
+        const hit = list.find(p => String(p.name || '').trim().toLocaleLowerCase('fr-FR') === want) || list.find(p => String(p.name || '').toLocaleLowerCase('fr-FR').includes(want));
+        if (hit) { use(hit); return true; }
+        const ok = env.select ? (await env.select({ title: `Créer le projet « ${arg.trim()} » sur France Student ?`, detail: 'Aucun projet de ce nom sur ton compte.', options: ['Oui, le créer', 'Non'], defaultIndex: 0 })) === 0 : true;
+        if (!ok) return true;
+        ui.spinner.start('création du projet…');
+        const { project } = await findOrCreateFsProject(arg);
+        ui.spinner.stop();
+        use(project, true);
       } catch (e) { ui.spinner.stop(); println(c.red('  ✗ ' + e.message)); }
       return true;
     }

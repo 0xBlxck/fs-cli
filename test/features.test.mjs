@@ -181,3 +181,19 @@ test('ctrl+o : les sorties résumées et la pensée du modèle sont gardées pui
   out = ''; ui.showExpanded(); assert.match(out, /rien de replié/);
   ui.attachSink(null);
 });
+
+test('serveurs locaux : reconnus, lancés en arrière-plan ; Start-Process d\'une console caché (Windows)', async () => {
+  const { isServerCommand, guessPort, hideConsoleLaunch } = await import('../src/tools.js');
+  for (const c of ['npx serve .', 'cd site; npm run dev', 'python -m http.server 8000', 'npx -y http-server -p 8080', 'php -S localhost:8001']) assert.equal(isServerCommand(c), true, c);
+  for (const c of ['npm run build', 'python script.py', 'vite build', 'rm -rf x; npx serve', 'npm test']) assert.equal(isServerCommand(c), false, c);
+  assert.equal(guessPort('python -m http.server 8765'), 8765);
+  assert.equal(guessPort('npx http-server -p 9090'), 9090);
+  assert.equal(guessPort('php -S localhost:8001'), 8001);
+  assert.equal(guessPort('npx serve .'), 3000);
+  if (process.platform === 'win32') {
+    assert.equal(hideConsoleLaunch('Start-Process powershell -ArgumentList "npx serve"'), 'Start-Process -WindowStyle Hidden powershell -ArgumentList "npx serve"');
+    assert.equal(hideConsoleLaunch('Start-Process http://localhost:3000'), 'Start-Process http://localhost:3000');   // navigateur : inchangé
+    assert.equal(hideConsoleLaunch('Start-Process index.html'), 'Start-Process index.html');
+    assert.equal(hideConsoleLaunch('Start-Process node a.js -NoNewWindow'), 'Start-Process node a.js -NoNewWindow');
+  }
+});
