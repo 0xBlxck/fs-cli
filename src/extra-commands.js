@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cfg, saveCfg, upsertSession } from './config.js';
-import { streamChat, fetchChatsList, deleteChat } from './api.js';
+import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject } from './api.js';
 import { fetchChatUsage, fetchUserUsage, contextPercent, describeChatUsage, describeUserUsage } from './account.js';
 import * as mem from './memory.js';
 import { PRESETS, loadMcpConfig, saveMcpConfig, trustProject } from './mcp.js';
@@ -319,6 +319,24 @@ export async function extraCommand(cmd, arg, env) {
       }
       await runTeam(env, task, { review, agents, mode }); return true;
     }
+    // ── rangement des conversations dans un Projet France Student (barre latérale du site) ──
+    case '/fr-project': case '/projet-fs': {
+      if (!arg) {
+        println(c.dim(cfg.fsProject === false ? '  rangement désactivé — /fr-project <nom> pour ranger les nouvelles conversations dans un projet du site'
+          : `  nouvelles conversations rangées dans le projet « ${cfg.fsProject?.name || 'FS-CLI'} » du site — /fr-project <nom> · /fr-project off`));
+        return true;
+      }
+      if (/^(off|non|aucun|none)$/i.test(arg)) { cfg.fsProject = false; saveCfg(); println(c.dim('  → les nouvelles conversations ne sont plus rangées dans un projet')); return true; }
+      try {
+        ui.spinner.start('projet France Student…');
+        const { project, created } = await findOrCreateFsProject(arg);
+        ui.spinner.stop();
+        cfg.fsProject = { id: project.id, name: project.name || arg }; saveCfg();
+        const moved = S.chatId ? await attachChatToProject(project.id, S.chatId) : false;
+        println(c.green('  ✓ ') + c.dim(`projet « ${cfg.fsProject.name} » ${created ? 'créé' : 'trouvé'} : les nouvelles conversations y seront rangées${moved ? ' (conversation actuelle déplacée)' : ''}`));
+      } catch (e) { ui.spinner.stop(); println(c.red('  ✗ ' + e.message)); }
+      return true;
+    }
     case '/teammode': {
       if (!/^(same|pool)$/i.test(arg)) { println(c.dim(`  mode actuel : ${cfg.teamMode} — /teammode same (à la suite, dans la conversation courante) · /teammode pool (en parallèle, conversations réutilisées)`)); return true; }
       cfg.teamMode = arg.toLowerCase(); saveCfg(); println(c.dim(`  → /team : ${cfg.teamMode === 'same' ? 'à la suite dans la conversation courante (aucune conversation créée)' : 'en parallèle, dans des conversations réutilisées (w0, w1…)'}`)); return true;
@@ -440,6 +458,12 @@ export async function extraCommand(cmd, arg, env) {
     }
 
     // ── projet ──
+    case '/init': {                                                     // fichier d'instructions du projet (lu au début de chaque conversation)
+      const r = mem.initInstructions(cwd);
+      if (!r.created) { println(c.dim(`  ${r.path} existe déjà (rien d'écrasé) — modifie-le, il est lu au début de chaque conversation`)); return true; }
+      println(c.green('  ✓ ') + c.dim(`${r.path} créé — complète-le : il sera lu au début de chaque nouvelle conversation (/new pour l'appliquer maintenant)`));
+      return true;
+    }
     case '/project': {
       const dir = resolveP(arg || '.', cwd);
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) { println(c.red('  dossier introuvable')); return true; }

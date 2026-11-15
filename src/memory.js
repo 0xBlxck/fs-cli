@@ -94,8 +94,51 @@ export function loadSkills() {
 }
 
 // ── Bloc de contexte joint au 1er message d'une conversation ──────────────────
+/** Fichier d'instructions du projet (comme CLAUDE.md) : FSCLI.md, sinon AGENTS.md, dans le dossier de travail. */
+export const INSTRUCTION_FILES = ['FSCLI.md', 'AGENTS.md'];
+export function projectInstructions(cwd) {
+  for (const name of INSTRUCTION_FILES) {
+    const fp = path.join(cwd || process.cwd(), name);
+    try {
+      const st = fs.statSync(fp);
+      if (!st.isFile() || st.size > 200_000) continue;
+      const text = fs.readFileSync(fp, 'utf8').replace(/^﻿/, '').trim();
+      if (text) return { name, text: text.length > 6000 ? text.slice(0, 6000) + '\n[… tronqué : lis la suite avec read_file si besoin]' : text };
+    } catch {}
+  }
+  return null;
+}
+
+/** Crée FSCLI.md (sans jamais écraser) avec ce qui se détecte du projet ; renvoie { created, path }. */
+export function initInstructions(cwd) {
+  const fp = path.join(cwd, 'FSCLI.md');
+  if (fs.existsSync(fp)) return { created: false, path: fp };
+  const has = f => fs.existsSync(path.join(cwd, f));
+  const lines = [`# Instructions du projet ${path.basename(cwd)}`, '',
+    '> Lu par FS-CLI au début de chaque conversation. Écris ici ce que le modèle doit toujours savoir sur ce projet.', ''];
+  const stack = [];
+  let pkg = null; try { pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')); } catch {}
+  if (pkg) {
+    const pm = has('pnpm-lock.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : has('bun.lockb') || has('bun.lock') ? 'bun' : 'npm';
+    stack.push(`Node.js (${pm})`);
+    const scripts = Object.keys(pkg.scripts || {}).filter(s => /^(dev|start|build|test|lint|format)$/.test(s));
+    if (scripts.length) { lines.push('## Commandes', ''); for (const s of scripts) lines.push(`- \`${pm} ${pm === 'npm' && s !== 'test' && s !== 'start' ? 'run ' : ''}${s}\``); lines.push(''); }
+  }
+  if (has('requirements.txt') || has('pyproject.toml')) stack.push('Python');
+  if (has('Cargo.toml')) stack.push('Rust');
+  if (has('go.mod')) stack.push('Go');
+  if (has('index.html')) stack.push('site statique (HTML/CSS/JS)');
+  if (has('.git')) stack.push('dépôt Git');
+  if (stack.length) lines.push('## Projet', '', `- Technologies : ${stack.join(', ')}`, '');
+  lines.push('## Règles', '', '- (exemple) Réponds en français, code commenté en français.', '- (exemple) Ne modifie pas les fichiers du dossier `dist/`.', '');
+  fs.writeFileSync(fp, lines.join('\n'), 'utf8');
+  return { created: true, path: fp };
+}
+
 export function buildContextBlock(cwd) {
   const parts = [], bits = [];
+  const instr = projectInstructions(cwd);
+  if (instr) { parts.push(`Instructions du projet (${instr.name}) :\n${instr.text}`); bits.push(instr.name); }
   const pre = [loadProfile('utilisateur', cwd).preprompt, loadProfile('projet', cwd).preprompt].filter(Boolean);
   if (pre.length) { parts.push(`Instructions permanentes : ${pre.join(' / ')}`); bits.push('préprompt'); }
 
@@ -109,5 +152,5 @@ export function buildContextBlock(cwd) {
   if (active.length) { parts.push(`Compétences à appliquer :\n${active.map(s => `- ${s.name} : ${s.systemPrompt}`).join('\n')}`); bits.push(`${active.length} skill${active.length > 1 ? 's' : ''}`); }
 
   if (!parts.length) return { text: '', label: '' };
-  return { text: `[Contexte de l'utilisateur — à respecter sans le commenter]\n${parts.join('\n')}`.slice(0, 4000), label: bits.join(' · ') };
+  return { text: `[Contexte de l'utilisateur — à respecter sans le commenter]\n${parts.join('\n')}`.slice(0, 10000), label: bits.join(' · ') };
 }

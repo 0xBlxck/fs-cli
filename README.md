@@ -14,6 +14,11 @@ Client terminal **communautaire et non officiel** pour [France Student AI](https
 - **Mémoire** : notes par dossier, préprompt, faits appris, compétences (`skills`), `/compact` automatique avant que le contexte soit plein.
 - **Plusieurs agents** : `/team` fait travailler des agents à la suite dans **la même conversation**, ou en parallèle dans des conversations réutilisées ; `/compare` pose la même question à deux modèles.
 - **MCP** : serveurs MCP (stdio et HTTP) avec presets ; un `.mcp.json` de projet ne démarre qu'après `/mcp trust`.
+- **Conversations rangées** : sur le site, les conversations du CLI sont regroupées dans le projet **FS-CLI** (`/fr-project <nom>` pour un autre, `/fr-project off` pour désactiver).
+- **Instructions du projet** : `/init` crée `FSCLI.md` (ou utilise un `AGENTS.md` existant), lu au début de chaque conversation.
+- **Fichiers protégés** : le modèle ne peut pas écraser un fichier modifié depuis sa dernière lecture (il doit le relire) ; écritures atomiques, jamais de fichier à moitié écrit.
+- **Confiance par dossier** : à la première ouverture d'un dossier, le CLI demande si tu lui fais confiance.
+- **Ctrl+C** arrête aussi la génération côté serveur (elle ne continue pas en arrière-plan).
 - **Zéro dépendance** (rien à `npm install`), pas de télémétrie.
 
 ## Installation

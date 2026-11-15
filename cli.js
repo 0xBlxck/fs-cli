@@ -17,6 +17,7 @@ import { createInput, attachScreen } from './src/input.js';
 import { detectTargetDir } from './src/target.js';
 import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
+import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
@@ -183,7 +184,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/intent ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -294,6 +295,8 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
+    ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
     ['/think', 'afficher/masquer le raisonnement'], ['/steps <n>', 'étapes max par demande'], ['/theme <nom>', Object.keys(THEMES).join(' · ')],
@@ -393,6 +396,7 @@ async function command(line) {
     case '/cd': {
       const dir = resolveP(arg || os.homedir(), S.cwd);
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return println(c.red('  dossier introuvable'));
+      if (!(await ensureFolderTrust(dir))) return println(c.dim('  dossier inchangé'));
       S.cwd = dir; S.targetDir = null; S.notes.push(`Dossier courant changé : ${dir}`); refreshPrompt(); return println(c.dim('  → ' + dir));
     }
     case '/target': {
@@ -615,6 +619,25 @@ input.on('quit', () => {
 process.on('exit', () => { try { input.stop(); } catch {} });
 process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); });
 
+/** Première ouverture d'un dossier : on demande la confiance avant que le modèle puisse y agir. */
+async function ensureFolderTrust(dir) {
+  if (isFolderTrusted(dir)) return true;
+  const broad = isBroadFolder(dir);
+  const detail = `Le modèle pourra lire et modifier les fichiers de ce dossier et y lancer des commandes (avec confirmation pour les actions sensibles).` +
+    (broad ? `\n⚠ C'est un dossier très large (racine du disque ou dossier personnel) : préfère le dossier précis d'un projet.` : '\nLa confiance vaut aussi pour ses sous-dossiers.');
+  const options = broad ? ['Oui, pour cette session seulement', 'Non'] : ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Non'];
+  let idx;
+  if (input.select && interactive) idx = await input.select({ title: `Faire confiance à ce dossier ? ${dir}`, detail, options, defaultIndex: 0 });
+  else {
+    println(c.yellow(`  ? Faire confiance à ce dossier ? ${dir}`)); println(c.dim('    ' + detail.replace(/\n/g, '\n    ')));
+    const a = ((await ask(`  [o]ui / [s]ession seulement / [N]on `)) || '').trim().toLowerCase();
+    idx = /^(o|oui|y|yes)$/.test(a) ? (broad ? 0 : 0) : /^s/.test(a) ? (broad ? 0 : 1) : options.length - 1;
+  }
+  if (idx === null || idx === undefined || options[idx] === 'Non') return false;
+  trustFolder(dir, { remember: options[idx].startsWith('Oui, je') });
+  return true;
+}
+
 // ── Lancement ─────────────────────────────────────────────────────────────────
 if (opts.print) {
   if (!initial) { console.log(c.red('  -p nécessite une demande')); process.exit(1); }
@@ -630,4 +653,8 @@ if (interactive) {
 }
 refreshPrompt();
 banner();
+if (!(await ensureFolderTrust(S.cwd))) {
+  println(c.dim('  Dossier non approuvé : relance FS-CLI depuis le dossier de ton projet (ou --cwd <dossier>).'));
+  saveSession(); input.stop(); process.exit(0);
+}
 if (initial) await runInput(initial); else input.prompt();

@@ -9,6 +9,35 @@ import { SEARCH_KEY, SEARCH_PROVIDER } from './config.js';
 
 export const IS_WIN = process.platform === 'win32';
 
+// ── Fraîcheur et écriture atomique ──
+// On mémorise l'empreinte (taille + date) de chaque fichier lu ou écrit par le CLI. Si le fichier a changé depuis (toi dans ton éditeur,
+// un formateur, une autre commande…), le modèle doit le relire avant de le modifier : il n'écrase jamais une version qu'il n'a pas vue.
+const SEEN = new Map();
+const keyOf = fp => (IS_WIN ? path.resolve(fp).toLowerCase() : path.resolve(fp));
+const stampOf = fp => { try { const s = fs.statSync(fp); return `${s.size}:${s.mtimeMs}`; } catch { return null; } };
+export function noteSeen(fp) { const s = stampOf(fp); if (s) SEEN.set(keyOf(fp), s); else SEEN.delete(keyOf(fp)); }
+export function staleReason(fp) {
+  const before = SEEN.get(keyOf(fp));
+  if (!before) return null;
+  const now = stampOf(fp);
+  if (now === before) return null;
+  if (!now) { SEEN.delete(keyOf(fp)); return null; }      // fichier supprimé entre-temps : le recréer n'écrase rien
+  return `${fp} a été modifié depuis ta dernière lecture (par l'utilisateur ou un autre programme). Relis-le avec read_file avant de le modifier, pour ne pas écraser ces changements.`;
+}
+/** Écrit via un fichier temporaire du même dossier puis renommage : jamais de fichier à moitié écrit (coupure, Ctrl+C, disque plein). */
+export function writeAtomic(fp, data) {
+  const tmp = path.join(path.dirname(fp), `.${path.basename(fp)}.fscli-${process.pid}-${Math.random().toString(36).slice(2, 8)}.tmp`);
+  try {
+    fs.writeFileSync(tmp, data, 'utf8');
+    try { fs.renameSync(tmp, fp); }
+    catch (e) {                                          // Windows : fichier ouvert/verrouillé par un éditeur → écriture directe
+      if (!['EPERM', 'EBUSY', 'EACCES', 'EXDEV'].includes(e.code)) throw e;
+      fs.writeFileSync(fp, data, 'utf8');
+    }
+  } finally { try { fs.unlinkSync(tmp); } catch {} }
+  noteSeen(fp);
+}
+
 /** Fichier temporaire dans un dossier privé tout neuf (mkdtemp : nom imprévisible, pas de collision ni de pré-création par un tiers). */
 export function makeTmp(name, content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-'));
@@ -343,6 +372,7 @@ export const TOOLS = {
       if (st.isDirectory()) return err(`${fp} est un dossier — utilise list_dir.`);
       if (st.size > 8_000_000) return err(`Fichier trop gros (${human(st.size)}) — utilise grep, ou shell pour en extraire une partie.`);
       const buf = fs.readFileSync(fp);
+      noteSeen(fp);
       let text;
       if (buf[0] === 0xFF && buf[1] === 0xFE) text = buf.toString('utf16le').slice(1);
       else if (looksBinary(buf)) return err(`Fichier binaire (${human(st.size)}) — impossible de l'afficher en texte.`);
@@ -372,13 +402,14 @@ export const TOOLS = {
     async run(a, ctx) {
       const fp = resolveP(a.path, ctx.cwd);
       if (fs.existsSync(fp) && fs.statSync(fp).isDirectory()) return err(`${fp} est un dossier.`);
+      const stale = staleReason(fp); if (stale) return err(stale);
       let prev = null;
       try { prev = fs.readFileSync(fp); } catch {}
       let content = a.content;
       if (/\.(bat|cmd)$/i.test(fp)) content = content.replace(/\r?\n/g, '\r\n');
       const bom = IS_WIN && /\.ps1$/i.test(fp) && /[^\x00-\x7f]/.test(content) ? '﻿' : '';
       fs.mkdirSync(path.dirname(fp), { recursive: true });
-      fs.writeFileSync(fp, bom + content, 'utf8');
+      writeAtomic(fp, bom + content);
       ctx.undo?.push({ path: fp, prev });
       const n = a.content.split('\n').length;
       return { ok: true, output: `${prev ? 'Fichier écrasé' : 'Fichier créé'}: ${fp} (${n} lignes, ${human(Buffer.byteLength(content))})`,
@@ -400,6 +431,7 @@ export const TOOLS = {
     preview: (a) => `- ${a.old_string.split('\n').join('\n- ')}\n+ ${a.new_string.split('\n').join('\n+ ')}`,
     async run(a, ctx) {
       const fp = resolveP(a.path, ctx.cwd);
+      const stale = staleReason(fp); if (stale) return err(stale);
       let buf; try { buf = fs.readFileSync(fp); } catch { return err(`Fichier introuvable: ${fp} (pour créer un fichier, utilise write_file)`); }
       if (looksBinary(buf)) return err('Fichier binaire.');
       let text = buf.toString('utf8'); const hadBom = text.charCodeAt(0) === 0xFEFF; if (hadBom) text = text.slice(1);
@@ -422,7 +454,7 @@ export const TOOLS = {
       }
       const updated = a.replace_all ? text.split(o).join(n) : text.slice(0, idx[0]) + n + text.slice(idx[0] + o.length);
       ctx.undo?.push({ path: fp, prev: buf });
-      fs.writeFileSync(fp, (hadBom ? '﻿' : '') + updated, 'utf8');
+      writeAtomic(fp, (hadBom ? '﻿' : '') + updated);
       const count = a.replace_all ? idx.length : 1;
       return { ok: true, output: `Édité ${fp} (${count} remplacement${count > 1 ? 's' : ''})`, diff: [a.old_string, a.new_string], display: `${count} remplacement${count > 1 ? 's' : ''}` };
     },
@@ -596,7 +628,7 @@ export function riskInfo(tool, args, ctx) {
 export function undoLast(ctx, trashDir) {
   const u = ctx.undo.pop();
   if (!u) return null;
-  if (u.prev) { fs.writeFileSync(u.path, u.prev); return `restauré: ${u.path}`; }
+  if (u.prev) { fs.writeFileSync(u.path, u.prev); noteSeen(u.path); return `restauré: ${u.path}`; }
   fs.mkdirSync(trashDir, { recursive: true });
   const dest = path.join(trashDir, `${Date.now()}_${path.basename(u.path)}`);
   try { fs.renameSync(u.path, dest); } catch { fs.copyFileSync(u.path, dest); fs.unlinkSync(u.path); }

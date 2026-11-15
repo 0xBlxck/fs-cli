@@ -1,6 +1,6 @@
 // Client API France Student AI (SSE)
 import https from 'node:https';
-import { TOKEN, VERSION } from './config.js';
+import { TOKEN, VERSION, cfg, saveCfg } from './config.js';
 import { register as registerChat, localTime } from './chats.js';
 
 const HOST = 'api.francestudent.ai';
@@ -44,7 +44,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
       };
     }
     const payload = JSON.stringify(body);
-    let text = '', usage = null, toolCalls = [], opened = false, settled = false, stopped = false, sawCompleted = false, streamError = null;
+    let text = '', usage = null, toolCalls = [], opened = false, settled = false, stopped = false, sawCompleted = false, streamError = null, seenChatId = chatId || null;
     const finish = (fn, v) => { if (settled) return; settled = true; fn(v); };
 
     const req = https.request({
@@ -91,7 +91,12 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
         let d; try { d = JSON.parse(pl); } catch { return; }
         const type = d.type || ev;
         if (d.chat_id) {
-          if (!opened) { opened = true; if (!chatId && register) registerChat(d.chat_id, register); }   // nouvelle conversation → registre
+          seenChatId = d.chat_id;
+          if (!opened) {
+            opened = true;
+            if (!chatId && register) registerChat(d.chat_id, register);   // nouvelle conversation → registre
+            if (!chatId) attachToFsProject(d.chat_id);                       // et rangement dans le Projet FS du CLI
+          }
           onChat?.(d.chat_id);
         }
         if (type === 'response.output_text.delta' && typeof d.delta === 'string') {
@@ -127,7 +132,10 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
     req.setTimeout(150_000, () => req.destroy(new ApiError('Délai dépassé (aucune donnée depuis 150 s)', { retry: !opened })));
     req.on('error', e => {
       if (stopped) return;
-      if (e.name === 'AbortError' || e.code === 'ABORT_ERR') return finish(reject, Object.assign(new Error('annulé'), { name: 'AbortError' }));
+      if (e.name === 'AbortError' || e.code === 'ABORT_ERR') {
+        if (seenChatId) cancelStream(seenChatId);                        // Ctrl+C : on arrête aussi la génération côté serveur (sinon elle continue et consomme)
+        return finish(reject, Object.assign(new Error('annulé'), { name: 'AbortError' }));
+      }
       finish(reject, e instanceof ApiError ? e : new ApiError(`Réseau: ${e.message}`, { retry: !opened }));
     });
     req.write(payload); req.end();
@@ -159,6 +167,68 @@ export function getJson(p, timeout = 12000) {
     req.on('error', () => resolve(null));
     req.setTimeout(timeout, () => { req.destroy(); resolve(null); });
   });
+}
+
+/** Requête JSON authentifiée → { status, data } ; ne lève jamais (status 0 = réseau). */
+export function requestJson(method, p, body, timeout = 15000) {
+  return new Promise(resolve => {
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const req = https.request({
+      hostname: HOST, path: p, method,
+      headers: { ...baseHeaders(), Accept: 'application/json', ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}) },
+    }, res => {
+      let d = ''; res.setEncoding('utf8');
+      res.on('data', x => d += x);
+      res.on('end', () => { let data = null; try { data = d ? JSON.parse(d) : null; } catch {} resolve({ status: res.statusCode || 0, data }); });
+    });
+    req.on('error', () => resolve({ status: 0, data: null }));
+    req.setTimeout(timeout, () => { req.destroy(); resolve({ status: 0, data: null }); });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+/** Arrête la génération en cours côté serveur (POST /chats/{id}/stream/cancel, idempotent). */
+export async function cancelStream(chatId) {
+  if (!chatId) return false;
+  const r = await requestJson('POST', `/chats/${encodeURIComponent(chatId)}/stream/cancel`, undefined, 10000);
+  return r.status >= 200 && r.status < 300;
+}
+
+// ── Projets France Student : les conversations du CLI sont rangées dans un projet (barre latérale du site) ──
+export async function listFsProjects() {
+  const r = await requestJson('GET', '/projects');
+  return Array.isArray(r.data) ? r.data : [];
+}
+/** Projet par nom (sans tenir compte de la casse), créé s'il n'existe pas. */
+export async function findOrCreateFsProject(name) {
+  const clean = String(name || '').trim().slice(0, 255);
+  if (!clean) throw new Error('nom de projet vide');
+  const want = clean.toLocaleLowerCase('fr-FR');
+  const found = (await listFsProjects()).find(p => String(p?.name || '').trim().toLocaleLowerCase('fr-FR') === want);
+  if (found) return { project: found, created: false };
+  const r = await requestJson('POST', '/projects', { name: clean });
+  if (!r.data?.id) throw new Error(`création du projet refusée (HTTP ${r.status})`);
+  return { project: r.data, created: true };
+}
+/** Range une conversation dans un projet (PUT /projects/{p}/chats/{c}). */
+export async function attachChatToProject(projectId, chatId) {
+  const r = await requestJson('PUT', `/projects/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`);
+  return r.status >= 200 && r.status < 300;
+}
+
+/** Rangement automatique : projet « FS-CLI » par défaut, /fr-project <nom> pour un autre, /fr-project off pour désactiver. Ne lève jamais. */
+let projectPromise = null;
+function attachToFsProject(chatId) {
+  if (cfg.fsProject === false) return;
+  const name = cfg.fsProject?.name || 'FS-CLI';
+  if (!projectPromise || projectPromise.name !== name) {
+    projectPromise = (cfg.fsProject?.id && cfg.fsProject.name === name ? Promise.resolve(cfg.fsProject.id)
+      : findOrCreateFsProject(name).then(({ project }) => { cfg.fsProject = { id: project.id, name: project.name || name }; saveCfg(); return project.id; }))
+      .catch(() => null);
+    projectPromise.name = name;
+  }
+  projectPromise.then(id => { if (id) attachChatToProject(id, chatId); }).catch(() => {});
 }
 
 /** Supprime une conversation (DELETE /chats/{id}) ; true si le serveur accepte */
