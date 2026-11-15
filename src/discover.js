@@ -180,7 +180,7 @@ const FR_EN = {
   animation: 'animation motion', logo: 'logo brand design', document: 'document docx', word: 'docx document', pdf: 'pdf', mail: 'email', email: 'email',
   boutique: 'shop shopify ecommerce', serveur: 'server backend', bdd: 'database sql', test: 'test testing', tests: 'test testing', mobile: 'mobile app',
 };
-const GENERIC = new Set(['code', 'fichier', 'fichiers', 'projet', 'script', 'programme', 'application', 'app', 'truc', 'chose', 'faire', 'cree', 'creer', 'ecris', 'ecrire', 'corrige', 'aide', 'help']);
+const GENERIC = new Set(['code', 'fichier', 'fichiers', 'dossier', 'dossiers', 'test', 'tests', 'liste', 'affiche', 'courant', 'projet', 'script', 'programme', 'application', 'app', 'truc', 'chose', 'faire', 'cree', 'creer', 'ecris', 'ecrire', 'corrige', 'aide', 'help']);
 
 /**
  * Skills à joindre AUTOMATIQUEMENT à une demande : seulement en cas de correspondance nette

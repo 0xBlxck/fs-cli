@@ -222,3 +222,10 @@ test('modèle qui refuse les outils de FS-CLI : reconnu (sans fausse alerte sur 
   for (const s of ['Le chat France Student ne peut pas servir de moteur à ton outil externe.', 'colle ici le contenu actuel de index.html', "Je n'ai pas accès à tes fichiers.", 'Je ne peux pas modifier directement tes fichiers.']) assert.equal(f(s), true, s);
   for (const s of ['Voici le formulaire modifié, le fichier est à jour.', 'Je ne peux pas garantir que ce test passe.', 'Tu peux coller ce code dans ton fichier.']) assert.equal(f(s), false, s);
 });
+
+test('1er message : aucun protocole d\'outils dans le texte (bloqué par France Student ; voie officielle = outils client)', async () => {
+  const { workPreferences } = await import('../src/pseudo.js');
+  const t = workPreferences().text;
+  assert.doesNotMatch(t, /fs-mcp|programme qui exécute|FS-CLI|serveur MCP|cle=valeur/i);
+  assert.match(t, /- \[ \]/);                                              // la liste de tâches reste demandée (préférence de forme)
+});

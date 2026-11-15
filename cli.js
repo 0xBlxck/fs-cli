@@ -31,7 +31,7 @@ import { chromeExtensionInstalled, playwrightServer } from './src/browser.js';
 import { checkUpdate, INSTALL_CMD } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
-import { toolsHint, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
+import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
@@ -854,8 +854,8 @@ async function chatTurn(text, { keepLast = false } = {}) {
       S.ctxSent = true;
     }
     if (cfg.engine === 'native') {                                     // MCP et skills du PC : annoncés à toute conversation qui ne les a pas encore vus (y compris après /resume)
-      const hint = toolsHint(S.cwd, text);
-      if (hint.text && hint.sig !== S.toolsHintSig) { message += '\n\n' + hint.text; S.toolsHintSig = hint.sig; println(c.dim(`  ＋ outils du PC : ${hint.label}`)); }
+      const prefs = workPreferences();                                // préférences de forme seulement (pas de protocole d'outils dans le texte)
+      if (prefs.sig !== S.toolsHintSig) { message += '\n\n' + prefs.text; S.toolsHintSig = prefs.sig; }
       for (const name of mentionedServers(S.cwd, text)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
@@ -875,7 +875,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
         body = body.length > Math.min(12000, budget) ? body.slice(0, Math.min(12000, budget)) + '\n[… guide tronqué ; la suite est dans ' + sk.file + ']' : body;
         if (budget <= 1000) break;
         budget -= body.length;
-        message += `\n\n[Guide « ${sk.name} » : skill installé sur le PC de l'utilisateur, choisi automatiquement par FS-CLI pour cette demande. Applique-le s'il est pertinent (sans le recopier) ; ses autres fichiers sont dans ${sk.dir}.\n${body}]`;
+        message += `\n\n[Guide « ${sk.name} » de l'utilisateur, à appliquer s'il est pertinent (sans le recopier) ; ses autres fichiers sont dans ${sk.dir}.\n${body}]`;
         S.skillsSent.add(sk.name);
         println(c.dim(`  ＋ skill : ${sk.name}`));
       }
