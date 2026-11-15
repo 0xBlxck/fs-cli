@@ -97,6 +97,10 @@ test('accord donné dans FS-CLI → fs-mcp appelle vraiment l\'outil (arguments 
   assert.equal(t.status, 0, t.stderr); assert.match(t.stdout, /echo text\*=string upper=boolean/);
   const c = fsmcp('call', 'faux', 'echo', 'text=salut', 'upper=true');
   assert.equal(c.status, 0, c.stderr); assert.equal(c.stdout.trim(), 'SALUT');
+  fs.writeFileSync(path.join(proj, 'long.txt'), 'ligne 1\nligne "2" avec guillemets\n');      // cle=@fichier : code / long texte
+  const f = fsmcp('call', 'faux', 'echo', 'text=@long.txt');
+  assert.equal(f.status, 0, f.stderr); assert.equal(f.stdout.trim(), 'ligne 1\nligne "2" avec guillemets');
+  assert.match(fsmcp('call', 'faux', 'echo', 'text=@absent.txt').stderr, /Fichier introuvable/);
   const bad = fsmcp('call', 'faux', 'echo', 'pas-un-argument');
   assert.notEqual(bad.status, 0); assert.match(bad.stderr, /cle=valeur/);
   // un accord est lié à la commande du serveur : si elle change, il tombe

@@ -34,7 +34,7 @@ export async function approveServer(S, name, s, io) {
 }
 
 function describeTools(server, tools) {
-  return `Outils de ${server} (* = obligatoire) — appel : ${FS_MCP} call ${server} <outil> cle=valeur …\n` + tools.slice(0, 60).map(t => {
+  return `Outils de ${server} (* = obligatoire) — appel : ${FS_MCP} call ${server} <outil> cle=valeur … (cle=@fichier pour du code ou un long texte écrit d'abord dans un fichier du dossier de travail)\n` + tools.slice(0, 60).map(t => {
     const props = t.inputSchema?.properties && typeof t.inputSchema.properties === 'object' ? t.inputSchema.properties : {};
     const req = new Set(Array.isArray(t.inputSchema?.required) ? t.inputSchema.required : []);
     const params = Object.entries(props).slice(0, 15).map(([k, v]) => `${k}${req.has(k) ? '*' : ''}=${v?.type || 'valeur'}`).join(' ');
@@ -49,7 +49,7 @@ export function toolsHint(cwd, userText) {
   if (!servers.length && !skills.length) return { text: '', label: '', sig: '' };
   const sig = crypto.createHash('sha256').update(JSON.stringify([servers, skills.length, FS_MCP])).digest('hex').slice(0, 12);
   const lines = [`[Info de FS-CLI : sur ce PC, le programme fs-mcp (installé avec FS-CLI) donne accès aux serveurs MCP et aux guides (skills) de l'utilisateur. Lance-le avec run_command comme n'importe quel programme, par exemple : ${FS_MCP} list`];
-  if (servers.length) lines.push(`- Serveurs MCP : ${servers.join(', ')}. \`${FS_MCP} tools <serveur>\` liste les outils ; \`${FS_MCP} call <serveur> <outil> cle=valeur …\` en appelle un.`);
+  if (servers.length) lines.push(`- Serveurs MCP : ${servers.join(', ')}. \`${FS_MCP} tools <serveur>\` liste les outils ; \`${FS_MCP} call <serveur> <outil> cle=valeur …\` en appelle un. Pour du code ou un long texte (ex. un script Blender), écris-le d'abord dans un fichier du dossier de travail avec write_file, puis passe \`cle=@fichier\` (ex. code=@scene.py).`);
   if (skills.length) {
     const near = searchSkills(skills, userText, 4);
     lines.push(`- ${skills.length} guides (skills) : \`${FS_MCP} skills <mots>\` pour chercher.` +

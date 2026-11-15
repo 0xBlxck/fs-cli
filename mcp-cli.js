@@ -55,8 +55,16 @@ function parseArgs(kv, def) {
     if (kv[i] === '--json') { args = { ...args, ...JSON.parse(kv[++i] || '{}') }; continue; }
     if (kv[i] === '--json-file') { args = { ...args, ...JSON.parse(fs.readFileSync(path.resolve(kv[++i] || ''), 'utf8')) }; continue; }
     const m = kv[i].match(/^([\w.-]+)=([\s\S]*)$/);
-    if (!m) throw new Error(`Argument incompris : « ${kv[i]} » (format attendu : cle=valeur)`);
-    args[m[1]] = coerce(m[2], def.inputSchema?.properties?.[m[1]]);
+    if (!m) throw new Error(`Argument incompris : « ${kv[i]} » (format attendu : cle=valeur, ou cle=@fichier)`);
+    let v = m[2];
+    if (v.startsWith('@') && v.length > 1) {                        // cle=@fichier : la valeur est le contenu du fichier (code, long texte…)
+      const f = path.resolve(v.slice(1).replace(/^["']|["']$/g, ''));
+      try { v = fs.readFileSync(f, 'utf8').replace(/^﻿/, ''); }
+      catch { throw new Error(`Fichier introuvable pour ${m[1]}=@… : ${f}`); }
+      args[m[1]] = v;                                               // contenu de fichier : toujours du texte brut
+      continue;
+    }
+    args[m[1]] = coerce(v, def.inputSchema?.properties?.[m[1]]);
   }
   return args;
 }
@@ -127,7 +135,8 @@ switch ((cmd || '').toLowerCase()) {
     out('fs-mcp : accès aux serveurs MCP et skills de ce PC (fourni par FS-CLI)\n\n' +
       '  fs-mcp list                                  serveurs MCP disponibles\n' +
       '  fs-mcp tools <serveur>                       outils d\'un serveur\n' +
-      '  fs-mcp call <serveur> <outil> cle=valeur …   appelle un outil (--json \'{…}\' ou --json-file f.json aussi)\n' +
+      '  fs-mcp call <serveur> <outil> cle=valeur …   appelle un outil ; cle=@fichier lit la valeur dans un fichier\n' +
+      '                                               (code, long texte) ; --json \'{…}\' ou --json-file f.json aussi\n' +
       '  fs-mcp skills <mots>                         cherche un guide (skill)\n' +
       '  fs-mcp skill <nom>                           affiche un guide');
     await finish(cmd ? 1 : 0);
