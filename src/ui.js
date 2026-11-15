@@ -66,12 +66,16 @@ export function out(s) {
 export function println(s = '') { out(s + '\n'); }
 
 // ── Spinner ────────────────────────────────────────────────────────────────────
-const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+// symbole qui « respire » et verbe qui change à chaque attente (comme Claude Code), en français
+const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
+const VERBS = ['Réflexion', 'Cogitation', 'Élaboration', 'Gamberge', 'Peaufinage', 'Fignolage', 'Mijotage', 'Bricolage', 'Conception', 'Méditation', 'Ruminage', 'Déduction', 'Orchestration', 'Tricotage', 'Distillation'];
 let sp = null;
 function draw() {
   if (!sp) return;
   const s = Math.floor((Date.now() - sp.t0) / 1000);
-  const text = `${c.accent(FRAMES[sp.i++ % FRAMES.length])} ${c.dim(sp.label)} ${c.dim(s + 's')}`;
+  const dur = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+  const frame = FRAMES[Math.floor(sp.i++ / 1.5) % FRAMES.length];
+  const text = `${c.accent(frame)} ${c.accent(sp.label)} ${c.dim(`(${dur} · échap pour interrompre)`)}`;
   if (sink) sink.spinner(text);
   else process.stdout.write(`\r\x1b[K  ${text}`);
 }
@@ -79,6 +83,7 @@ export const spinner = {
   start(label = 'réflexion…') {
     if (!TTY && !sink) return;
     this.stop();
+    if (/^réflexion…?$/i.test(label)) label = VERBS[Math.floor(Math.random() * VERBS.length)] + '…';   // attente générique : verbe au hasard
     sp = { label, t0: Date.now(), i: 0, timer: null };
     if (!sink) process.stdout.write('\x1b[?25l');
     draw();
@@ -156,6 +161,7 @@ export class MdStream {
   }
   finish() {
     this.flushLine();
+    if (this.tableRows) this.flushTable();
     if (this.inCode) this.closeCode();
   }
   closeCode() {
@@ -197,6 +203,14 @@ export class MdStream {
       return;
     }
 
+    // tableau : on accumule les lignes, il est affiché d'un bloc (colonnes alignées) à la première ligne qui n'en fait pas partie
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      this.tableRows ||= [];
+      if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) { if (this.tableRows.length === 1) this.tableRows[0].header = true; return; }
+      this.tableRows.push({ cells: line.trim().replace(/^\||\|$/g, '').split('|') });
+      return;
+    }
+    if (this.tableRows) this.flushTable();
     if (line.trim() === '') { this.blank(); return; }
     let m;
     if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
@@ -220,11 +234,33 @@ export class MdStream {
     if ((m = line.match(/^(\s*)[-*+]\s+(.*)$/))) { this.emit(`${m[1]}${c.accent('•')} ${inline(m[2])}`); return; }
     if ((m = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/))) { this.emit(`${m[1]}${c.accent(m[2] + '.')} ${inline(m[3])}`); return; }
     if ((m = line.match(/^\s*>\s?(.*)$/))) { this.emit(`${c.dim('▎')} ${c.italic(inline(m[1]))}`); return; }
-    if (/^\s*\|.*\|\s*$/.test(line)) {
-      if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) { this.emit(c.dim(line.replace(/[^|]/g, '─').replace(/\|/g, '┼'))); return; }
-      this.emit(inline(line).replace(/\|/g, c.dim('│'))); return;
-    }
     this.emit(inline(line));
+  }
+
+  /** Tableau Markdown regroupé puis affiché avec colonnes alignées et cadre (en-tête en gras). */
+  flushTable() {
+    const rows = this.tableRows; this.tableRows = null;
+    if (!rows?.length) return;
+    const vis = s => s.replace(/\x1b\[[0-9;]*m/g, '').length;
+    const cells = rows.map(r => r.cells.map(x => inline(x.trim())));
+    const n = Math.max(...cells.map(r => r.length));
+    let w = Array.from({ length: n }, (_, i) => Math.max(1, ...cells.map(r => vis(r[i] || ''))));
+    const max = Math.max(20, cols() - 4 - (n * 3 + 1));
+    while (w.reduce((a, b) => a + b, 0) > max) { const i = w.indexOf(Math.max(...w)); if (w[i] <= 6) break; w[i]--; }   // trop large : on réduit la plus large
+    const fit = (s, width) => {
+      const plain = s.replace(/\x1b\[[0-9;]*m/g, '');
+      if (plain.length <= width) return s + ' '.repeat(width - plain.length);
+      return plain.slice(0, width - 1) + '…';
+    };
+    const line = (l, m, r) => c.dim(l + w.map(x => '─'.repeat(x + 2)).join(m) + r);
+    this.blank();
+    this.emit(line('┌', '┬', '┐'));
+    cells.forEach((r, k) => {
+      const head = k === 0 && rows[0].header;
+      this.emit(c.dim('│') + w.map((x, i) => ' ' + (head ? c.bold(fit(r[i] || '', x)) : fit(r[i] || '', x)) + ' ').join(c.dim('│')) + c.dim('│'));
+      if (head && cells.length > 1) this.emit(line('├', '┼', '┤'));
+    });
+    this.emit(line('└', '┴', '┘'));
   }
 }
 

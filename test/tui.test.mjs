@@ -61,11 +61,11 @@ test('la boîte de saisie et la barre d\'état s\'affichent', async () => {
   const { sim, type, tick, tui } = make();
   await tick();
   const s = sim.screen();
-  assert.equal(sim.count(/^─{20,}$/gm), 2, 'deux traits horizontaux');
-  assert.match(s, /Écris ta demande/); assert.match(s, /⏵⏵ auto/); assert.match(s, /Claude Sonnet 5\.5/);
+  assert.equal(sim.count(/^[╭╰]─{20,}[╮╯]$/gm), 2, 'un cadre aux coins arrondis (haut et bas)');
+  assert.match(s, /Essaie « /); assert.match(s, /⏵⏵ auto/); assert.match(s, /Claude Sonnet 5\.5/);
   type('bonjour'); await tick();
-  assert.match(sim.screen(), /❯ bonjour/);
-  assert.equal(sim.c, 2 + 7);                                         // curseur juste après « bonjour » (prompt « ❯ » + espace)
+  assert.match(sim.screen(), /│ > bonjour/);
+  assert.equal(sim.c, 4 + 7);                                         // curseur juste après « bonjour » (« │ > » + « bonjour »)
   tui.stop();
 });
 
@@ -74,7 +74,7 @@ test('le texte défile au-dessus sans dupliquer le footer', async () => {
   for (let i = 1; i <= 30; i++) tui.print(`ligne ${i}\n`);
   await tick(); await tick();
   tui.print('fin\n'); await tick();
-  assert.equal(sim.count(/Écris ta demande/g), 1, 'une seule zone de saisie (rien dans l\'historique défilé)');
+  assert.equal(sim.count(/Essaie « /g), 1, 'une seule zone de saisie (rien dans l\'historique défilé)');
   assert.equal(sim.count(/ligne 17\b/g), 1);
   assert.match(sim.all(), /ligne 1\n/); assert.match(sim.screen(), /fin\n[\s\S]*─{10,}/);
   tui.stop();
@@ -97,8 +97,8 @@ test('Entrée envoie, écho dans l\'historique, saisie vidée', async () => {
   const { sim, type, tick, tui, submits } = make();
   type('salut'); type('\r'); await tick();
   assert.deepEqual(submits, ['salut']);
-  assert.match(sim.all(), /❯ salut/);
-  assert.match(sim.screen(), /Écris ta demande/);
+  assert.match(sim.all(), /^> salut/m);
+  assert.match(sim.screen(), /Essaie « /);
   tui.stop();
 });
 
@@ -120,7 +120,7 @@ test('multi-ligne : ctrl+j, antislash+Entrée, collage encadré', async () => {
   const { sim, type, tick, tui, submits } = make();
   type('a'); type('\n'); type('b'); await tick();
   assert.equal(tui.buf, 'a\nb');
-  assert.match(sim.screen(), /❯ a\n  b\n─+/);
+  assert.match(sim.screen(), /│ > a\s*│\n│   b\s*│\n╰─+/);
   type('\\'); type('\r'); type('c'); assert.equal(tui.buf, 'a\nb\nc');
   type(`${ESC}[200~x\ny${ESC}[201~`); assert.equal(tui.buf, 'a\nb\ncx\ny');
   assert.equal(submits.length, 0);
@@ -215,7 +215,7 @@ test('arrêt propre : le footer est effacé et le curseur réaffiché', async ()
   const { sim, tick, tui } = make();
   tui.print('hello\n'); await tick();
   tui.stop();
-  assert.doesNotMatch(sim.screen(), /Écris ta demande|⏵⏵/); assert.match(sim.screen(), /hello/); assert.equal(sim.cursorVisible, true);
+  assert.doesNotMatch(sim.screen(), /Essaie « |⏵⏵/); assert.match(sim.screen(), /hello/); assert.equal(sim.cursorVisible, true);
   assert.equal(sim.r, 1, 'le curseur reste juste après le contenu (le shell reprend à la suite)');
 });
 
@@ -223,6 +223,6 @@ test('largeur étroite : le footer ne déborde pas', async () => {
   const { sim, tui, tick, type } = make({ cols: 30 });
   type('un texte vraiment très long qui doit passer à la ligne dans la boîte'); await tick();
   for (const l of sim.lines()) assert.ok(strWidth(l) <= 30, `ligne trop large: ${l}`);
-  assert.equal(sim.count(/❯ un texte/g), 1);
+  assert.equal(sim.count(/> un texte/g), 1);
   tui.stop();
 });

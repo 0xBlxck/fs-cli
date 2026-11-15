@@ -775,6 +775,7 @@ async function handleInput(text) {
     if (!t) return;
     if (!t.includes('\n') && t.startsWith('/')) await command(t);
     else if (!t.includes('\n') && t.startsWith('!')) await direct(t.slice(1));
+    else if (!t.includes('\n') && /^#\s*\S/.test(t) && !/^##/.test(t)) await command('/remember ' + t.replace(/^#\s*/, ''));   // « # info » : retenue en mémoire (comme Claude Code)
     else if ((cfg.intents !== false || /PLAYWRIGHT_MCP_EXTENSION_TOKEN/.test(t)) && await naturalIntent(t)) return;   // un jeton collé ne part jamais au modèle
     else {
       if (cfg.intents !== false && cfg.engine === 'native') {     // le modèle n'a pas d'accès web : une URL citée est lue et jointe
@@ -817,6 +818,7 @@ input.on('interrupt', () => { turnAbort?.abort(); });
 input.on('cycleMode', cycleMode);
 ui.tasks.on(list => input.setTasks?.(list));                          // liste de tâches du modèle → panneau épinglé
 await startBridge({ getManager: () => getMcp(S.cwd), getCwd: () => S.cwd });   // pont local : fs-mcp garde les serveurs MCP ouverts (navigateur…)
+input.on('rewind', () => { if (!busy) runInput('/rewind'); });      // Échap ×2 : revenir en arrière
 input.on('pasteImage', () => { try { pasteClipboardImage(); } catch (e) { println(c.red('  image : ' + e.message)); } });
 input.on('quit', () => { shutdown(0); });
 process.on('exit', () => { try { input.stop(); } catch {} });

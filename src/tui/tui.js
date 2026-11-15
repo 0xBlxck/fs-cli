@@ -6,6 +6,9 @@ import { PinnedScreen } from './pinned.js';
 import { layoutInput, indexAt, strWidth, padAnsi, stripAnsi } from './layout.js';
 import { c } from '../ui.js';
 
+// astuces affichées dans la zone de saisie vide (une nouvelle à chaque demande)
+const TIPS = ['fais-moi un site de café avec plusieurs agents', 'corrige le bug dans script.js', 'ouvre quick.fr dans le navigateur', 'retiens que je code en TypeScript', 'explique ce projet', 'ajoute des tests', 'refais le design de index.html', 'combien de conversations il me reste ?'];
+
 const MODE_LABEL = {
   auto: ['⏵⏵ auto', 'exécution automatique'],
   ask: ['⏸ confirmer', 'confirmation à chaque action'],
@@ -17,12 +20,12 @@ export class Tui {
     this.stdin = stdin; this.stdout = stdout; this.onHistory = onHistory; this.suggester = suggester; this.maxInputLines = maxInputLines;
     this.buf = ''; this.cur = 0;
     this.hist = history.slice(); this.histIdx = -1; this.draft = '';
-    this.queue = []; this.busy = false; this.spinnerText = null; this.tasks = [];
+    this.queue = []; this.busy = false; this.spinnerText = null; this.tasks = []; this.tipIdx = Math.floor(Math.random() * 8); this.lastEsc = 0;
     this.status = { model: '', mode: 'auto', cwd: '', ctx: null };
     this.flashText = ''; this.flashTimer = null; this.lastCtrlC = 0;
     this.sug = { items: [], idx: -1, start: 0 }; this.sugOff = null;
     this.search = null; this.ask = null; this.askSaved = null; this.select_ = null;
-    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [] };
+    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [] };
     this.started = false;
     // zone de saisie ancrée en bas de la fenêtre si le terminal annonce sa hauteur ; sinon affichage « en ligne » classique
     const pin = pinned && (stdout.rows || 0) >= 8;
@@ -66,7 +69,12 @@ export class Tui {
   clearScreen() { this.screen.clearScreen(); }
   render() { if (this.started) this.screen.render(); }
   spinner(text) { this.spinnerText = text; this.render(); }
-  setBusy(b) { this.busy = !!b; this.render(); }
+  setBusy(b) {
+    this.busy = !!b;
+    // Windows Terminal : progression animée dans l'onglet pendant le travail
+    if (process.env.WT_SESSION && this.started) try { this.stdout.write(this.busy ? '\x1b]9;4;3;0\x07' : '\x1b]9;4;0;0\x07'); } catch {}
+    this.render();
+  }
   setStatus(s) { Object.assign(this.status, s); this.render(); }
   setTasks(list) { this.tasks = Array.isArray(list) ? list : []; this.render(); }
   flash(text, ms = 2200) {
@@ -75,7 +83,7 @@ export class Tui {
     this.flashTimer.unref?.();
     this.render();
   }
-  echo(text) { this.print(c.accent('❯') + ' ' + text.split('\n').join('\n  ') + '\n'); }
+  echo(text) { this.print(c.dim('> ') + text.split('\n').join('\n  ') + '\n'); }   // ta demande, réaffichée comme dans Claude Code
 
   // ── API asynchrone : question d'une ligne, menu ─────────────────────────────
   askLine(label) {
@@ -138,7 +146,7 @@ export class Tui {
     }
 
     // ligne du haut : spinner à gauche, modèle · contexte à droite (toujours présente : la zone ne change pas de hauteur)
-    const right = [st.model, st.ctx != null ? `ctx ${Math.round(st.ctx)}%` : ''].filter(Boolean).join(' · ');
+    const right = st.model || '';                                    // le contexte restant est affiché en bas à droite
     const left = this.spinnerText ? '  ' + this.spinnerText : '';
     const gap = W - 1 - strWidth(left) - strWidth(right) - 1;
     lines.push(gap >= 1 && right ? left + ' '.repeat(gap) + c.dim(right) : left);
@@ -154,8 +162,8 @@ export class Tui {
       return { lines, caret: { row: lines.length - 1, col: 0 }, hideCursor: true };
     }
 
-    // zone de saisie : trait, lignes, trait
-    const textW = Math.max(10, W - 3);
+    // zone de saisie : cadre aux coins arrondis (comme Claude Code)
+    const textW = Math.max(10, W - 7);
     const text = this.search ? this.search.q : this.buf;
     const lay = layoutInput(text, this.search ? text.length : this.cur, textW);
     const max = Math.max(1, Math.min(this.maxInputLines, maxRows - 8));
@@ -164,8 +172,11 @@ export class Tui {
     const vis = lay.lines.slice(start, start + max);
     const body = vis.map((l, i) => {
       const first = start + i === 0;
-      const prefix = first ? (this.ask ? c.yellow('? ') : c.accent('❯ ')) : '  ';
-      if (first && !l && !this.search && !this.ask) return prefix + c.dim('Écris ta demande…  (/ commandes · @ fichier · ! shell)');
+      const prefix = first ? (this.ask ? c.yellow('? ') : c.accent('> ')) : '  ';
+      if (first && !l && !this.search && !this.ask) {
+        const ph = this.busy ? 'Écris pour ajouter à la file…' : `Essaie « ${TIPS[this.tipIdx % TIPS.length]} »`;
+        return prefix + c.dim(ph.length > textW ? ph.slice(0, textW - 1) + '…' : ph);   // jamais plus large que le cadre
+      }
       return prefix + l;
     });
     let title = '';
@@ -177,11 +188,13 @@ export class Tui {
       body.push(c.accent('⌕ ') + this.search.q + (m ? c.dim('  →  ' + m.replace(/\s+/g, ' ').slice(0, Math.max(5, textW - this.search.q.length - 8))) : this.search.q ? c.dim('  (aucun résultat)') : ''));
     } else if (start > 0) title = c.dim(`↑ ${start} ligne${start > 1 ? 's' : ''} plus haut`);
     const edge = this.ask ? c.yellow : c.dim;
-    lines.push(this.rule(title, edge, W));
+    const inner = W - 4;                                               // « │ » + contenu + « │ »
+    const t = title ? ` ${title} ` : '';
+    lines.push(edge('╭─') + t + edge('─'.repeat(Math.max(0, inner - strWidth(t))) + '╮'));
     const inputTop = lines.length;
-    lines.push(...body);
-    lines.push(this.rule('', edge, W));
-    const caret = { row: inputTop + (this.search ? 0 : Math.max(0, lay.caret.row - start)), col: this.search ? 2 + strWidth(this.search.q) : 2 + lay.caret.col };
+    for (const l of body) lines.push(edge('│') + ' ' + padAnsi(l, inner) + edge('│'));   // même largeur que les coins ╭╮ ╰╯
+    lines.push(edge('╰' + '─'.repeat(inner + 1) + '╯'));
+    const caret = { row: inputTop + (this.search ? 0 : Math.max(0, lay.caret.row - start)), col: this.search ? 4 + strWidth(this.search.q) : 4 + lay.caret.col };
 
     // suggestions (sous le trait du bas)
     const N = Math.max(0, Math.min(7, maxRows - lines.length - 4));
@@ -197,11 +210,26 @@ export class Tui {
       if (items.length > N) lines.push('  ' + c.dim(`… ${items.length} résultats · ↑↓ naviguer · Tab compléter`));
     }
 
-    // barre d'état (mode)
+    // « ? » seul dans la saisie : aide des raccourcis (comme Claude Code)
+    if (this.buf === '?' && !this.ask && !this.search) {
+      const keys = [['/', 'commandes'], ['@', 'joindre un fichier'], ['!', 'commande shell directe'], ['#', 'retenir une info (mémoire)'],
+        ['alt+v', 'coller une image'], ['maj+tab', 'changer de mode'], ['échap ×2', 'revenir en arrière (/rewind)'], ['ctrl+r', 'chercher dans l\'historique'],
+        ['\\ + entrée', 'nouvelle ligne'], ['ctrl+c', 'interrompre · ×2 quitter']];
+      const half = Math.ceil(keys.length / 2), cw = Math.floor((W - 4) / 2);
+      for (let i = 0; i < half; i++) {
+        const cell = k => k ? padAnsi(`${c.accent(k[0].padEnd(11))}${c.dim(k[1])}`, cw) : '';
+        lines.push('  ' + cell(keys[i]) + cell(keys[i + half]));
+      }
+    }
+
+    // barre d'état : mode à gauche, contexte restant à droite
     const ml = MODE_LABEL[st.mode] || MODE_LABEL.auto;
     const base = (this.busy ? c.dim('échap : interrompre · ') : '') + c.accent(ml[0]) + c.dim(' (maj+tab)');
-    const status = this.flashText ? c.yellow(this.flashText) : (W > 70 ? base + (this.busy ? '' : c.dim(' · / commandes · @ fichiers · ! shell · alt+v image')) : base);
-    lines.push('  ' + status);
+    const leftStatus = this.flashText ? c.yellow(this.flashText) : (W > 70 && !this.busy ? base + c.dim(' · ? pour les raccourcis') : base);
+    const ctxLeft = st.ctx != null ? Math.max(0, 100 - Math.round(st.ctx)) : null;
+    const rightStatus = ctxLeft == null ? '' : (ctxLeft < 25 ? c.yellow : c.dim)(`contexte restant : ${ctxLeft} %`);
+    const sgap = W - 2 - strWidth(leftStatus) - strWidth(rightStatus) - 1;
+    lines.push('  ' + leftStatus + (rightStatus && sgap > 1 ? ' '.repeat(sgap) + rightStatus : ''));
 
     return { lines, caret, hideCursor: false };
   }
@@ -354,6 +382,10 @@ export class Tui {
     if (this.sug.items.length) this.acceptSuggestion();
   }
   escape() {
+    // Échap deux fois, saisie vide et rien en cours : revenir en arrière (comme Claude Code)
+    const now = Date.now();
+    if (!this.busy && !this.ask && !this.buf && !this.sug.items.length && now - this.lastEsc < 600) { this.lastEsc = 0; return this.emit('rewind'); }
+    this.lastEsc = now;
     if (this.sug.items.length) { this.sugOff = this.buf; this.sug = { items: [], idx: -1, start: 0 }; return this.render(); }
     if (this.ask) return this.finishAsk(null);
     if (this.busy) return this.emit('interrupt');
@@ -390,6 +422,7 @@ export class Tui {
     this.buf = ''; this.cur = 0; this.histIdx = -1; this.sug = { items: [], idx: -1, start: 0 }; this.sugOff = null;
     if (this.busy) { this.queue.push(text); this.flash('message mis en file d\'attente'); return; }
     this.echo(text);
+    this.tipIdx++;
     this.render();
     this.emit('submit', text);
   }

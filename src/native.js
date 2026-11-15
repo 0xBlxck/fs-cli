@@ -121,7 +121,8 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     S.ctxPercent = await ctxPct(S.chatId).catch(() => null);
     if (typeof S.ctxPercent === 'number') { const p = Math.round(S.ctxPercent); ctxBit = ' · ' + (p >= 80 ? c.red : p >= 60 ? c.yellow : c.dim)(`ctx ${p}%`); }
   }
-  ui.println('\n' + c.dim(`  ─ ${bits.join(' · ')}`) + ctxBit);
+  ui.println('\n' + c.dim(`  ✻ Terminé en ${bits.join(' · ')}`) + ctxBit);
+  if (secs > 15 && process.stdout.isTTY) process.stdout.write('\x07');   // tâche longue finie : alerte (la barre des tâches clignote si la fenêtre n'est pas au premier plan)
   if (cfg.sound && secs > 3) process.stdout.write('\x07');
   if (hitLimit) ui.println(c.yellow(`  ⚠ limite de ${cfg.maxSteps || 40} étapes atteinte — tape /continue pour poursuivre`));
   return { hitLimit, nReq };

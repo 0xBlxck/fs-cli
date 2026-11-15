@@ -19,9 +19,9 @@ test('au démarrage : le contenu part du haut, la saisie est tout en bas', async
   await tick();
   const L = sim.lines();
   assert.match(L[19], /⏵⏵ auto/);                       // barre d'état = dernière ligne
-  assert.match(L[18], /^─{20,}/);                         // trait du bas
-  assert.match(L[17], /❯ Écris ta demande/);              // saisie
-  assert.match(L[16], /^─{20,}/);                         // trait du haut
+  assert.match(L[18], /^╰─{20,}╯/);                       // bas du cadre
+  assert.match(L[17], /^│ > Essaie « /);                 // saisie (astuce)
+  assert.match(L[16], /^╭─{20,}╮/);                       // haut du cadre
   assert.match(L[15], /Claude Sonnet 5\.5\s*$/);          // modèle à droite, au-dessus
   for (let y = 0; y < 15; y++) assert.equal(L[y], '', `ligne ${y} vide (rien entre le haut et la barre)`);
   tui.print('bannière\n'); await tick();
@@ -38,7 +38,7 @@ test('quand le contenu dépasse l\'écran : la barre reste en bas, l\'historique
   assert.equal(sim.lines()[14], 'ligne 60', 'le dernier texte est juste au-dessus de la barre');
   assert.equal(sim.count(/ligne 1\b/g), 1); assert.equal(sim.count(/ligne 60\b/g), 1);
   assert.ok(sim.scrollback.includes('ligne 1'), 'les anciennes lignes sont dans l\'historique du terminal');
-  assert.equal(sim.count(/Écris ta demande/g), 1);
+  assert.equal(sim.count(/Essaie « /g), 1);
   tui.stop();
 });
 
@@ -50,13 +50,13 @@ test('la zone grandit (saisie multi-ligne, suggestions) sans écraser le contenu
   type('a\nb\nc'); await tick();                          // 3 lignes de saisie : +2 lignes de zone
   assert.match(last(sim), /⏵⏵ auto/);
   assert.equal(sim.count(/ligne 40\b/g), 1, 'le dernier texte n\'est ni perdu ni écrasé');
-  assert.match(sim.screen(), /ligne 40\n[\s\S]*❯ a\n  b\n  c/);
+  assert.match(sim.screen(), /ligne 40\n[\s\S]*│ > a\s*│\n│   b\s*│\n│   c/);
   type(ESC); type('/m'); await tick();                    // Échap vide la saisie ; suggestions sous le trait
   assert.match(sim.screen(), /\/model/); assert.match(last(sim), /⏵⏵ auto/);
   type(ESC); type(ESC); await tick();                     // ferme la liste puis efface : retour à la taille minimale
   assert.match(last(sim), /⏵⏵ auto/); assert.doesNotMatch(sim.screen(), /\/model/);
   assert.equal(sim.count(/ligne 40\b/g), 1);
-  assert.equal(sim.count(/Écris ta demande/g), 1);
+  assert.equal(sim.count(/Essaie « /g), 1);
   tui.stop();
 });
 
@@ -64,13 +64,13 @@ test('redimensionnement : la barre suit le bas de la fenêtre', async () => {
   const { sim, tick, tui, resize } = make({ cols: 70, rows: 20 });
   tui.print('un\ndeux\n'); await tick();
   resize(90, 30); await tick();                           // plus grande
-  assert.match(last(sim), /⏵⏵ auto/); assert.match(sim.lines()[28], /^─{20,}/);   // trait du bas
-  assert.match(sim.lines()[27], /❯ Écris ta demande/); assert.match(sim.lines()[26], /^─{20,}/);
+  assert.match(last(sim), /⏵⏵ auto/); assert.match(sim.lines()[28], /^╰─{20,}╯/);   // bas du cadre
+  assert.match(sim.lines()[27], /^│ > Essaie « /); assert.match(sim.lines()[26], /^╭─{20,}╮/);
   resize(60, 12); await tick();                           // plus petite
-  assert.match(last(sim), /⏵⏵ auto/); assert.match(sim.lines()[9], /❯ Écris ta demande/);
+  assert.match(last(sim), /⏵⏵ auto/); assert.match(sim.lines()[9], /^│ > Essaie « /);
   tui.print('après\n'); await tick();
   assert.match(sim.screen(), /après/); assert.match(last(sim), /⏵⏵ auto/);
-  assert.equal(sim.count(/Écris ta demande/g), 1);
+  assert.equal(sim.count(/Essaie « /g), 1);
   tui.stop();
 });
 
@@ -78,8 +78,8 @@ test('largeur étroite : rien ne déborde, la barre reste en bas', async () => {
   const { sim, type, tick, tui } = make({ cols: 28, rows: 14 });
   type('un texte long qui doit passer à la ligne'); await tick();
   assert.match(last(sim), /auto/);
-  assert.equal(sim.count(/Écris ta demande/g), 0);
-  assert.ok(sim.screen().includes('❯ un texte'));
+  assert.equal(sim.count(/Essaie « /g), 0);
+  assert.ok(sim.screen().includes('> un texte'));
   tui.stop();
 });
 

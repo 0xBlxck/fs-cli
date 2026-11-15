@@ -360,7 +360,7 @@ export async function runAgent(S, userText, { signal, ask }) {
       ctxBit = ' · ' + (p >= 80 ? c.red : p >= 60 ? c.yellow : c.dim)(`ctx ${p}%`);
     }
   }
-  ui.println('\n' + c.dim(`  ─ ${bits.join(' · ')}`) + ctxBit);
+  ui.println('\n' + c.dim(`  ✻ Terminé en ${bits.join(' · ')}`) + ctxBit);
   if (cfg.sound && secsN > 3) process.stdout.write('\x07');
   return { hitLimit: false };
 }

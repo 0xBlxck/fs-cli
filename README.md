@@ -87,6 +87,8 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 | `/` · `@fichier` · `!commande` | commandes · joindre un fichier · commande shell directe |
 | **Alt+V** | coller une image (capture Win+Maj+S…) ; glisser-déposer une image ou `@image.png` marche aussi |
 | ↑ ↓ · Ctrl+R | historique · recherche dans l'historique |
+| `?` · `# info` | afficher les raccourcis · retenir une info en mémoire |
+| Échap × 2 | revenir en arrière (état des fichiers avant une demande) |
 
 ---
 

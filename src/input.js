@@ -9,7 +9,7 @@ import { c, println } from './ui.js';
 class ReadlineInput {
   constructor({ history = [], onHistory = null, completer = null, promptStr = () => '❯ ' }) {
     this.kind = 'readline'; this.onHistory = onHistory; this.promptStr = promptStr;
-    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [] };
+    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [] };
     this.busy = false; this.pasteBuf = []; this.pasteTimer = null; this.inBlock = false; this.currentAsk = null; this.lastSigint = 0;
     this.rl = readline.createInterface({
       input: process.stdin.isTTY ? process.stdin : new PassThrough(),
