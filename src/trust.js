@@ -7,7 +7,16 @@ import path from 'node:path';
 import { HOME_DIR } from './config.js';
 
 const FILE = () => path.join(HOME_DIR, 'trusted-folders.json');
-const norm = d => { let p = path.resolve(d); try { p = fs.realpathSync.native(p); } catch {} return process.platform === 'win32' ? p.toLowerCase() : p; };
+/** Chemin réel normalisé ; pour un dossier pas encore créé, on résout son plus proche parent existant (noms courts Windows type RUNNER~1, liens…). */
+function norm(d) {
+  let cur = path.resolve(d); const tail = []; let p = cur;
+  for (let i = 0; i < 64; i++) {
+    try { p = path.join(fs.realpathSync.native(cur), ...tail.reverse()); break; } catch {}
+    const up = path.dirname(cur); if (up === cur) { p = path.resolve(d); break; }
+    tail.push(path.basename(cur)); cur = up;
+  }
+  return process.platform === 'win32' ? p.toLowerCase() : p;
+}
 const sessionTrusted = new Set();
 
 function load() { try { const a = JSON.parse(fs.readFileSync(FILE(), 'utf8')); return Array.isArray(a) ? a.filter(x => typeof x === 'string') : []; } catch { return []; } }
@@ -20,8 +29,7 @@ export function isBroadFolder(dir) {
 
 export function isFolderTrusted(dir) {
   const p = norm(dir);
-  if (sessionTrusted.has(p)) return true;
-  return load().some(t => t === p || (!isBroadFolder(t) && p.startsWith(t.endsWith(path.sep) ? t : t + path.sep)));
+  return [...sessionTrusted, ...load()].some(t => t === p || (!isBroadFolder(t) && p.startsWith(t.endsWith(path.sep) ? t : t + path.sep)));
 }
 
 export function trustFolder(dir, { remember = true } = {}) {
