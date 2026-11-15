@@ -1,0 +1,6 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions   # le projet n'a aucune dépendance npm : seules les actions de la CI sont suivies
+    directory: /
+    schedule:
+      interval: weekly

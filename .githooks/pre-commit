@@ -1,0 +1,8 @@
+#!/bin/sh
+# Bloque tout commit qui contient un token, une clé, un e-mail ou un chemin personnel.
+# Activation (une fois par clone) : git config core.hooksPath .githooks
+node scripts/scan.mjs --staged || {
+  echo ""
+  echo "Commit REFUSÉ : le scan de sécurité a trouvé des secrets ou des données personnelles (voir ci-dessus)."
+  exit 1
+}

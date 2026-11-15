@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read        # aucun droit d'écriture, aucun secret utilisé
+
+jobs:
+  test:
+    runs-on: windows-latest        # les tests utilisent PowerShell
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Tests (aucun appel à la vraie API)
+        run: npm test
+      - name: Scan de secrets et de données personnelles
+        run: npm run scan
