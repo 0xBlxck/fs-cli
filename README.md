@@ -97,7 +97,8 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 - **Instructions du projet** : `/init` crée `FSCLI.md` (ou utilise un `AGENTS.md` existant), lu au début de chaque conversation.
 - **Conversations rangées** : sur le site, les conversations du CLI sont regroupées dans le projet **FS-CLI** (`/fr-project <nom>` pour un autre, `/fr-project off` pour désactiver).
 - **Web** : une URL citée est lue automatiquement ; `/search` et `/fetch` (adresses locales refusées).
-- **MCP** : serveurs MCP (stdio et HTTP) avec presets (Blender, Playwright…).
+- **Tes outils déjà installés, automatiquement** : FS-CLI retrouve les serveurs **MCP** configurés dans Claude Code, Claude Desktop, Codex, Cursor, Gemini CLI ou Windsurf, et les **skills** (`SKILL.md` de `~/.claude/skills`, `~/.agents/skills`, `~/.codex/skills`, plugins installés). Le modèle les utilise tout seul quand c'est utile ; un serveur importé demande ton accord à son premier démarrage. `/import` montre ce qui a été trouvé, `/import off` désactive.
+- **MCP** : tes propres serveurs MCP (stdio et HTTP) avec presets (Blender, Playwright…).
 - **Fichiers protégés** : le modèle ne peut pas écraser un fichier que tu as modifié depuis sa dernière lecture ; écritures atomiques ; `/undo` annule la dernière modification.
 
 ### Conversations et limites du compte
@@ -124,7 +125,7 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |
 | Mémoire | `/remember` · `/forget` · `/memory` · `/preprompt` · `/profil` · `/skills` |
-| Web et outils | `/search` · `/fetch` · `/mcp` · `/jobs` · `!commande` |
+| Web et outils | `/search` · `/fetch` · `/mcp` · `/import` · `/jobs` · `!commande` |
 | Sécurité | `/permissions` · `/mode auto\|ask\|plan` · `/intent on\|off` |
 
 ---

@@ -14,6 +14,7 @@ import { TOOLS, normalizeArgs, riskInfo, resolveP, makeTmp, dropTmp } from './to
 import * as ui from './ui.js';
 import { c } from './ui.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './trust.js';
+import { isSkillPath } from './discover.js';
 
 // ── Un échange avec le modèle (affichage en streaming) ────────────────────────
 async function oneStream(S, content, signal) {
@@ -75,7 +76,7 @@ function fitDetail(detail, maxRows = 8) {
   return rows.slice(0, maxRows - 1).join('\n') + `\n… +${hidden.length} ligne(s) masquée(s) (${hidden.join('').length} caractères) — vérifie la commande complète avant d'accepter`;
 }
 
-async function confirm(ask, { title, detail, danger, allowAlways = false, trustDir = null }) {
+export async function confirm(ask, { title, detail, danger, allowAlways = false, trustDir = null, alwaysLabel = null }) {
   detail = fitDetail(detail);
   title = ui.sanitize(title);
   const TRUST = trustDir ? `Oui, et faire confiance à ce dossier (${ui.shortPath ? ui.shortPath(trustDir, 40) : trustDir})` : null;
@@ -83,7 +84,7 @@ async function confirm(ask, { title, detail, danger, allowAlways = false, trustD
     const alwaysOk = !danger || allowAlways;
     const options = ['Oui'];
     if (TRUST) options.push(TRUST);
-    else if (alwaysOk) options.push(danger ? 'Oui, et ne plus demander (règle enregistrée)' : 'Oui, et ne plus demander pendant cette session');
+    else if (alwaysOk) options.push(alwaysLabel ? `Oui, ${alwaysLabel}` : danger ? 'Oui, et ne plus demander (règle enregistrée)' : 'Oui, et ne plus demander pendant cette session');
     options.push('Non');
     const plainTitle = (danger ? '⚠ ' : '') + title.replace(/\x1b\[[0-9;]*m/g, '');
     const idx = await selectHandler({ title: plainTitle, detail: detail || '', options, defaultIndex: TRUST ? 1 : danger ? options.length - 1 : 0 });
@@ -172,7 +173,8 @@ export async function execCall(S, call, { signal, ask, root = null }) {
     if (rel.startsWith('..') || path.isAbsolute(rel) || rel0.startsWith('..') || path.isAbsolute(rel0)) {
       // dossier du fichier (ou le dossier lui-même pour list_dir / grep / glob)
       let dir = rp; try { if (!fs.statSync(rp).isDirectory()) dir = path.dirname(rp); } catch { dir = ['list_dir', 'grep', 'glob'].includes(call.name) ? rp : path.dirname(rp); }
-      if (!isFolderTrusted(dir) && !risk.protectedPath) { risk.protectedPath = `hors du dossier de travail : ${rp}`; risk.outsideDir = dir; }
+      const skillRead = ['read_file', 'list_dir', 'grep', 'glob'].includes(call.name) && isSkillPath(rp, S.cwd);   // skills du PC : lecture libre
+      if (!skillRead && !isFolderTrusted(dir) && !risk.protectedPath) { risk.protectedPath = `hors du dossier de travail : ${rp}`; risk.outsideDir = dir; }
     }
   }
   const secrets = call.name === 'write_file' ? scanSecrets(args.content || '') : call.name === 'edit_file' ? scanSecrets(args.new_string || '') : [];

@@ -19,6 +19,8 @@ import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
+import { toolsHint } from './src/pseudo.js';
+import { discoverMcpServers, discoverSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
@@ -195,7 +197,7 @@ function copyToClipboard(text) {
 
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
-  '/continue', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
+  '/continue', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
@@ -306,7 +308,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
@@ -484,6 +486,18 @@ async function command(line) {
       return println('\n' + c.dim('  ↳ résultats joints à ton prochain message'));
     }
     case '/continue': return chatTurn('Continue.', { keepLast: true });
+    case '/import': {                                                 // MCP et skills des autres assistants (Claude Code, Codex…)
+      if (/^(on|off|oui|non)$/i.test(arg)) { cfg.importTools = /^(on|oui)$/i.test(arg); saveCfg(); }
+      if (cfg.importTools === false) return println(c.dim('  import désactivé — /import on pour utiliser les MCP et skills de Claude Code, Codex…'));
+      const servers = discoverMcpServers(S.cwd), skills = discoverSkills(S.cwd, { refresh: true });
+      const by = (arr, k) => arr.reduce((a, x) => (a[x[k]] = (a[x[k]] || 0) + 1, a), {});
+      println();
+      println(`  ${c.bold('Serveurs MCP importés')} ${c.dim(`(${Object.keys(servers).length})`)}`);
+      for (const [n, s] of Object.entries(servers)) println(`    ${c.accent(n.padEnd(18))} ${c.dim(s._source + ' · ' + (s.url ? 'http' : 'stdio'))}`);
+      println(`  ${c.bold('Skills')} ${c.dim(`(${skills.length})`)}  ${c.dim(Object.entries(by(skills, 'source')).map(([k, v]) => `${k} : ${v}`).join(' · '))}`);
+      println(c.dim('\n  Le modèle les utilise tout seul quand c\'est utile ; un serveur importé demande ton accord à son premier démarrage.'));
+      return println(c.dim('  /import off pour désactiver · /mcp pour tous les serveurs\n'));
+    }
     case '/intent':                                                   // compréhension des demandes en langage naturel
       cfg.intents = arg ? /^(on|1|oui|true)$/i.test(arg) : cfg.intents === false; saveCfg();
       return println(c.dim(`  → demandes en langage naturel ${cfg.intents ? 'ON (« fais ce site avec plusieurs agents » lance une équipe…)' : 'OFF (seules les /commandes déclenchent les fonctions)'}`));
@@ -526,6 +540,10 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!S.ctxSent) {                                                  // préprompt, faits, notes, skills : 1er message d'une conversation
       const { text: ctxText, label } = mem.buildContextBlock(S.cwd);
       if (ctxText) { message += '\n\n' + ctxText; println(c.dim(`  ＋ contexte joint : ${label}`)); }
+      if (cfg.engine === 'native') {                                   // MCP et skills du PC (les tiens + Claude Code, Codex…)
+        const hint = toolsHint(S.cwd, text);
+        if (hint.text) { message += '\n\n' + hint.text; println(c.dim(`  ＋ outils du PC : ${hint.label}`)); }
+      }
       S.ctxSent = true;
     }
     if (!keepLast) S.lastUserText = text;

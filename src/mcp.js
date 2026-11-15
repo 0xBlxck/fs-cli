@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { discoverMcpServers } from './discover.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const CLIENT_INFO = { name: 'fs-cli', version: '3.1.0' };
@@ -123,6 +124,14 @@ export function loadMcpConfig(cwd) {
       if (s) out.mcpServers[name] = s; // le projet remplace l'entrée user du même nom
     }
   }
+  // serveurs déjà configurés dans tes autres assistants (Claude Code, Codex…) : priorité la plus basse
+  try {
+    for (const [name, raw] of Object.entries(discoverMcpServers(path.resolve(cwd || process.cwd())))) {
+      if (out.mcpServers[name]) continue;
+      const s = normalizeServer(raw, 'importé');
+      if (s) { s._source = raw._source; if (raw.cwd) s.cwd = raw.cwd; out.mcpServers[name] = s; }
+    }
+  } catch {}
   if (errors.length) { out._error = errors.join(' ; '); out._errors = errors; }
   return out;
 }
@@ -794,7 +803,7 @@ const FAIL_RETRY_MS = 60000;
 
 export async function toolsCatalog(manager, { maxToolsPerServer = 40 } = {}) {
   let servers;
-  try { servers = (await manager.list()).filter((s) => !s.disabled); } catch { return ''; }
+  try { servers = (await manager.list()).filter((s) => !s.disabled && s.scope !== 'importé'); } catch { return ''; }
   const blocks = await Promise.all(servers.map(async (s) => {
     try {
       if (!s.connected) {
