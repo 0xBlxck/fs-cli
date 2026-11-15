@@ -1,0 +1,53 @@
+{
+  "name": "fs-cli-vscode",
+  "displayName": "FS-CLI — France Student AI",
+  "description": "Panneau de chat FS-CLI dans VS Code : l'agent France Student AI lit et modifie ton projet, avec diffs, tâches et confirmations.",
+  "version": "0.1.0",
+  "publisher": "0xblxck",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": { "type": "git", "url": "https://github.com/0xBlxck/fs-cli" },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["AI", "Chat", "Other"],
+  "keywords": ["france student", "agent", "chat", "ai", "fs-cli"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [{ "id": "fsCli", "title": "FS-CLI", "icon": "media/sidebar.svg" }]
+    },
+    "views": {
+      "fsCli": [{ "type": "webview", "id": "fsCli.chat", "name": "Chat" }]
+    },
+    "commands": [
+      { "command": "fsCli.open", "title": "FS-CLI : ouvrir dans un onglet", "icon": "media/sidebar.svg" },
+      { "command": "fsCli.focus", "title": "FS-CLI : ouvrir le panneau latéral" },
+      { "command": "fsCli.newChat", "title": "FS-CLI : nouvelle conversation" },
+      { "command": "fsCli.askSelection", "title": "Demander à FS-CLI" },
+      { "command": "fsCli.login", "title": "FS-CLI : se connecter (clé de session)" }
+    ],
+    "menus": {
+      "editor/title": [{ "command": "fsCli.open", "group": "navigation" }],
+      "editor/context": [{ "command": "fsCli.askSelection", "when": "editorHasSelection", "group": "navigation@99" }]
+    },
+    "keybindings": [
+      { "command": "fsCli.open", "key": "ctrl+alt+i", "mac": "cmd+alt+i" },
+      { "command": "fsCli.askSelection", "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorTextFocus" }
+    ],
+    "configuration": {
+      "title": "FS-CLI",
+      "properties": {
+        "fsCli.command": {
+          "type": "string",
+          "default": "",
+          "description": "Commande pour lancer FS-CLI (vide = automatique : installation globale « npm i -g », sinon « fs-cli » du PATH)."
+        },
+        "fsCli.shareSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Joindre au message le fichier ouvert et le code sélectionné (désactivable aussi d'un clic dans le panneau)."
+        }
+      }
+    }
+  }
+}

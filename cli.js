@@ -14,6 +14,7 @@ import { fetchAgents } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
+import { StdioInput, send as stdioSend } from './src/stdio.js';
 import { detectTargetDir } from './src/target.js';
 import { sensitivePathReason } from './src/permissions.js';
 import { detectIntent, urlsIn } from './src/intent.js';
@@ -51,12 +52,17 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--cwd') opts.cwd = argv[++i];
   else if (a === '--web') opts.web = true;
   else if (a === '--classic') opts.classic = true;
+  else if (a === '--stdio') opts.stdio = true;                   // mode machine : extension VS Code
   else if (a === '--login') opts.login = true;
   else if (a === '-h' || a === '--help') opts.help = true;
   else if (a === '-v' || a === '--version') opts.version = true;
   else opts.prompt.push(a);
 }
 if (opts.version) { console.log(`fs-cli ${VERSION}`); process.exit(0); }
+if (opts.stdio) {                                                   // tout passe en événements JSON : rien d'autre ne doit polluer la sortie
+  console.log = (...a) => stdioSend('print', { text: a.join(' ') + '\n' });
+  console.error = (...a) => stdioSend('print', { text: a.join(' ') + '\n' });
+}
 if (opts.help) {
   console.log(`FS-CLI ${VERSION} — agent terminal France Student AI
 
@@ -82,6 +88,7 @@ if (opts.login && process.stdin.isTTY) {                                // fs-cl
 if (!TOKEN) {
   // premier lancement : assistant de connexion (aucun fichier à éditer) ; sans terminal interactif, on explique
   const canAsk = process.stdin.isTTY && process.stdout.isTTY && !opts.print;
+  if (opts.stdio) { stdioSend('needLogin', {}); process.exit(2); }
   if (!canAsk || !(await loginWizard({ first: true }))) {
     if (!canAsk) {
       console.log(c.red('\n  Clé de session France Student manquante.'));
@@ -264,7 +271,7 @@ function completer(line) {
 // ── Readline ──────────────────────────────────────────────────────────────────
 // demande initiale : argument positionnel, ou stdin si le CLI est alimenté par un pipe
 let initial = opts.prompt.join(' ').trim();
-if (!process.stdin.isTTY && !initial) {
+if (!process.stdin.isTTY && !initial && !opts.stdio) {
   try { initial = fs.readFileSync(0, 'utf8').trim(); } catch {}
   opts.print = true;
 }
@@ -305,18 +312,19 @@ function suggest(buf, cur) {
   return null;
 }
 
-const interactive = !!process.stdin.isTTY && !!process.stdout.isTTY && !opts.classic && !opts.print;
-const input = createInput({
+const interactive = !!opts.stdio || (!!process.stdin.isTTY && !!process.stdout.isTTY && !opts.classic && !opts.print);
+const input = opts.stdio ? new StdioInput() : createInput({
   interactive, history: histLines, completer, promptStr, suggester: suggest,
   onHistory: t => { if (t && !opts.print && !/TOKEN\s*=|session-token|sk-[A-Za-z0-9]{20}|ghp_[A-Za-z0-9]{20}/i.test(t)) try { fs.appendFileSync(FILES.hist, t + '\n', { mode: 0o600 }); } catch {} },
 });
 
 let busy = false, turnAbort = null;
 const ask = query => input.askLine(query);
-const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent });
+const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
 
 function banner() {
+  if (opts.stdio) return stdioSend('ready', { version: VERSION, models: Object.entries(AGENTS).map(([id, name]) => ({ id, name })), modes: MODES.map(m => ({ id: m, name: MODE_NAME[m], desc: MODE_DESC[m] })), commands: SLASH.map(x => x.trim()), cwd: S.cwd, chatId: S.chatId || null, title: S.title || '' });
   const sess = S.chatId ? c.dim(S.chatId.slice(0, 8)) : c.dim('nouvelle');
   ui.box([
     `${c.bold(c.accent('FS-CLI'))} ${c.dim('v' + VERSION + ' · France Student AI')}`,
@@ -722,6 +730,7 @@ function printTurnChanges() {
   const mark = (S.turnMarks || []).at(-1);
   if (!mark || S.undo.length <= mark.at) return;
   const files = summarizeChanges(S.undo, mark.at);
+  if (opts.stdio) return stdioSend('changes', { files: files.map(f => ({ path: f.path, rel: path.relative(S.cwd, f.path), added: f.added, removed: f.removed, created: f.created, deleted: f.deleted, binary: f.binary })) });
   const add = files.reduce((n, f) => n + f.added, 0), rem = files.reduce((n, f) => n + f.removed, 0);
   println(`\n  ${c.green('●')} ${c.bold('Fichiers modifiés')} ${c.dim(`· ${files.length}`)}  ${add ? c.green('+' + add) : ''} ${rem ? c.red('−' + rem) : ''}`);
   files.slice(0, 12).forEach((f, i) => println(`  ${i === 0 ? c.dim('  └') : '   '} ${changeLine(f, S.cwd, c)}`));
@@ -798,7 +807,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
     try {
       await runAgent(S, message, { signal: turnAbort.signal, ask });
       if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));
-      if (ui.tasks.blocks > 1 && ui.tasks.list.length) {               // liste mise à jour pendant le travail : état final écrit une seule fois
+      if (!opts.stdio && ui.tasks.blocks > 1 && ui.tasks.list.length) {               // liste mise à jour pendant le travail : état final écrit une seule fois
         const L = ui.tasks.list, done = L.filter(t => t.state === 'done').length;
         println(`
   ${done === L.length ? c.green('●') : c.accent('●')} ${c.bold('Tâches')} ${c.dim(`· ${done}/${L.length} faites`)}`);
@@ -925,6 +934,21 @@ input.on('rewind', () => { if (!busy) runInput('/rewind'); });      // Échap ×
 input.on('expand', () => ui.showExpanded());                          // Ctrl+O : déplier les sorties résumées et la pensée
 input.on('pasteImage', () => { try { pasteClipboardImage(); } catch (e) { println(c.red('  image : ' + e.message)); } });
 input.on('quit', () => { shutdown(0); });
+if (opts.stdio) {                                                    // commandes directes du panneau VS Code
+  input.on('setMode', m => { if (MODES.includes(m)) { cfg.mode = m; saveCfg(); S.allow = {}; refreshPrompt(); } });
+  input.on('setModel', id => { const r = resolveModel(id); if (r !== null) { S.agentId = r; cfg.agentId = r; saveCfg(); saveSession(); refreshPrompt(); } });
+  input.on('diffBefore', (id, file) => {                               // contenu d'avant d'un fichier modifié (diff natif de VS Code) : seulement les fichiers touchés par le modèle
+    const d = fileDiff(S.undo, String(file || ''));
+    stdioSend('diffBefore', { id, path: file, ok: !!d, before: d ? d.before : '', created: d ? d.created : false });
+  });
+  input.on('undoFile', file => {                                       // bouton « Annuler » d'un fichier du bilan
+    if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour annuler un fichier' });
+    const r = undoFile(S, file, FILES.trash);
+    if (!r) return stdioSend('flash', { text: 'rien à annuler pour ce fichier' });
+    S.notes.push(`L'utilisateur a annulé tes modifications du fichier ${file} (retour à son état d'avant). Relis-le avant de le modifier.`);
+    stdioSend('fileUndone', { path: file, message: r });
+  });
+}
 process.on('exit', () => { try { input.stop(); } catch {} });
 process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); });
 

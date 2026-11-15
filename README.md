@@ -94,6 +94,24 @@ Dis « sans agents » pour l'éviter ; `/intent off` désactive cette compréhen
 
 ---
 
+## Extension VS Code (aussi Cursor, Windsurf, Antigravity)
+
+Le même agent dans un panneau de chat de ton éditeur :
+
+- Le fichier ouvert et ton code sélectionné sont joints à la demande.
+- Les diffs s'affichent dans le panneau, et tu peux les ouvrir dans le diff de l'éditeur.
+- Les confirmations se font en un clic.
+- Un bilan des fichiers modifiés, avec **Annuler** par fichier.
+- Les tâches, le modèle et le mode sont accessibles en un clic.
+
+1. Installe FS-CLI (ci-dessus) et lance `fs-cli` une fois pour te connecter.
+2. Télécharge `fs-cli-vscode-*.vsix` dans les [releases](https://github.com/0xBlxck/fs-cli/releases).
+3. Dans l'éditeur, ouvre les Extensions, puis **⋯ › Installer depuis un VSIX…**.
+
+Pour l'ouvrir : l'icône ✻ dans la barre latérale, ou **Ctrl+Alt+I** pour un onglet. Pour envoyer la sélection : **Ctrl+Alt+K**, ou clic droit › *Demander à FS-CLI*.
+
+---
+
 ## Fonctions
 
 - **Agent natif** : le modèle utilise les outils officiels « outils client » de France Student (lire, chercher, écrire, éditer, lancer une commande) ; le CLI les exécute sur ton PC avec ses garde-fous.
@@ -193,6 +211,7 @@ Voir [CONTRIBUTING.md](CONTRIBUTING.md).
 |---|---|
 | `cli.js` | point d'entrée, commandes de base, sessions |
 | `src/native.js` · `src/agent.js` | moteur natif · exécution des outils, confirmations, mode chat |
+| `src/stdio.js` · `vscode/` | mode `--stdio` (événements JSON) · extension VS Code (panneau de chat, `node vscode/scripts/pack.mjs` pour le .vsix) |
 | `src/permissions.js` · `src/trust.js` | politique de commandes et secrets · confiance par dossier |
 | `src/intent.js` | compréhension des demandes en langage naturel |
 | `src/team.js` · `src/chats.js` | agents multiples · gestion des conversations |

@@ -99,16 +99,18 @@ export const spinner = {
   start(label = 'réflexion…') {
     if (!TTY && !sink) return;
     this.stop();
+    if (sink?.event) { if (/^réflexion…?$/i.test(label)) label = VERBS[Math.floor(Math.random() * VERBS.length)] + '…'; sp = { label, t0: Date.now(), timer: null }; sink.event('spinner', { label }); return; }   // panneau VS Code : il anime lui-même
     if (/^réflexion…?$/i.test(label)) label = VERBS[Math.floor(Math.random() * VERBS.length)] + '…';   // attente générique : verbe au hasard
     sp = { label, t0: Date.now(), i: 0, timer: null };
     if (!sink) process.stdout.write('\x1b[?25l');
     draw();
     sp.timer = setInterval(draw, 90);
   },
-  label(l) { if (sp) sp.label = l; },
+  label(l) { if (sp) { sp.label = l; sink?.event?.('spinner', { label: l }); } },
   stop() {
     if (!sp) return;
     clearInterval(sp.timer); sp = null;
+    if (sink?.event) { sink.event('spinner', { label: null }); return; }
     if (sink) sink.spinner(null);
     else process.stdout.write('\r\x1b[K\x1b[?25h');
   },
@@ -162,6 +164,7 @@ export class MdStream {
     this.collapse = collapse; this.onCode = onCode; this.codeLines = 0; this.codeName = '';
   }
   push(t) {
+    if (sink?.event) { const d = sanitize(t); if (d) sink.event('text', { delta: d }); return; }   // panneau VS Code : markdown brut, rendu là-bas
     this.buf += sanitize(t);
     let i;
     while ((i = this.buf.indexOf('\n')) >= 0) {
@@ -176,6 +179,7 @@ export class MdStream {
     this.buf = '';
   }
   finish() {
+    if (sink?.event) { sink.event('textEnd'); return; }
     this.flushLine();
     if (this.tableRows) this.flushTable();
     if (this.inCode) this.closeCode();
@@ -332,7 +336,7 @@ export function showExpanded() {
 // Avec l'interface plein écran, l'action en cours est affichée dans la zone du bas (avec sa sortie en direct),
 // puis écrite dans l'historique UNE FOIS TERMINÉE, puce verte (réussie) ou rouge (échec).
 // Les lectures / recherches successives sont regroupées en un seul bloc « Exploré ».
-let cell = null, committing = false;
+let cell = null, committing = false, lastExplore = false;
 function headLine(bullet, tag, label, detail) {
   const head = `${tag ? c.accent(c.bold(tag)) + ' ' : ''}${c.bold(label)}`;
   return `  ${bullet} ${head}${detail ? '  ' + c.dim(clip(detail, Math.max(10, cols() - stripLen(head) - 8))) : ''}`;
@@ -377,6 +381,7 @@ export function commitAction() {
 
 export function toolHeader(name, summary = '') {
   const { tag, label, detail } = describeAction(name, summary);
+  if (sink?.event) { lastExplore = EXPLORE.has(name); sink.event('tool', { name, tag, label, detail: sanitize(detail), explore: lastExplore }); return; }
   if (!sink) { println(); println(headLine(c.green('●'), tag, label, detail)); return; }     // sans interface plein écran : direct
   const explore = EXPLORE.has(name);
   if (explore && cell?.kind === 'explore') { cell.items.push({ label, detail }); showActive(); return; }
@@ -387,6 +392,7 @@ export function toolHeader(name, summary = '') {
 
 /** Fin d'exécution de l'action en cours : couleur de la puce. Renvoie false si son résultat doit rester masqué (exploration réussie). */
 export function toolDone(ok) {
+  if (sink?.event) { sink.event('toolDone', { ok: !!ok }); return lastExplore ? !ok : true; }
   if (!cell) return true;
   if (cell.kind === 'explore') {
     if (!ok) cell.items[cell.items.length - 1].err = true;
@@ -399,6 +405,7 @@ export function toolDone(ok) {
 }
 
 export function toolBody(text, { max = 8, error = false } = {}) {
+  if (sink?.event) { const t = sanitize(text).replace(/\r/g, '').replace(/\n+$/, ''); if (t) sink.event('toolOutput', { text: t.slice(0, 20000), error }); return; }
   const lines = sanitize(text).replace(/\r/g, '').split('\n');
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
   if (!lines.length) return;
@@ -409,6 +416,7 @@ export function toolBody(text, { max = 8, error = false } = {}) {
 }
 
 export function toolNote(text, kind = 'dim') {
+  if (sink?.event) { sink.event('note', { text: stripAnsi(sanitize(text)), kind }); return; }
   println(`  ${c.dim('⎿')}  ${(c[kind] || c.dim)(text)}`);
 }
 
@@ -416,6 +424,7 @@ export function toolNote(text, kind = 'dim') {
 export function createLive(maxLines = 24) {
   let carry = '', shown = 0, hidden = 0;
   const emitLine = (l) => {
+    if (sink?.event) { if (shown++ < 400) sink.event('toolLive', { line: l }); else hidden++; return; }
     if (cell && cell.kind === 'action' && sink) {                     // action en cours : sortie dans la zone du bas, résumée à la fin
       cell.live.push(l); if (cell.live.length > 400) cell.live.splice(5, cell.live.length - 400);
       showActive(); shown++; return;
@@ -470,6 +479,7 @@ export function lineDiff(oldStr, newStr) {
 /** Diff coloré façon Claude Code : résumé, numéros de ligne, ajouts sur fond vert, retraits sur fond rouge, 2 lignes de contexte. */
 export function diffView(oldStr, newStr, { max = 30, context = 2 } = {}) {
   const ops = lineDiff(oldStr, newStr);
+  if (sink?.event) return diffEvent(ops, context);
   const added = ops.filter(x => x.t === '+').length, removed = ops.filter(x => x.t === '-').length;
   const parts = [added && `${added} ajout${added > 1 ? 's' : ''}`, removed && `${removed} suppression${removed > 1 ? 's' : ''}`].filter(Boolean);
   println(`  ${c.dim('⎿')}  ${parts.length ? parts.join(', ') : 'aucun changement'}`);
@@ -495,6 +505,21 @@ export function diffView(oldStr, newStr, { max = 30, context = 2 } = {}) {
     shown++; last = i;
   }
   return { removed, added };
+}
+
+/** diff envoyé au panneau VS Code : lignes changées + contexte, « null » entre deux zones éloignées */
+function diffEvent(ops, context) {
+  const added = ops.filter(x => x.t === '+').length, removed = ops.filter(x => x.t === '-').length;
+  const keep = new Set();
+  ops.forEach((x, i) => { if (x.t !== ' ') for (let k = Math.max(0, i - context); k <= Math.min(ops.length - 1, i + context); k++) keep.add(k); });
+  const lines = []; let last = -2;
+  for (let i = 0; i < ops.length && lines.length < 600; i++) {
+    if (!keep.has(i)) continue;
+    if (last >= 0 && i > last + 1) lines.push(null);
+    const x = ops[i]; lines.push({ t: x.t, n: x.t === '-' ? x.o : x.n, line: sanitize(x.line).slice(0, 400) }); last = i;
+  }
+  sink.event('diff', { added, removed, lines });
+  return { added, removed };
 }
 
 // ── Boîte / bannière ──────────────────────────────────────────────────────────
