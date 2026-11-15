@@ -91,3 +91,16 @@ test('menus envoyés au panneau : sans codes couleur du terminal', async () => {
     assert.deepEqual(ev.options, ['＋ a.js', 'Fermer']);
   } finally { process.stdout.write = orig; inp?.stop(); }
 });
+
+test('panneau ↔ extension ↔ CLI : aucun message perdu en route', async () => {
+  const fs = await import('node:fs'), path = await import('node:path'), { fileURLToPath } = await import('node:url');
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const read = f => fs.readFileSync(path.join(root, f), 'utf8');
+  const panel = read('vscode/media/panel.js'), ext = read('vscode/extension.js'), stdio = read('src/stdio.js');
+  const sent = new Set([...panel.matchAll(/post\(\{\s*type:\s*'([\w]+)'/g)].map(m => m[1]));
+  const handled = new Set([...ext.matchAll(/case '([\w]+)':/g)].map(m => m[1]));
+  for (const t of sent) assert.ok(handled.has(t), `le panneau envoie « ${t} » mais l'extension ne le relaie pas`);
+  const toCli = new Set([...ext.matchAll(/toCli\(\{\s*type:\s*'([\w]+)'/g)].map(m => m[1]));
+  const cliKnows = new Set([...stdio.matchAll(/case '([\w]+)':/g)].map(m => m[1]));
+  for (const t of toCli) assert.ok(cliKnows.has(t) || t === 'quit', `l'extension envoie « ${t} » au CLI mais il ne le comprend pas`);
+});

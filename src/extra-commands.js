@@ -21,8 +21,11 @@ const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
 // ── Compactage de la conversation ─────────────────────────────────────────────
 const compactPrompt = (extra = '') =>
-  'Résume cette session de travail pour la poursuivre dans une nouvelle conversation. Réponds en français, en texte simple (pas de bloc de code, pas de fichier), avec ces rubriques :\n' +
-  '1. Objectif\n2. Décisions prises\n3. Fichiers créés ou modifiés (chemins)\n4. Tâches restantes\nSois concis et précis : chemins, noms de fonctions, commandes utiles.' +
+  'Résume cette session de travail pour la poursuivre dans une nouvelle conversation, sans rien perdre d\'utile. Réponds en français, en texte simple (pas de bloc de code, pas de fichier), avec ces rubriques :\n' +
+  '1. Objectif\n2. Préférences et consignes données par l\'utilisateur (style, contraintes, ce qu\'il ne veut pas)\n3. Décisions prises et pourquoi\n' +
+  '4. Fichiers créés ou modifiés (chemins) et leur état actuel\n5. Problèmes ou erreurs en cours, avec les messages exacts\n6. Tâches restantes\n' +
+  '7. Derniers échanges : la dernière demande de l\'utilisateur et ta dernière réponse, presque mot pour mot\n' +
+  'Sois précis : chemins, noms de fonctions, commandes utiles. Les fichiers restent sur le disque : inutile de recopier leur contenu.' +
   (extra ? `\n\nConsigne de l'utilisateur pour ce résumé : ${extra}` : '');
 const compactSeed = summary =>
   'Reprise de session : voici le résumé de la conversation précédente. Garde-le comme contexte pour les prochaines demandes. Réponds seulement « Compris. ».\n\n' + summary;
