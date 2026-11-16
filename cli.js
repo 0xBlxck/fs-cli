@@ -894,6 +894,10 @@ async function chatTurn(text, { keepLast = false } = {}) {
       let budget = 20000;
       const forced = S.forceSkills || []; S.forceSkills = null;        // /nom-du-skill : joint en premier, même sans correspondance
       for (const sk of [...forced, ...autoSkills(discoverSkills(S.cwd), text).filter(s => !forced.some(f => f.name === s.name))].filter(s => !S.skillsSent.has(s.name))) {
+        if (!forced.some(f => f.name === sk.name)) {                    // choisi automatiquement : simple référence (le modèle le lit avec read_file s'il en a besoin)
+          message += `\n\nGuide disponible pour cette demande : « ${sk.name} » — ${String(sk.description || '').replace(/\s+/g, ' ').slice(0, 240)} (fichier : ${sk.file} ; lis-le avec read_file seulement s'il t'aide).`;
+          S.skillsSent.add(sk.name); println(c.dim(`  ＋ skill : ${sk.name}`)); continue;
+        }
         let body = ''; try { body = fs.readFileSync(sk.file, 'utf8').replace(/^﻿/, ''); } catch { continue; }
         body = body.length > Math.min(12000, budget) ? body.slice(0, Math.min(12000, budget)) + '\n[… guide tronqué ; la suite est dans ' + sk.file + ']' : body;
         if (budget <= 1000) break;

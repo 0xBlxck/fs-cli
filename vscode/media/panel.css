@@ -311,3 +311,7 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .pill.model { display: inline-flex; align-items: center; gap: 6px; }
 .pill.model .mic { display: inline-flex; }
 .menu .sec { font-size: 11.5px; color: var(--dim); }
+
+/* image générée */
+.genimg img { display: block; max-width: min(100%, 420px); border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; margin-bottom: 4px; }
+.genimg .gcap { font-size: 11.5px; font-family: var(--mono); word-break: break-all; }

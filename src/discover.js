@@ -145,6 +145,7 @@ export function discoverSkills(cwd, { refresh = false, all = false } = {}) {
   const byName = new Map();
   for (const [root, source, depth] of roots) {
     for (const file of findSkillFiles(root, depth)) {
+      if (/[\\/]\.codex[\\/]skills[\\/]\.system[\\/]/i.test(file)) continue;   // skills internes de Codex (outils propres à Codex, ex. image_gen) : inutiles ici
       const fm = frontmatter(readText(file) || '');
       const name = (fm.name || path.basename(path.dirname(file))).trim();
       if (!name || byName.has(name.toLowerCase())) continue;

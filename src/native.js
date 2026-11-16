@@ -4,7 +4,8 @@
 // Documentation FS : « Outils client (mode avancé) », flag 2026_11_client_tools.
 import fs from 'node:fs';
 import path from 'node:path';
-import { streamChat, CLIENT_TOOLS, uploadFile } from './api.js';
+import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, downloadApiFile } from './api.js';
+import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent } from './account.js';
 import { cfg, saveCfg } from './config.js';
@@ -93,6 +94,17 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     }
     if (reqIn) S.lastPromptTokens = reqIn;                              // taille du contexte envoyé à cette requête (résumé auto au-delà du seuil)
     visible = res.text?.trim() || visible;
+    if (res.sawImage && S.chatId) {                                     // image générée par France Student : enregistrée sur le PC et montrée
+      const imgs = res.images?.length ? res.images : await lastMessageImages(S.chatId).catch(() => []);
+      for (const im of imgs) {
+        const file = path.join(HOME_DIR, 'images', `${new Date().toISOString().slice(0, 10)}-${String(im.id || Date.now()).slice(0, 8)}.${im.ext}`);
+        try {
+          if (!fs.existsSync(file)) await downloadApiFile(im.url, file);
+          ui.image(file, im.prompt);
+          S.notes.push(`Image générée et enregistrée sur le PC de l'utilisateur : ${file}. Pour l'utiliser dans le projet, copie-la dans le dossier voulu avec run_command.`);
+        } catch (e) { ui.println(c.yellow(`  image générée, mais téléchargement impossible : ${e.message}`)); }
+      }
+    }
     const calls = res.toolCalls || [];
     if (!calls.length) break;
 

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 // UI : couleurs, spinner, rendu markdown en streaming, blocs d'outils
 import process from 'node:process';
 import { parseFenceInfo } from './fence.js';
@@ -413,6 +414,17 @@ export function toolBody(text, { max = 8, error = false } = {}) {
   const shown = lines.slice(0, max);
   shown.forEach((l, i) => println(`  ${i === 0 ? c.dim('⎿') : ' '}  ${paint(clip(l, cols() - 6))}`));
   if (lines.length > max) { remember('sortie', lines); println(`     ${c.dim(`… +${lines.length - max} lignes (ctrl+o pour tout voir)`)}`); }
+}
+
+/** image générée : affichée dans le panneau, chemin cliquable dans le terminal */
+export function image(file, prompt = '') {
+  if (sink?.event) {
+    let data = '';
+    try { const b = fs.readFileSync(file); if (b.length < 12_000_000) data = b.toString('base64'); } catch {}
+    sink.event('image', { path: file, data, mime: /\.jpe?g$/i.test(file) ? 'image/jpeg' : /\.webp$/i.test(file) ? 'image/webp' : 'image/png', prompt: sanitize(prompt).slice(0, 400) });
+    return;
+  }
+  println(`  ${c.green('🖼')} image enregistrée : ${c.accent(file)}`);
 }
 
 export function toolNote(text, kind = 'dim') {

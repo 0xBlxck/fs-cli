@@ -1,3 +1,5 @@
+import path from 'node:path';
+import fs from 'node:fs';
 // Client API France Student AI (SSE)
 import https from 'node:https';
 import { TOKEN, VERSION, cfg, saveCfg } from './config.js';
@@ -57,6 +59,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
       };
     }
     const payload = JSON.stringify(body);
+    let images = [], sawImage = false;
     let text = '', usage = null, toolCalls = [], opened = false, settled = false, stopped = false, sawCompleted = false, streamError = null, seenChatId = chatId || null;
     const finish = (fn, v) => { if (settled) return; settled = true; fn(v); };
 
@@ -103,6 +106,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
         if (!pl || pl === '[DONE]') return;
         let d; try { d = JSON.parse(pl); } catch { return; }
         const type = d.type || ev;
+        if (/image_?generation/i.test(type) || d.item?.type === 'image_generation_call') sawImage = true;   // image générée côté serveur
         if (d.chat_id) {
           seenChatId = d.chat_id;
           if (!opened) {
@@ -124,6 +128,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
           sawCompleted = true;
           usage = d.message?.tokenUsage || null;
           if (Array.isArray(d.message?.toolCalls)) toolCalls = d.message.toolCalls;      // seule source de vérité des appels à exécuter
+          if (Array.isArray(d.message?.parts)) images = imagesOf(d.message.parts);
         } else if (type === 'error' || type === 'response.failed' || type === 'response.error') {
           streamError = d.message || d.error?.message || d.error || JSON.stringify(d).slice(0, 200);
         }
@@ -138,7 +143,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
         if (stopped) return;
         if (streamError) return finish(reject, new ApiError(`Erreur du serveur: ${streamError}`));
         if (!sawCompleted && !text) return finish(reject, new ApiError('Réponse vide / flux interrompu', { retry: !opened }));
-        finish(resolve, { text, usage, toolCalls, stopped: false });
+        finish(resolve, { text, usage, toolCalls, stopped: false, images, sawImage: sawImage || images.length > 0, chatId: seenChatId });
       });
       res.on('error', e => { if (!stopped) finish(reject, e); });
     });
@@ -254,6 +259,28 @@ export function deleteChat(chatId) {
     req.setTimeout(10000, () => { req.destroy(); resolve(false); });
     req.end();
   });
+}
+
+/** images d'un message (parts « tool-imageGeneration ») → [{ url, contentType, ext, prompt }] */
+export function imagesOf(parts) {
+  return (parts || []).map(p => p?.output).filter(o => o && o.kind === 'image' && (o.contentUrl || o.url) && o.status !== 'FAILED')
+    .map(o => ({ id: o.id || o.generationId, url: o.contentUrl || o.url, contentType: o.contentType || 'image/png', ext: o.fileExtension || 'png', prompt: o.revisedPrompt || '' }));
+}
+/** images générées dans le dernier message de l'assistant (si le flux ne les a pas données) */
+export async function lastMessageImages(chatId) {
+  const d = await fetchChat(chatId).catch(() => null);
+  const m = [...(d?.chatMessages || [])].reverse().find(x => x.role === 'assistant');
+  return imagesOf(m?.parts);
+}
+/** télécharge un fichier de l'API France Student (chemin /chats/…) vers dest ; renvoie la taille */
+export async function downloadApiFile(apiPath, dest) {
+  if (!/^\/[\w\-./]+$/.test(apiPath)) throw new Error('adresse de fichier inattendue');
+  const r = await fetch(`https://${HOST}${apiPath}`, { headers: { Authorization: baseHeaders().Authorization } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, buf);
+  return buf.length;
 }
 
 /** Dernières conversations du compte */

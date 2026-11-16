@@ -242,3 +242,12 @@ test('/vscode : seulement les éditeurs de la famille VS Code (pas une appli du 
   assert.equal(isVsCodeFamily(fork), true);
   assert.equal(isVsCodeFamily(agent), false);
 });
+
+test('images générées par France Student : repérées dans la réponse ; skills auto en simple référence', async () => {
+  const { imagesOf } = await import('../src/api.js');
+  const parts = [{ type: 'tool-imageGeneration', output: { id: 'abc', kind: 'image', status: 'COMPLETED', contentUrl: '/chats/c/messages/m/images/abc/content', contentType: 'image/png', fileExtension: 'png', revisedPrompt: 'un paysage' } }, { type: 'text' }];
+  assert.deepEqual(imagesOf(parts), [{ id: 'abc', url: '/chats/c/messages/m/images/abc/content', contentType: 'image/png', ext: 'png', prompt: 'un paysage' }]);
+  assert.deepEqual(imagesOf([{ output: { kind: 'image', status: 'FAILED', url: '/x' } }]), []);
+  const { workPreferences } = await import('../src/pseudo.js');
+  assert.ok(!workPreferences().text.startsWith('['));                    // un bloc entre crochets s'affichait en formule sur le site
+});

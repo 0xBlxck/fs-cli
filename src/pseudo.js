@@ -50,9 +50,9 @@ function describeTools(server, tools) {
 
 /** Préférences de forme jointes au 1er message d'une conversation : aucun protocole d'outils (voie officielle = outils client). */
 export function workPreferences() {
-  const text = '[Préférences de l\'utilisateur : pour une tâche en 3 étapes ou plus, écris d\'abord ta liste de tâches en Markdown, une ligne par étape (« - [ ] étape »), puis réécris-la en entier au fil du travail avec « - [x] » pour ce qui est fait et « - [~] » pour l\'étape en cours. '
+  const text = 'Préférences de l\'utilisateur : pour une tâche en 3 étapes ou plus, écris d\'abord ta liste de tâches en Markdown, une ligne par étape (« - [ ] étape »), puis réécris-la en entier au fil du travail avec « - [x] » pour ce qui est fait et « - [~] » pour l\'étape en cours. '
     + 'Pour un serveur local (npx serve, npm run dev, python -m http.server…), lance-le directement avec run_command : il reste en arrière-plan et son adresse t\'est renvoyée ; n\'ouvre pas de nouvelle fenêtre de console. '
-    + 'N\'affirme jamais avoir vérifié quelque chose sans avoir réellement utilisé un outil.]';
+    + 'N\'affirme jamais avoir vérifié quelque chose sans avoir réellement utilisé un outil.';
   return { text, sig: 'prefs-v1' };
 }
 

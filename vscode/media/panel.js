@@ -892,6 +892,13 @@
       case 'mcpPanel': mcpPanel(ev); break;
       case 'models': if (Array.isArray(ev.models) && ev.models.length) S.models = ev.models; break;
       case 'card': card(ev); break;
+      case 'image': {
+        aiEnd(); thinkEnd();
+        const el = h('div', 'tl ok genimg');
+        if (ev.data && /^image\/(png|jpeg|webp|gif)$/.test(ev.mime)) { const im = h('img'); im.src = `data:${ev.mime};base64,${ev.data}`; im.alt = ev.prompt || 'image générée'; im.title = ev.prompt || ''; im.onclick = () => post({ type: 'openFile', path: ev.path }); el.append(im); }
+        const cap = h('a', 'gcap', '🖼 ' + ev.path); cap.title = 'Ouvrir'; cap.onclick = () => post({ type: 'openFile', path: ev.path }); el.append(cap);
+        add(el); break;
+      }
       case 'skills': skShow(ev); break;
       case 'history': histShow(ev); break;
       case 'transcript': transcript(ev); break;

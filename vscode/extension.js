@@ -189,6 +189,7 @@ class Chat {
     if (!p) return;
     const full = this.abs(p);
     if (!fs.existsSync(full)) return;
+    if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(full)) return vscode.commands.executeCommand('vscode.open', vscode.Uri.file(full));   // image : visionneuse de l'éditeur
     const doc = await vscode.workspace.openTextDocument(full);
     const ed = await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.One });
     if (line > 0) { const pos = new vscode.Position(line - 1, 0); ed.selection = new vscode.Selection(pos, pos); ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter); }
