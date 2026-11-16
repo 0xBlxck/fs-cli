@@ -469,9 +469,9 @@ async function liveSessions(limit = 50) {
   const projectChats = async p => (await requestJson('GET', `/projects/${encodeURIComponent(p.id)}/chats`).catch(() => ({}))).data;
   const chatsOf = j => (Array.isArray(j) ? j : j?.chats);
   try {
-    const [mine, projects] = await Promise.all([fetchChatsList(30).catch(() => []), listFsProjects().catch(() => [])]);
+    const [mine, projects] = await Promise.all([fetchChatsList(50).catch(() => []), listFsProjects().catch(() => [])]);
     add(mine);
-    const some = projects.filter(p => p?.id).slice(0, 8);             // une conversation rangée dans un projet n'apparaît plus dans la liste générale du site
+    const some = projects.filter(p => p?.id).slice(0, 15);            // une conversation rangée dans un projet n'apparaît plus dans la liste générale du site
     (await Promise.all(some.map(p => projectChats(p).catch(() => null)))).forEach((j, i) => add(chatsOf(j), some[i].name));
   } catch {}
   return [...local, ...remote].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
@@ -1087,7 +1087,7 @@ if (opts.stdio) {                                                    // commande
   });
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
-    stdioSend('history', { sessions: (await liveSessions(50)).map(s => ({
+    stdioSend('history', { sessions: (await liveSessions(80)).map(s => ({
       chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });
