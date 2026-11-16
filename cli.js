@@ -58,10 +58,21 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--classic') opts.classic = true;
   else if (a === '--stdio') opts.stdio = true;
   else if (a === '--vscode') opts.vscode = true;                 // installe l'extension dans les éditeurs détectés, puis quitte                   // mode machine : extension VS Code
+  else if (a === '--mcp') opts.mcp = true;                       // serveur MCP sur stdio : d'autres agents (Antigravity, Claude Code, Codex…) utilisent France Student
+  else if (a === '--install-mcp') opts.installMcp = true;        // inscrit ce serveur MCP dans les agents trouvés sur le PC, puis quitte
   else if (a === '--login') opts.login = true;
   else if (a === '-h' || a === '--help') opts.help = true;
   else if (a === '-v' || a === '--version') opts.version = true;
   else opts.prompt.push(a);
+}
+if (opts.mcp) {                                                     // stdout = JSON-RPC uniquement (tout le reste est redirigé sur stderr) ; pas d'assistant de connexion
+  const { runMcpServer } = await import('./src/mcp-server.js');
+  await runMcpServer();
+  process.exit(0);
+}
+if (opts.installMcp) {
+  const { installMcpCli } = await import('./src/mcp-server.js');
+  process.exit(installMcpCli(t => console.log(t)));
 }
 if (opts.version) { console.log(`fs-cli ${VERSION}`); process.exit(0); }
 if (opts.vscode) { process.exit(installVscode({ all: true, log: t => console.log(t) }) ? 0 : 1); }
@@ -84,6 +95,8 @@ if (opts.help) {
   --web                    active la recherche web
   --classic                ancienne saisie (readline) au lieu de l'interface plein écran
   --login                  (re)configurer ta clé de session France Student
+  --mcp                    serveur MCP (stdio) : Antigravity, Claude Code, Codex… utilisent France Student via FS-CLI
+  --install-mcp            inscrit ce serveur MCP (« france-student ») dans les agents trouvés sur le PC
   -h, --help  -v, --version`);
   process.exit(0);
 }

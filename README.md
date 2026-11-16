@@ -112,6 +112,42 @@ Pour l'ouvrir : l'icône ✻ dans la barre latérale, ou **Ctrl+Alt+I** pour un 
 
 ---
 
+## Utiliser France Student depuis un autre agent (Antigravity, Claude Code, Codex)
+
+FS-CLI peut servir de **serveur MCP** : un autre agent (l'application Antigravity de Google, Claude Code, Codex…) peut alors interroger les modèles France Student ou leur confier une tâche de code.
+
+```bash
+fs-cli --install-mcp
+```
+
+Cette commande ajoute le serveur **`france-student`** (`node <chemin>/cli.js --mcp`) dans la configuration des agents trouvés sur ton PC :
+
+| Agent | Fichier modifié |
+|---|---|
+| Antigravity (application) | `~/.gemini/config/mcp_config.json` |
+| Antigravity (éditeur) | `~/.gemini/antigravity-ide/mcp_config.json` |
+| Claude Code | `~/.claude.json` |
+| Codex | `~/.codex/config.toml` |
+
+Seule l'entrée `france-student` est ajoutée ou mise à jour : tes autres serveurs ne bougent pas, une copie `.bak` est faite avant chaque modification, et un fichier illisible n'est jamais touché. **Redémarre ensuite l'application de l'agent.** Pour Claude Code, ferme-le avant de lancer la commande, sinon il risque de réécrire son fichier par-dessus.
+
+L'agent voit alors trois outils :
+
+- **`fs_models`** : la liste des modèles France Student (id, nom, taille du contexte).
+- **`fs_ask`** : pose une question à un modèle (texte seulement, sans accès à tes fichiers). Une seule conversation est réutilisée pendant toute la session, pour ménager la limite de 50 nouvelles conversations par jour. `new_conversation: true` en démarre une nouvelle.
+- **`fs_agent`** : lance le vrai agent FS-CLI dans un dossier (`task`, `folder` en chemin absolu, `model` facultatif). Il renvoie le compte rendu du modèle, les fichiers modifiés et le nombre d'appels d'outils. Une conversation est réutilisée par dossier.
+
+Règles de sécurité de `fs_agent` (personne n'est là pour répondre aux confirmations) :
+
+- Il ne travaille que dans un dossier **que tu as déjà approuvé** en l'ouvrant une fois avec `fs-cli`. L'agent qui l'appelle ne peut pas approuver un dossier lui-même.
+- Les modifications de fichiers dans ce dossier sont permises.
+- Tout ce qui demanderait ton accord est **refusé automatiquement** : commandes (toutes, par défaut), chemins protégés, secrets, écritures hors du dossier. La raison du refus est renvoyée au modèle et listée dans le résultat.
+- Pour autoriser les commandes **sans danger** (les dangereuses restent refusées), ajoute `"env": { "FS_MCP_ALLOW_COMMANDS": "1" }` à l'entrée `france-student` de ton agent.
+
+Il faut une clé de session France Student : si FS-CLI n'est pas encore connecté, lance `fs-cli` une fois dans un terminal.
+
+---
+
 ## Fonctions
 
 - **Agent natif** : le modèle utilise les outils officiels « outils client » de France Student (lire, chercher, écrire, éditer, lancer une commande) ; le CLI les exécute sur ton PC avec ses garde-fous.
