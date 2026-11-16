@@ -306,3 +306,8 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .menu .mi { align-items: center; }
 .menu .mi .d { margin-left: auto; font-size: 11px; }
 .menu .mi.cur::after { margin-left: 10px; }
+
+.menu .mic svg, .pill .mic svg { display: block; }
+.pill.model { display: inline-flex; align-items: center; gap: 6px; }
+.pill.model .mic { display: inline-flex; }
+.menu .sec { font-size: 11.5px; color: var(--dim); }
