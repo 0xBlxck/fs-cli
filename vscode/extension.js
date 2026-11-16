@@ -90,7 +90,7 @@ class Chat {
   start() {
     if (this.proc) return;
     const { cmd, args, shell } = resolveCli();
-    const env = { ...process.env, FORCE_COLOR: '3', FS_CLI_PANEL: String(this.context.extension?.packageJSON?.version || '0.0.0') };   // le CLI adapte ce qu'il envoie à cette version du panneau
+    const env = { ...process.env, FORCE_COLOR: '3', FS_CLI_PANEL: String(this.context.extension?.packageJSON?.version || '0.0.0'), FS_CLI_PANEL_FEATURES: 'agents' };   // le CLI adapte ce qu'il envoie à cette version du panneau
     delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
     let p;
     try { p = cp.spawn(cmd, args, { cwd: workspaceDir(), env, shell, windowsHide: true }); }

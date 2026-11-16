@@ -41,7 +41,9 @@
   btnMcp.onclick = () => { if (!S.busy) post({ type: 'command', text: '/mcp' }); };
   const btnUse = h('button', 'icon-btn'); btnUse.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 13.5h11M4.5 11V8M8 11V4.5M11.5 11V6.5"/></svg>'; btnUse.title = 'Compte & consommation';
   btnUse.onclick = () => { if (!S.busy) post({ type: 'command', text: '/usage' }); };
-  head.append(title, btnUse, btnMcp, btnHist, btnNew);
+  const btnAgents = h('button', 'icon-btn'); btnAgents.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="6" width="4" height="4" rx="1"/><rect x="10.5" y="1.5" width="4" height="3.5" rx="1"/><rect x="10.5" y="6.25" width="4" height="3.5" rx="1"/><rect x="10.5" y="11" width="4" height="3.5" rx="1"/><path d="M5.5 8h2.5M8 3.25v9.5M8 3.25h2.5M8 8h2.5M8 12.75h2.5"/></svg>'; btnAgents.title = 'Agents de l\'équipe';
+  btnAgents.hidden = true; btnAgents.onclick = () => agOpen(null);
+  head.append(title, btnAgents, btnUse, btnMcp, btnHist, btnNew);
   const log = h('div', 'log');
   const tasksEl = h('div', 'tasks'); tasksEl.hidden = true;
   const composer = h('div', 'composer');
@@ -777,7 +779,7 @@
 
   /** conversation reprise : on réaffiche ses messages */
   function transcript(ev) {
-    S.ai = null; S.tool = null; S.think = null;
+    S.ai = null; S.tool = null; S.think = null; agReset();
     log.textContent = ''; welcome = null;
     if (ev.older) add(h('div', 'hold', `… ${ev.older} message${ev.older > 1 ? 's' : ''} plus ancien${ev.older > 1 ? 's' : ''}`));
     for (const m of ev.messages || []) {
@@ -853,6 +855,176 @@
   }
   document.addEventListener('keydown', e => { if (SK.el && e.key === 'Escape') { e.preventDefault(); skClose(); } });
 
+  // ── équipe d'agents (/team) : bloc « Agents » dans le fil + fenêtre « Agents » (arbre), comme l'« Agent map » de Claude Code ──
+  const AG_STATE = { pending: ['·', 'en attente'], running: ['◐', 'en cours'], done: ['✓', 'terminé'], error: ['✗', 'erreur'], aborted: ['○', 'annulé'] };
+  const AG_BADGE = { pending: 'b-off', running: 'b-wait', done: 'b-ok', error: 'b-err', aborted: 'b-off' };
+  const TEAMS = new Map();
+  const AGM = { el: null, team: null, sel: null, tabs: null, sub: null, tree: null, det: null };
+  let agTimer = 0;
+  const agSecs = ms => { const s = Math.max(0, ms || 0) / 1000; return s < 60 ? `${s.toFixed(1).replace('.', ',')} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`; };
+  const agK = n => (n >= 1000 ? `${(n / 1000).toFixed(1).replace('.0', '').replace('.', ',')}k` : String(n));
+  const agDur = a => (a.status === 'running' && a.t0 ? Date.now() - a.t0 : a.durationMs);
+  function agMeta(a, { model = false, state = true } = {}) {
+    const bits = [];
+    if (state) bits.push(AG_STATE[a.status]?.[1] || a.status);
+    if (model && a.model) bits.push(a.model);
+    if (a.status !== 'pending' && agDur(a) != null) bits.push(agSecs(agDur(a)));
+    if (a.tokens) bits.push(`${agK(a.tokens)} tokens`);
+    else if (a.chars) bits.push(`${agK(a.chars)} car.`);
+    return bits.join(' · ');
+  }
+  const agModeText = T => (T.mode === 'pool' ? `${T.parallel} en parallèle` : 'à la suite');
+  function agTeamState(T) {
+    const L = [...T.agents.values()];
+    if (!T.done) return 'running';
+    return L.every(a => a.status === 'done') ? 'done' : 'error';
+  }
+
+  function teamStart(ev) {
+    aiEnd(); thinkEnd(); S.tool = null;
+    const T = { id: ev.team, task: ev.task || '', mode: ev.mode, model: ev.model || '', count: ev.count || 0, parallel: ev.parallel || 1, t0: Date.now(), done: false, aborted: false,
+      agents: new Map(), el: null, title: S.status.title || '', mainModel: S.status.model || '' };
+    for (const a of ev.agents || []) T.agents.set(a.id, { id: a.id, name: a.name || a.id, task: a.task || '', files: a.files || [], model: T.model, status: 'pending', chars: 0, tokens: null, durationMs: null, output: '', summary: '' });
+    T.el = h('div', 'tl agents running'); T.el.title = 'Ouvrir la vue des agents';
+    T.el.onclick = () => agOpen(T.id);
+    TEAMS.set(T.id, T); btnAgents.hidden = false;
+    add(T.el); agRender(T);
+    if (!agTimer) agTimer = setInterval(() => {                         // durées en direct
+      let live = false;
+      for (const X of TEAMS.values()) if (!X.done) { live = true; agRender(X); }
+      if (!live) { clearInterval(agTimer); agTimer = 0; }
+    }, 500);
+  }
+  function agentEv(ev) {
+    const T = TEAMS.get(ev.team); if (!T) return;
+    let a = T.agents.get(ev.id);
+    if (!a) { a = { id: ev.id, name: ev.name || ev.id, task: '', files: [], model: T.model, status: 'pending', chars: 0, tokens: null, durationMs: null, output: '', summary: '' }; T.agents.set(ev.id, a); }
+    if (ev.type === 'agentStart') Object.assign(a, { name: ev.name || a.name, task: ev.task || a.task, files: ev.files || a.files, model: ev.model || a.model, mode: ev.mode, slot: ev.slot, status: 'running', t0: Date.now() });
+    else if (ev.type === 'agentUpdate') {
+      if (ev.status && a.status !== 'aborted') a.status = ev.status;
+      if (ev.chars != null) a.chars = ev.chars;
+      if (ev.tokens != null) a.tokens = ev.tokens;
+      if (ev.durationMs != null) { a.durationMs = ev.durationMs; if (a.status === 'running') a.t0 = Date.now() - ev.durationMs; }
+    } else if (ev.type === 'agentDone') {
+      Object.assign(a, { status: ev.aborted ? 'aborted' : ev.ok ? 'done' : 'error', summary: ev.summary || '', output: ev.output || '', outFiles: ev.files || [] });
+      if (ev.tokens != null) a.tokens = ev.tokens;
+      if (ev.durationMs != null) a.durationMs = ev.durationMs;
+    }
+    agRender(T);
+  }
+  function teamDone(ev) {
+    const T = TEAMS.get(ev.team); if (!T) return;
+    T.done = true; T.durationMs = ev.durationMs; T.aborted = !!ev.aborted;
+    if (T.aborted) for (const a of T.agents.values()) if (a.status === 'pending' || a.status === 'running') { if (a.status === 'running') a.durationMs = agDur(a); a.status = 'aborted'; }
+    agRender(T);
+  }
+
+  /** bloc du fil : une ligne par agent (icône, nom, état · durée · tokens) et le résultat en une ligne */
+  function agRender(T) {
+    const st = agTeamState(T);
+    T.el.className = 'tl agents ' + (st === 'running' ? 'running' : st === 'done' ? 'ok' : 'err');
+    T.el.textContent = '';
+    const th = h('div', 'th');
+    const L = [...T.agents.values()];
+    th.append(h('b', null, 'Agents'), ' ', h('span', 'td', `${L.length} agent${L.length > 1 ? 's' : ''} · ${agModeText(T)}${T.model ? ' · ' + T.model : ''}`));
+    const open = h('span', 'ag-open', 'Voir l\'arbre ›');
+    th.append(open);
+    T.el.append(th);
+    const list = h('div', 'ag-list');
+    for (const a of L) {
+      const row = h('div', 'ag-row st-' + a.status);
+      row.append(h('span', 'ag-i', AG_STATE[a.status]?.[0] || '·'), h('span', 'ag-n', a.name), h('span', 'ag-m', agMeta(a)));
+      list.append(row);
+      const line = a.status === 'done' || a.status === 'error' || a.status === 'aborted' ? a.summary : a.task;
+      if (line) list.append(h('div', 'ag-sum' + (a.status === 'error' ? ' err' : ''), '⎿  ' + line));
+    }
+    T.el.append(list);
+    if (T.done) {
+      const okN = L.filter(a => a.status === 'done').length;
+      T.el.append(h('div', 'ag-foot', `${T.aborted ? 'Interrompu' : 'Terminé'} en ${agSecs(T.durationMs)} · ${okN}/${L.length} réussi${okN > 1 ? 's' : ''}`));
+    }
+    toBottom();
+    if (AGM.el && AGM.team === T.id) agModalRender();
+  }
+
+  // fenêtre « Agents » : la conversation principale à gauche, ses agents à droite ; clic sur un agent = sa tâche et sa réponse
+  function agClose() { if (AGM.el) { AGM.el.remove(); AGM.el = null; ta.focus(); } }
+  function agOpen(id) {
+    const T = TEAMS.get(id) || [...TEAMS.values()].pop();
+    if (!T) return;
+    AGM.team = T.id;
+    const L = [...T.agents.values()];
+    if (!T.agents.has(AGM.sel)) AGM.sel = (L.find(a => a.status === 'running') || L[0])?.id || null;
+    if (!AGM.el) {
+      const bg = h('div', 'modal-bg'); bg.onclick = e => { if (e.target === bg) agClose(); };
+      const card = h('div', 'modal ag-modal');
+      const top = h('div', 'mh'); top.append(h('div', 'mt', 'Agents'));
+      const x = h('button', 'icon-btn', '✕'); x.title = 'Fermer (Échap)'; x.onclick = agClose; top.append(x);
+      AGM.tabs = h('div', 'ag-tabs'); AGM.sub = h('div', 'ag-sub');
+      const body = h('div', 'ag-body');
+      AGM.tree = h('div', 'ag-tree'); AGM.det = h('div', 'ag-det');
+      body.append(AGM.tree, AGM.det);
+      card.append(top, AGM.tabs, AGM.sub, body); bg.append(card); document.body.append(bg);
+      AGM.el = bg; AGM.detKey = null;
+    }
+    agModalRender();
+  }
+  function agModalRender() {
+    const T = TEAMS.get(AGM.team); if (!T || !AGM.el) return;
+    const L = [...T.agents.values()];
+    // plusieurs équipes dans la conversation : onglets
+    AGM.tabs.textContent = '';
+    const teams = [...TEAMS.values()];
+    AGM.tabs.hidden = teams.length < 2;
+    teams.forEach((X, i) => { const b = h('button', 'ptab' + (X.id === T.id ? ' on' : ''), `Équipe ${i + 1}`); b.onclick = () => { AGM.sel = null; AGM.detKey = null; agOpen(X.id); }; AGM.tabs.append(b); });
+    const st = agTeamState(T);
+    AGM.sub.textContent = '';
+    AGM.sub.append(h('div', 'ag-task', T.task));
+    AGM.sub.append(h('div', 'ag-stat', `${L.length} agent${L.length > 1 ? 's' : ''} · ${T.mode === 'pool' ? `${T.parallel} en parallèle, conversations réutilisées` : 'à la suite, dans la conversation courante'} · ` +
+      (st === 'running' ? `en cours · ${agSecs(Date.now() - T.t0)}` : `${T.aborted ? 'interrompu' : 'terminé'} en ${agSecs(T.durationMs)}`)));
+    // arbre
+    AGM.tree.textContent = '';
+    const root = h('div', 'ag-root');
+    root.append(h('div', 'ag-rt', 'Conversation principale'));
+    if (T.title) root.append(h('div', 'ag-rs', T.title));
+    if (T.mainModel) root.append(h('div', 'ag-rm', T.mainModel));
+    const br = h('div', 'ag-br');
+    for (const a of L) {
+      const node = h('div', 'ag-node st-' + a.status + (a.id === AGM.sel ? ' sel' : ''));
+      const top = h('div', 'ag-nt'); top.append(h('span', 'ag-i', AG_STATE[a.status]?.[0] || '·'), h('span', 'ag-n', a.name), h('span', 'badge ' + (AG_BADGE[a.status] || 'b-off'), AG_STATE[a.status]?.[1] || a.status));
+      node.append(top, h('div', 'ag-nm', agMeta(a, { model: true, state: false }) || 'en attente'));
+      node.onclick = () => { AGM.sel = a.id; agModalRender(); };
+      br.append(node);
+    }
+    AGM.tree.append(root, br);
+    // détails de l'agent choisi (la sortie n'est réécrite que si elle change : le défilement est gardé)
+    const a = T.agents.get(AGM.sel);
+    if (!a) { AGM.det.textContent = ''; return; }
+    if (AGM.detKey !== a.id) {
+      AGM.detKey = a.id; AGM.det.textContent = '';
+      AGM.dHead = h('div', 'ag-dh'); AGM.dGrid = h('div', 'mdet ag-grid');
+      AGM.dTask = h('div', 'ag-dtask'); AGM.dOut = h('pre', 'ag-out');
+      AGM.det.append(AGM.dHead, AGM.dGrid, h('div', 'ag-k', 'Tâche'), AGM.dTask, h('div', 'ag-k', 'Réponse'), AGM.dOut);
+    }
+    AGM.dHead.textContent = '';
+    AGM.dHead.append(h('span', 'ag-n', a.name), h('span', 'badge ' + (AG_BADGE[a.status] || 'b-off'), AG_STATE[a.status]?.[1] || a.status));
+    AGM.dGrid.textContent = '';
+    const kv = (k, v, cls) => { if (v) AGM.dGrid.append(h('div', 'mk', k), h('div', 'mv' + (cls ? ' ' + cls : ''), v)); };
+    kv('Modèle', a.model);
+    kv('Conversation', a.slot === 'main' ? 'conversation principale' : a.slot ? `conversation ${a.slot} (réutilisée)` : '');
+    kv('Durée', a.status !== 'pending' && agDur(a) != null ? agSecs(agDur(a)) : '');
+    kv('Tokens', a.tokens ? agK(a.tokens) : a.chars ? `${agK(a.chars)} caractères reçus` : '');
+    kv('Fichiers', (a.outFiles?.length ? a.outFiles : a.files).join(', '));
+    if (a.status === 'error' || a.status === 'aborted') kv('Résultat', a.summary, 'err');
+    if (AGM.dTask.textContent !== a.task) AGM.dTask.textContent = a.task || '—';
+    const out = a.output || (a.status === 'pending' ? 'pas encore démarré' : a.status === 'running' ? 'réponse en cours…' : '(aucune réponse)');
+    if (AGM.dOut.textContent !== out) AGM.dOut.textContent = out;
+  }
+  /** fin de la demande : une équipe restée « en cours » (CLI interrompu sans teamDone) est close */
+  function agSettle() { for (const T of TEAMS.values()) if (!T.done) teamDone({ team: T.id, durationMs: Date.now() - T.t0, aborted: true }); }
+  function agReset() { agClose(); TEAMS.clear(); btnAgents.hidden = true; }
+  document.addEventListener('keydown', e => { if (AGM.el && e.key === 'Escape') { e.preventDefault(); agClose(); } });
+
   // ── messages de l'extension ──
   window.addEventListener('message', ({ data: m }) => {
     if (!m || typeof m !== 'object') return;
@@ -870,7 +1042,7 @@
       case 'thinking': thinking(ev.delta || ''); break;
       case 'ready': S.shell = ev.shell || ''; S.models = ev.models || []; S.modes = ev.modes || []; S.commands = ev.commands || []; S.started = true; if (!log.querySelector('.msg-user, .msg-ai')) showWelcome(); break;
       case 'status': Object.assign(S.status, ev); renderStatus(); break;
-      case 'busy': setBusy(!!ev.busy); break;
+      case 'busy': setBusy(!!ev.busy); if (!ev.busy) agSettle(); break;
       case 'spinner': spinner(ev.label); break;
       case 'text': aiText(ev.delta || ''); break;
       case 'textEnd': aiEnd(); break;
@@ -907,6 +1079,9 @@
         }
         add(el); break;
       }
+      case 'teamStart': teamStart(ev); break;
+      case 'agentStart': case 'agentUpdate': case 'agentDone': agentEv(ev); break;
+      case 'teamDone': teamDone(ev); break;
       case 'skills': skShow(ev); break;
       case 'history': histShow(ev); break;
       case 'transcript': transcript(ev); break;
@@ -915,7 +1090,7 @@
       case 'ask': askCard(ev); break;
       case 'flash': showFlash(ev.text); break;
       case 'insert': insert(ev.text); break;
-      case 'clear': S.ai = null; S.tool = null; S.think = null; showWelcome(); break;
+      case 'clear': S.ai = null; S.tool = null; S.think = null; agReset(); showWelcome(); break;
       case 'print': {
         const text = String(ev.text || '');
         if (!text.replace(/\x1b\[[0-9;]*m/g, '').trim()) break;

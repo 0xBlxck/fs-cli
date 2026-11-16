@@ -41,6 +41,9 @@ process.on('exit', () => { if (TTY) process.stdout.write('\x1b[?25h'); });
 // Avec l'interface plein écran (sink), le texte et le spinner passent par la zone d'affichage : le spinner reste visible pendant le flux.
 let sink = null;
 export function attachSink(s) { sink = s; }
+/** Événement structuré pour le panneau VS Code (équipe d'agents…) : sans effet dans le terminal. */
+export function emit(type, data = {}) { if (sink?.event) try { sink.event(type, data); } catch {} }
+export const hasEvents = () => !!sink?.event;
 
 /** Une ligne de tâche (symboles en texte, jamais en émoji) : ☐ à faire · ◐ en cours (gras) · ☒ fait (barré, grisé). */
 export function taskLine(state, text) {

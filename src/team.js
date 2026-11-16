@@ -83,10 +83,32 @@ function workerPrompt(task, W, plan, dir, { same = false, reused = false } = {})
     `Dossier cible : ${dir}`;
 }
 
+// ── événements pour la vue « Agents » du panneau VS Code (sans sink à événements : rien n'est émis, le terminal ne change pas) ──
+//  teamStart {team, task, mode, model, count, parallel, agents:[{id, name, task, files}]}
+//  agentStart {team, id, name, task, files, model, mode, slot} · agentUpdate {team, id, status, chars?, tokens?, durationMs?}
+//  agentDone {team, id, ok, summary, output, files, tokens?, durationMs, aborted?} · teamDone {team, count, durationMs, ok, aborted?}
+//  status : 'running' | 'done' | 'error'  (en attente = pas encore d'agentStart)
+export const OUTPUT_CAP = 20_000;
+let teamSeq = 0;
+const capOut = s => { s = String(s || ''); return s.length > OUTPUT_CAP ? s.slice(0, OUTPUT_CAP) + '\n… (sortie tronquée)' : s; };
+/** tokens d'une réponse (tokenUsage de France Student), ou null s'ils ne sont pas connus */
+export function tokensOf(u) {
+  if (!u) return null;
+  const t = Number(u.totalTokenCount) || (Number(u.promptTokenCount) || 0) + (Number(u.candidatesTokenCount) || 0);
+  return t > 0 ? t : null;
+}
+function summaryOf(W) {
+  if (W.status === 'ok') { const n = W.blocks.length; return `${n} fichier${n > 1 ? 's' : ''} : ${W.blocks.map(b => b.name).join(', ')}`; }
+  if (W.status === 'sans fichier') return 'le modèle n\'a pas écrit de fichier';
+  return W.error || 'échec';
+}
+
 /** Un agent = un message envoyé dans une conversation (la courante, ou une conversation réutilisable « w0, w1… ») */
 async function runWorker(W, ctx) {
   const t0 = Date.now();
-  W.status = 'en cours';
+  W.status = 'en cours'; W.text = '';
+  ctx.ev('agentStart', { id: W.id, name: W.titre, task: W.consigne, files: W.files, model: ctx.modelLabel, mode: ctx.sameChat ? 'same' : 'pool', slot: ctx.sameChat ? 'main' : W.slot });
+  let lastUp = 0;
   try {
     const { S, stream, getChat } = ctx;
     let chatId = ctx.sameChat ? S.chatId : (S.slots[W.slot] || null);
@@ -97,8 +119,13 @@ async function runWorker(W, ctx) {
       agentId: ctx.workerId, chatId, content, webSearch: false, signal: ctx.signal,
       register: { sid: S.sid, role: ctx.sameChat ? 'main' : W.slot },
       onChat: id => { if (!chatId) { chatId = id; if (ctx.sameChat) S.chatId = id; else S.slots[W.slot] = id; } },
-      onText: d => { W.chars += d.length; ctx.tick(); },
+      onText: d => {
+        W.chars += d.length; if (W.text.length < OUTPUT_CAP + 1) W.text += d; ctx.tick();
+        const now = Date.now();
+        if (now - lastUp >= 500) { lastUp = now; ctx.ev('agentUpdate', { id: W.id, status: 'running', chars: W.chars, durationMs: now - t0 }); }
+      },
     });
+    W.tokens = tokensOf(res.usage);
     let blocks = extractBlocks(res.text).filter(b => b.action === 'write');
     if (!blocks.length && chatId) {                          // code parti dans le « panneau » serveur
       for (let k = 0; k < 2 && !blocks.length; k++) {
@@ -112,10 +139,20 @@ async function runWorker(W, ctx) {
     W.status = blocks.length ? 'ok' : 'sans fichier';
     if (fresh) ctx.created++;
   } catch (e) {
-    if (e.name === 'AbortError') throw e;
+    if (e.name === 'AbortError') {
+      W.status = 'annulé';
+      const durationMs = Date.now() - t0;
+      ctx.ev('agentUpdate', { id: W.id, status: 'error', durationMs });
+      ctx.ev('agentDone', { id: W.id, ok: false, summary: 'interrompu', output: capOut(W.text), files: [], durationMs, aborted: true });
+      throw e;
+    }
     W.status = 'échec'; W.error = e.message; if (e.code === 'DAILY_CHAT_LIMIT') ctx.limitHit = e;
   }
-  W.secs = (Date.now() - t0) / 1000;
+  const durationMs = Date.now() - t0;
+  W.secs = durationMs / 1000;
+  const ok = W.status === 'ok', tok = W.tokens != null ? { tokens: W.tokens } : {};
+  ctx.ev('agentUpdate', { id: W.id, status: ok ? 'done' : 'error', chars: W.chars, durationMs, ...tok });
+  ctx.ev('agentDone', { id: W.id, ok, summary: summaryOf(W), output: capOut(W.text), files: W.blocks.map(b => b.name), durationMs, ...tok });
   ctx.tick(true);
 }
 
@@ -135,13 +172,29 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
   await withAbort(async signal => {
     const workerId = cfg.workerModel != null ? cfg.workerModel : S.agentId;
     const dir = baseDir(S);
-    ui.toolHeader('équipe', task.slice(0, 80));
-    println(c.dim(`    ${plan.length} agent${plan.length > 1 ? 's' : ''} (${mode}) · modèle : ${modelName(workerId)} · ` +
-      (sameChat ? 'à la suite, dans la conversation courante' : `${Math.min(parallel, plan.length)} en parallèle, conversations réutilisées`)));
+    const T0 = Date.now();
+    const team = `t${(++teamSeq).toString(36)}${T0.toString(36).slice(-4)}`;
+    const ev = (type, data) => ui.emit(type, { team, ...data });
+    const quiet = !!env.agentMap && ui.hasEvents();          // panneau avec la vue « Agents » : le bloc remplace la liste en texte
+    const modelLabel = modelName(workerId);
+    if (!quiet) {
+      ui.toolHeader('équipe', task.slice(0, 80));
+      println(c.dim(`    ${plan.length} agent${plan.length > 1 ? 's' : ''} (${mode}) · modèle : ${modelLabel} · ` +
+        (sameChat ? 'à la suite, dans la conversation courante' : `${Math.min(parallel, plan.length)} en parallèle, conversations réutilisées`)));
+    }
     if (note) println(c.yellow('    ⚠ ' + note));
     if (!sameChat && parallel > 4) println(c.dim('    (plus de 4 requêtes simultanées : risque d\'erreurs 429 « trop de requêtes »)'));
     if (plan.length === 1 && !plan[0].files.length) println(c.dim('    un seul agent (précise des fichiers : « … avec index.html, style.css et script.js » ou « | fichier: consigne »)'));
-    else plan.forEach(p => println(`    ${c.accent('▸')} ${c.bold(p.titre)} ${c.dim('→ ' + p.files.join(', '))}`));
+    else if (!quiet) plan.forEach(p => println(`    ${c.accent('▸')} ${c.bold(p.titre)} ${c.dim('→ ' + p.files.join(', '))}`));
+
+    const workers = plan.map((p, i) => ({ ...p, id: `${team}-${i + 1}`, chars: 0, status: 'attente', blocks: [], secs: 0, slot: '', prompt: null, text: '', tokens: null }));
+    ev('teamStart', { task, mode: teamMode, plan: mode, model: modelLabel, count: workers.length, parallel: Math.min(parallel, workers.length),
+      agents: workers.map(W => ({ id: W.id, name: W.titre, task: W.consigne, files: W.files })) });
+    let doneSent = false;
+    const teamDone = (extra = {}) => {
+      if (doneSent) return; doneSent = true;
+      ev('teamDone', { count: workers.length, durationMs: Date.now() - T0, ok: workers.filter(W => W.status === 'ok').length, ...extra });
+    };
 
     // conversations réutilisées trop pleines → on repart d'une neuve (une seule création, étiquetée)
     if (!sameChat) {
@@ -153,11 +206,10 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
       }
     }
 
-    const workers = plan.map(p => ({ ...p, chars: 0, status: 'attente', blocks: [], secs: 0, slot: '', prompt: null }));
     workers.forEach(W => { W.prompt = reused => workerPrompt(task, W, plan, dir, { same: sameChat, reused }); });
     let lastDraw = 0;
     const ctx = {
-      S, stream, getChat, workerId, signal, sameChat, created: 0, limitHit: null,
+      S, stream, getChat, workerId, signal, sameChat, created: 0, limitHit: null, ev, modelLabel,
       tick: (force) => {
         const now = Date.now();
         if (!force && now - lastDraw < 400) return;
@@ -177,13 +229,16 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
       }
     };
     const lanes = [];
-    for (let j = 0; j < K; j++) { lanes.push(lane(j)); await sleep(350); }   // départs décalés (limites de débit)
-    await Promise.all(lanes);
+    try {
+      for (let j = 0; j < K; j++) { lanes.push(lane(j)); await sleep(350); }   // départs décalés (limites de débit)
+      await Promise.all(lanes);
+    } catch (e) { teamDone({ aborted: true }); throw e; }
     ui.spinner.stop();
-    if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
+    if (signal.aborted) { teamDone({ aborted: true }); throw Object.assign(new Error('annulé'), { name: 'AbortError' }); }
+    teamDone();
 
-    println();
-    for (const W of workers) {
+    if (!quiet) println();
+    for (const W of quiet ? [] : workers) {                  // bilan en texte (le bloc « Agents » du panneau le montre déjà)
       const mark = W.status === 'ok' ? c.green('✓') : c.red('✗');
       println(`    ${mark} ${c.bold(W.titre.padEnd(14))} ${c.dim(`${W.secs.toFixed(1)}s · ${W.blocks.length} fichier${W.blocks.length > 1 ? 's' : ''}${W.error ? ' · ' + W.error : W.status === 'sans fichier' ? ' · le modèle n\'a pas écrit de fichier' : ''}`)}`);
     }

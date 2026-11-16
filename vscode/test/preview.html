@@ -104,5 +104,34 @@ if (location.hash === "#mcp") { steps.length = 2; steps.push(() => E({ type: 'mc
   { name: 'node_repl', group: 'Codex', status: 'disabled', transport: 'stdio', target: 'node repl.js' }],
   cloud: ['claude.ai Canva', 'claude.ai Claude Docs', 'claude.ai Gmail'] }));
   steps.push(() => document.querySelectorAll('.mrow')[2].click()); }
+if (location.hash === "#agents" || location.hash === "#agents-arbre") { steps.length = 2; const T = 'tdemo';
+  const out = '```html index.html\n<!doctype html>\n<html lang="fr">\n<head>\n  <meta charset="utf-8">\n  <title>Café Lumière</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <header class="hero">\n    <h1>Café Lumière</h1>\n    <button id="theme">Mode sombre</button>\n  </header>\n  <main id="menu">…</main>\n  <script src="script.js"><\/script>\n</body>\n</html>\n```';
+  steps.push(
+  () => { document.querySelector('textarea').value = '/team --pool un site de café avec index.html, style.css et script.js'; document.querySelector('.send').click(); },
+  () => E({ type: 'busy', busy: true }),
+  () => E({ type: 'teamStart', team: T, task: 'un site de café avec index.html, style.css et script.js', mode: 'pool', plan: 'automatique', model: 'Claude Sonnet 5.5', count: 3, parallel: 3, agents: [
+    { id: T + '-1', name: 'index.html', task: 'écris index.html (la structure et le contenu de la page) pour répondre à la demande', files: ['index.html'] },
+    { id: T + '-2', name: 'style.css', task: 'écris style.css (la mise en forme (couleurs, mise en page, thème)) pour répondre à la demande', files: ['style.css'] },
+    { id: T + '-3', name: 'script.js', task: 'écris script.js (le comportement interactif) pour répondre à la demande', files: ['script.js'] }] }),
+  () => E({ type: 'spinner', label: 'agents : index.html 1.2k · style.css 2.4k · script.js …' }),
+  () => E({ type: 'agentStart', team: T, id: T + '-1', name: 'index.html', task: 'écris index.html (la structure et le contenu de la page) pour répondre à la demande', files: ['index.html'], model: 'Claude Sonnet 5.5', mode: 'pool', slot: 'w0' }),
+  () => E({ type: 'agentStart', team: T, id: T + '-2', name: 'style.css', task: 'écris style.css (la mise en forme (couleurs, mise en page, thème)) pour répondre à la demande', files: ['style.css'], model: 'Claude Sonnet 5.5', mode: 'pool', slot: 'w1' }),
+  () => E({ type: 'agentStart', team: T, id: T + '-3', name: 'script.js', task: 'écris script.js (le comportement interactif) pour répondre à la demande', files: ['script.js'], model: 'Claude Sonnet 5.5', mode: 'pool', slot: 'w2' }),
+  () => E({ type: 'agentUpdate', team: T, id: T + '-3', status: 'running', chars: 1840, durationMs: 9300 }),
+  () => E({ type: 'agentUpdate', team: T, id: T + '-1', status: 'done', chars: 2210, tokens: 3480, durationMs: 11400 }),
+  () => E({ type: 'agentDone', team: T, id: T + '-1', ok: true, summary: '1 fichier : index.html', output: out, files: ['index.html'], tokens: 3480, durationMs: 11400 }),
+  () => E({ type: 'agentUpdate', team: T, id: T + '-2', status: 'error', durationMs: 4100 }),
+  () => E({ type: 'agentDone', team: T, id: T + '-2', ok: false, summary: 'le modèle n\'a pas écrit de fichier', output: 'Je ne peux pas écrire ce fichier sans voir la page.', files: [], durationMs: 4100 }));
+  if (location.hash === "#agents") steps.push(
+    () => E({ type: 'agentUpdate', team: T, id: T + '-3', status: 'done', chars: 2950, tokens: 4120, durationMs: 14800 }),
+    () => E({ type: 'agentDone', team: T, id: T + '-3', ok: true, summary: '1 fichier : script.js', output: '```js script.js\ndocument.getElementById("theme").onclick = () => document.body.classList.toggle("sombre");\n```', files: ['script.js'], tokens: 4120, durationMs: 14800 }),
+    () => E({ type: 'spinner', label: null }),
+    () => E({ type: 'teamDone', team: T, count: 3, durationMs: 15600, ok: 2 }),
+    () => E({ type: 'tool', name: 'write_file', tag: '✎', label: 'Écrire', detail: 'index.html (17 lignes)', explore: false }),
+    () => E({ type: 'toolDone', ok: true }),
+    () => E({ type: 'tool', name: 'write_file', tag: '✎', label: 'Écrire', detail: 'script.js (1 ligne)', explore: false }),
+    () => E({ type: 'toolDone', ok: true }),
+    () => E({ type: 'busy', busy: false }));
+  if (location.hash === "#agents-arbre") steps.push(() => document.querySelector('.agents').click(), () => document.querySelectorAll('.ag-node')[0].click()); }
 let k = 0; (function next() { if (k < steps.length) { steps[k++](); setTimeout(next, 30); } else document.title = 'fini'; })();
 </script></body></html>
