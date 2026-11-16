@@ -33,7 +33,7 @@ import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX
 import { uploadFile } from './src/api.js';
 import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
-import { newSid, createdToday, DAILY_LIMIT, niceTitle } from './src/chats.js';
+import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
@@ -150,7 +150,7 @@ function resolveModel(arg) {
 
 function saveSession() {
   if (!S.chatId) return;
-  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', fsTitled: !!S.fsTitled, ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, targetDir: S.targetDir, toolsHintSig: S.toolsHintSig || '' });
+  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, targetDir: S.targetDir, toolsHintSig: S.toolsHintSig || '' });
 }
 
 // ── Démarrage ─────────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ if (opts.cont) {
   else console.log(c.dim('  aucune session à reprendre'));
 }
 function applySession(s) {
-  S.chatId = s.chatId; S.agentId = s.agentId || S.agentId; S.title = s.title || ''; S.fsTitled = !!s.fsTitled;
+  S.chatId = s.chatId; S.agentId = s.agentId || S.agentId; S.title = s.title || '';
   S.ctxSent = s.ctxSent !== false; S.ctxPercent = null; S.blocks = []; S.pendingResults = [];
   S.sid = s.sid || newSid(); S.slots = s.slots || {}; S.targetDir = s.targetDir && fs.existsSync(s.targetDir) ? s.targetDir : null;
   if (s.cwd && fs.existsSync(s.cwd)) S.cwd = s.cwd;
@@ -268,7 +268,7 @@ function copyToClipboard(text) {
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
   '/continue', '/navigateur ', '/doctor', '/vscode', '/projet ', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
-  '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
+  '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
   const idx = Math.max(frag.lastIndexOf('/'), frag.lastIndexOf('\\'));
@@ -392,7 +392,7 @@ const HELP_ROWS = [
     ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/projet', 'travailler dans un projet France Student (ses instructions sont suivies)'], ['/vscode', 'installer le panneau de chat FS-CLI dans VS Code, Cursor, Windsurf, Antigravity'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
-    ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
+    ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/rename <titre>', 'renommer la conversation (aussi sur le site)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
     ['/think', 'afficher/masquer le raisonnement'], ['/steps <n>', 'étapes max par demande'], ['/theme <nom>', Object.keys(THEMES).join(' · ')],
     ['/clear', 'effacer l\'écran'], ['/quit', 'quitter'],
     ['!<commande>', 'exécuter une commande shell directement (sans le modèle)'], ['\\ en fin de ligne', 'continuer sur la ligne suivante'],
@@ -464,6 +464,9 @@ const PANEL_FEATURES = new Set(String(process.env.FS_CLI_PANEL_FEATURES || '').s
 let remoteCache = [];
 const within = (p, ms, dflt) => Promise.race([Promise.resolve(p).catch(() => dflt), new Promise(r => setTimeout(() => r(dflt), ms).unref?.())]);
 
+/** titre d'une conversation tel que France Student l'affiche, sans l'étiquette technique « [7f3a] » de FS-CLI */
+const fsTitle = t => String(t || '').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '').trim();
+
 /** sessions dont la conversation existe encore sur le site + conversations du compte absentes de ce PC (autre PC, site, projets).
  *  Rapide : onQuick reçoit tout de suite la liste locale (+ celles du compte vues la dernière fois), puis UN passage réseau en parallèle :
  *  listes du compte et des projets ; seules les conversations locales récentes absentes de ces listes sont vérifiées une à une.
@@ -492,39 +495,19 @@ async function liveSessions(limit = 50, onQuick) {
   const gone = new Set(answered ? toCheck.filter((s, i) => res[i] === false && !seen.has(s.chatId)).map(s => s.chatId) : []);   // seulement un « n'existe pas » net
   if (gone.size) markSessionsGone([...gone]);
   const local = list.filter(s => !gone.has(s.chatId)).map(s => { const r = remote.find(x => x.chatId === s.chatId); return r?.project && !s.project ? { ...s, project: r.project } : s; });
-  // titres : celui gardé sur ce PC (complet) plutôt que « (sans titre) » ; les anciens titres tronqués du site sont corrigés en arrière-plan
-  const fix = [];
+  // titre : celui de France Student fait foi (tel quel, seule l'étiquette technique « [7f3a] » est retirée) ;
+  // renommée sur le site → renommée ici aussi (liste, sessions enregistrées, conversation ouverte)
   for (const s of local) {
     const r = remote.find(x => x.chatId === s.chatId);
-    if (!r) continue;
-    if ((!s.title || s.title === '(sans titre)') && r.title && r.title !== '(sans titre)') s.title = r.title;
-    else if (s.title && s.title !== '(sans titre)' && /^\[[0-9a-f]{4}/i.test(r.raw || '') && cfg.renameChats !== false) fix.push([s.chatId, niceTitle(s.title) || s.title]);
+    if (!r || !r.raw || r.title === s.title) continue;
+    s.title = r.title;
+    const cur = loadSessions().find(x => x.chatId === s.chatId);
+    if (cur && cur.title !== r.title) upsertSession({ ...cur, title: r.title }, { touch: false });
+    if (s.chatId === S.chatId && S.title !== r.title) { S.title = r.title; refreshPrompt(); }
   }
-  for (const [id, t] of fix.slice(0, 8)) renameChat(id, t).then(ok => { if (ok) { const cur = loadSessions().find(x => x.chatId === id); if (cur) upsertSession({ ...cur, fsTitled: true }, { touch: false }); } }).catch(() => {});
-  // titres coupés par le site (« ajoute un... ») : 1er message lu une seule fois (gardé dans titles.json) ; conversation de FS-CLI → titre corrigé sur le site aussi
-  const tc = loadTitleCache();
-  const ours = r => /^\[[0-9a-f]{4}/i.test(r.raw || '');
-  const cut = r => ours(r) || /(\.\.\.|…)\s*$/.test(r.raw || '');
-  const need = remote.filter(r => !tc[r.chatId] && cut(r)).slice(0, 10);
-  if (need.length) {
-    const got = await Promise.all(need.map(r => within(fetchChat(r.chatId).then(ch => niceTitle(transcriptOf(ch).find(m => m.role === 'user')?.text || '')), 3000, '')));
-    need.forEach((r, i) => {
-      const t = got[i];
-      if (!t) return;
-      tc[r.chatId] = t;
-      if (ours(r) && cfg.renameChats !== false) renameChat(r.chatId, /^\[[0-9a-f]{4}·mcp\]/i.test(r.raw) ? `MCP · ${t}` : t).catch(() => {});
-    });
-    saveTitleCache(tc);
-  }
-  for (const r of remote) if (tc[r.chatId]) r.title = tc[r.chatId];
-  for (const s of local) if (tc[s.chatId] && (!s.title || /(\.\.\.|…)\s*$|^\(sans titre\)$/.test(s.title))) s.title = tc[s.chatId];   // titre local repris du site tronqué
   if (mine !== null) remoteCache = remote.filter(r => !list.some(s => s.chatId === r.chatId));
   return merge(local, remote.filter(r => !local.some(s => s.chatId === r.chatId)));
 }
-
-const TITLES_FILE = () => path.join(HOME_DIR, 'titles.json');
-function loadTitleCache() { try { const j = JSON.parse(fs.readFileSync(TITLES_FILE(), 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; } }
-function saveTitleCache(tc) { try { const keys = Object.keys(tc).slice(-300); fs.writeFileSync(TITLES_FILE(), JSON.stringify(Object.fromEntries(keys.map(k => [k, tc[k]]))), { mode: 0o600 }); } catch {} }
 
 /** messages d'une conversation, sans les ajouts internes de FS-CLI (étiquette, notes, consignes jointes) */
 function transcriptOf(chat) {
@@ -560,10 +543,18 @@ async function command(line) {
     case '/help': case '/?': return help();
     case '/clear': input.clearScreen(); return banner();
     case '/status': return status();
+    case '/rename': {                                                  // renomme la conversation sur France Student (visible sur le site et ici)
+      const t = arg.trim().slice(0, 120);
+      if (!S.chatId) return println(c.dim('  pas encore de conversation à renommer : envoie d\'abord un message'));
+      if (!t) return println(c.dim(`  titre actuel : ${S.title || '(sans titre)'} · /rename <nouveau titre>`));
+      if (!(await renameChat(S.chatId, t))) return println(c.red('  France Student n\'a pas accepté le nouveau titre'));
+      S.title = t; saveSession(); refreshPrompt();
+      return println(c.green('  ✓ ') + `conversation renommée : ${t}`);
+    }
     case '/id': return println(c.dim('  ' + (S.chatId || 'aucune conversation')));
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
-      S.chatId = null; S.fsTitled = false; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      S.chatId = null; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
@@ -964,14 +955,10 @@ async function chatTurn(text, { keepLast = false } = {}) {
     }
     if (!keepLast) S.lastUserText = text;
     mem.observe(text, S.cwd);
-    if (!S.title || S.title === '(sans titre)') S.title = niceTitle(text) || text.replace(/\s+/g, ' ').slice(0, 60);
+    if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);   // provisoire : remplacé par le titre de France Student dès qu'il est connu
     try {
       const agentBefore = S.agentId;
       await runAgent(S, message, { signal: turnAbort.signal, ask });
-      if (S.chatId && !S.fsTitled && S.title && cfg.renameChats !== false) {   // titre lisible sur le site et dans l'historique (au lieu de « [7f3a] écris-moi… »)
-        S.fsTitled = true; saveSession();
-        renameChat(S.chatId, S.title).catch(() => {});
-      }
       if (S.agentId !== agentBefore) { saveSession(); refreshPrompt(); }   // refus d'outils : la demande est repartie avec Sonnet → modèle affiché à jour
       if (S.chatId && S.pendingSummary) { S.pendingSummary = null; S.compactedFrom = null; }   // nouvelle conversation ouverte avec le résumé
       if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));
@@ -1144,7 +1131,7 @@ if (opts.stdio) {                                                    // commande
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
     const send = (list, partial) => stdioSend('history', { partial, sessions: list.map(s => ({
-      chatId: s.chatId, title: String(niceTitle(s.title, 90) || s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
+      chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });
     // liste immédiate (panneau récent seulement : un ancien panneau rouvrirait sa fenêtre à la 2e liste), puis la liste vérifiée
@@ -1155,8 +1142,13 @@ if (opts.stdio) {                                                    // commande
     const s = loadSessions().find(x => x.chatId === chatId) || { chatId, title: '', agentId: S.agentId, ctxSent: true };   // conversation du compte (autre PC, site)
     applySession(s); refreshPrompt(); saveSession();
     let messages = [];
-    try { messages = transcriptOf(await fetchChat(chatId)); } catch {}
-    stdioSend('transcript', { title: s.title || '', model: modelName(), messages: messages.slice(-40), older: Math.max(0, messages.length - 40) });
+    try {
+      const chat = await fetchChat(chatId);
+      messages = transcriptOf(chat);
+      const t = fsTitle(chat?.title);                                 // titre du site (renommée là-bas → renommée ici)
+      if (t && t !== S.title) { S.title = t; saveSession(); refreshPrompt(); }
+    } catch {}
+    stdioSend('transcript', { title: S.title || '', model: modelName(), messages: messages.slice(-40), older: Math.max(0, messages.length - 40) });
   });
   input.on('mcpAction', async (action, name) => {                    // boutons de la fenêtre « Serveurs MCP »
     const mgr = getMcp(S.cwd), sv = loadMcpConfig(S.cwd).mcpServers?.[name];

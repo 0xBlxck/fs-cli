@@ -8,10 +8,10 @@ import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys, FILES, ROOT } from './config.js';
-import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat, renameChat } from './api.js';
+import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat } from './api.js';
 import { fetchUserUsage } from './account.js';
 import { sensitivePathReason } from './permissions.js';
-import { newSid, tag, lastReset, createdToday, DAILY_LIMIT, niceTitle } from './chats.js';
+import { newSid, tag, lastReset, createdToday, DAILY_LIMIT } from './chats.js';
 import { isFolderTrusted, isBroadFolder, trustFolder } from './trust.js';
 import { summarizeChanges } from './changes.js';
 import * as ui from './ui.js';
@@ -220,7 +220,6 @@ export function createMcpServer(deps = {}) {
     projectChats: async id => { const j = (await requestJson('GET', `/projects/${encodeURIComponent(id)}/chats`)).data; return Array.isArray(j) ? j : (j?.chats || []); },
     fetchChat,
     upload: uploadFile,
-    rename: renameChat,
     userUsage: fetchUserUsage,
     runNative: null,                                                   // chargé à la demande (moteur natif + outils locaux)
     allowCommands: process.env.FS_MCP_ALLOW_COMMANDS === '1',
@@ -354,10 +353,7 @@ export function createMcpServer(deps = {}) {
       return d.stream({
         agentId: m.id, chatId, content, signal, webSearch: !!(extra.web || args.web_search === true), register: { sid: askState.sid, role: 'mcp' },
         ...(extra.files?.length ? { files: extra.files } : {}),
-        onChat: id => {
-          if (!target && !askState.chatId) { askState.chatId = id; remember(id); }
-          if (!chatId && cfg.renameChats !== false) d.rename(id, `MCP · ${niceTitle(prompt, 50)}`).catch?.(() => {});   // nouvelle conversation : titre lisible sur le site
-        },
+        onChat: id => { if (!target && !askState.chatId) { askState.chatId = id; remember(id); } },
       });
     };
     try {
@@ -430,10 +426,8 @@ export function createMcpServer(deps = {}) {
     let error = null;
     const agentImages = [];
     ui.onImage(im => agentImages.push(im));                            // images générées pendant la tâche : renvoyées à l'appelant
-    const hadChat = !!S.chatId;
     try {
       await d.runNative(S, task, { signal, ask });
-      if (!hadChat && S.chatId && cfg.renameChats !== false) d.rename(S.chatId, `MCP · ${niceTitle(task, 50)}`).catch?.(() => {});
       if (!chatFor(args) && S.chatId && !askState.chatId) { askState.chatId = S.chatId; remember(S.chatId); }   // même conversation pour fs_ask et fs_agent
     }
     catch (e) { error = e; }

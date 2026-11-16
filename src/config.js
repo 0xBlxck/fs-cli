@@ -39,7 +39,6 @@ const DEFAULTS = {
   agentId: -1002,
   mcpAskImported: false,
   toolRefusals: {},
-  renameChats: true,       // titre lisible posé sur le site après le 1er échange (comme les sessions de Claude Code)
   refusalRecover: true,    // un modèle croit ne pas avoir le droit d'utiliser les outils : 1 précision factuelle, puis la demande repart avec Sonnet (affiché)
   mcpChat: null,           // conversation France Student utilisée par le serveur MCP { id, title } : réutilisée même après un redémarrage
   mcpAskWhere: true,       // serveur MCP : au premier appel de chaque session, l'IDE (Claude Code…) affiche un choix de conversation (boutons)
