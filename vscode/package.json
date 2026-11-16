@@ -24,10 +24,20 @@
       { "command": "fsCli.focus", "title": "FS-CLI : ouvrir le panneau latéral" },
       { "command": "fsCli.newChat", "title": "FS-CLI : nouvelle conversation" },
       { "command": "fsCli.askSelection", "title": "Demander à FS-CLI" },
-      { "command": "fsCli.login", "title": "FS-CLI : se connecter (clé de session)" }
+      { "command": "fsCli.login", "title": "FS-CLI : se connecter (clé de session)" },
+      { "command": "fsCli.acceptProposal", "title": "FS-CLI : accepter la modification proposée", "shortTitle": "Accepter", "icon": "$(check)" },
+      { "command": "fsCli.rejectProposal", "title": "FS-CLI : refuser la modification proposée", "shortTitle": "Refuser", "icon": "$(close)" }
     ],
     "menus": {
-      "editor/title": [{ "command": "fsCli.open", "group": "navigation" }],
+      "editor/title": [
+        { "command": "fsCli.acceptProposal", "when": "resourceScheme == fs-cli-proposal", "group": "navigation@1" },
+        { "command": "fsCli.rejectProposal", "when": "resourceScheme == fs-cli-proposal", "group": "navigation@2" },
+        { "command": "fsCli.open", "group": "navigation" }
+      ],
+      "commandPalette": [
+        { "command": "fsCli.acceptProposal", "when": "resourceScheme == fs-cli-proposal" },
+        { "command": "fsCli.rejectProposal", "when": "resourceScheme == fs-cli-proposal" }
+      ],
       "editor/context": [{ "command": "fsCli.askSelection", "when": "editorHasSelection", "group": "navigation@99" }]
     },
     "keybindings": [

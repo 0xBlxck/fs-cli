@@ -332,6 +332,57 @@ function* walk(root, { maxFiles = 60000, includeDirs = false } = {}) {
 
 function looksBinary(buf) { return buf.subarray(0, 4096).includes(0); }
 
+/**
+ * Remplacement de edit_file, sans rien écrire : { error } · { idx } (introuvable ou ambigu : idx vide ou > 1 sans replace_all) · { idx, updated }.
+ * Partagé par l'outil et par la proposition affichée dans le diff de l'éditeur (même résultat garanti).
+ */
+function applyEdit(text, a) {
+  if (a.old_string === '') return { error: 'old_string est vide.' };
+  if (a.old_string === a.new_string) return { error: 'old_string et new_string sont identiques.' };
+  const crlf = text.includes('\r\n');
+  const fix = s => crlf ? s.replace(/\r?\n/g, '\r\n') : s;
+  const o = fix(a.old_string), n = fix(a.new_string);
+  const idx = []; let i = -1;
+  while ((i = text.indexOf(o, i + 1)) >= 0) { idx.push(i); if (idx.length > 50) break; }
+  if (!idx.length || (idx.length > 1 && !a.replace_all)) return { idx };
+  const updated = a.replace_all ? text.split(o).join(n) : text.slice(0, idx[0]) + n + text.slice(idx[0] + o.length);
+  return { idx, updated };
+}
+
+/** au-delà, pas de diff dans l'éditeur (la carte de confirmation reste) */
+export const PROPOSAL_MAX = 400_000;
+
+/**
+ * Contenu PROPOSÉ par write_file / edit_file, calculé sans rien écrire (diff « accepter / refuser » de l'éditeur).
+ * → { path, before, after, created } ou null (autre outil, binaire, trop gros, remplacement impossible…).
+ */
+export function proposedChange(name, a, cwd) {
+  if ((name !== 'write_file' && name !== 'edit_file') || !a || typeof a.path !== 'string') return null;
+  try {
+    const fp = resolveP(a.path, cwd);
+    let buf = null;
+    try {
+      const st = fs.statSync(fp);
+      if (st.isDirectory() || st.size > PROPOSAL_MAX) return null;
+      buf = fs.readFileSync(fp);
+    } catch { if (name === 'edit_file') return null; }            // edit_file sur un fichier absent : l'outil échouera, rien à montrer
+    if (buf && looksBinary(buf)) return null;
+    const before = buf ? buf.toString('utf8').replace(/^﻿/, '') : '';
+    let after;
+    if (name === 'write_file') {
+      if (typeof a.content !== 'string') return null;
+      after = /\.(bat|cmd)$/i.test(fp) ? a.content.replace(/\r?\n/g, '\r\n') : a.content;   // comme l'outil
+    } else {
+      if (typeof a.old_string !== 'string' || typeof a.new_string !== 'string') return null;
+      const r = applyEdit(before, a);
+      if (r.updated === undefined) return null;
+      after = r.updated;
+    }
+    if (Buffer.byteLength(after) > PROPOSAL_MAX) return null;
+    return { path: fp, before, after, created: !buf };
+  } catch { return null; }
+}
+
 /** Statistiques d'un dossier (nombre de fichiers, extensions) pour /index */
 export function scanProject(root) {
   const exts = {}; let files = 0;
@@ -518,13 +569,9 @@ export const TOOLS = {
       let buf; try { buf = fs.readFileSync(fp); } catch { return err(`Fichier introuvable: ${fp} (pour créer un fichier, utilise write_file)`); }
       if (looksBinary(buf)) return err('Fichier binaire.');
       let text = buf.toString('utf8'); const hadBom = text.charCodeAt(0) === 0xFEFF; if (hadBom) text = text.slice(1);
-      if (a.old_string === '') return err('old_string est vide.');
-      if (a.old_string === a.new_string) return err('old_string et new_string sont identiques.');
-      const crlf = text.includes('\r\n');
-      const fix = s => crlf ? s.replace(/\r?\n/g, '\r\n') : s;
-      const o = fix(a.old_string), n = fix(a.new_string);
-      const idx = []; let i = -1;
-      while ((i = text.indexOf(o, i + 1)) >= 0) { idx.push(i); if (idx.length > 50) break; }
+      const r = applyEdit(text, a);
+      if (r.error) return err(r.error);
+      const { idx } = r;
       if (!idx.length) {
         const firstLine = a.old_string.split('\n').map(l => l.trim()).find(Boolean) || '';
         const lines = text.split(/\r?\n/);
@@ -535,7 +582,7 @@ export const TOOLS = {
         const lineOf = pos => text.slice(0, pos).split('\n').length;
         return err(`old_string apparaît ${idx.length} fois (lignes ${idx.slice(0, 8).map(lineOf).join(', ')}…). Ajoute du contexte pour le rendre unique, ou replace_all=true.`);
       }
-      const updated = a.replace_all ? text.split(o).join(n) : text.slice(0, idx[0]) + n + text.slice(idx[0] + o.length);
+      const { updated } = r;
       ctx.undo?.push({ path: fp, prev: buf });
       writeAtomic(fp, (hadBom ? '﻿' : '') + updated);
       const count = a.replace_all ? idx.length : 1;

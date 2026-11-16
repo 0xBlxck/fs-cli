@@ -1184,7 +1184,7 @@ if (opts.print) {
 
 if (interactive) {
   attachScreen(input);
-  if (input.select) setSelectHandler(o => input.select(o));        // menus de confirmation à flèches
+  if (input.select) setSelectHandler(o => input.select(o), { proposals: input.kind === 'stdio' });   // menus de confirmation à flèches (panneau : + diff proposé dans l'éditeur)
   input.start();
 }
 refreshPrompt();

@@ -12,6 +12,8 @@ const crypto = require('crypto');
 const RS = '\x1e';
 const MAX_SELECTION = 20000;
 const beforeDocs = new Map();             // contenus « avant » pour le diff natif (schéma fs-cli-before:)
+const proposalDocs = new Map();           // contenus PROPOSÉS par l'agent, en attente d'accord (schéma fs-cli-proposal:)
+const proposalOwners = new Map();         // uri du côté proposé → { chat, id } : boutons Accepter / Refuser de la barre du diff
 let cliPathCache;
 
 /** Où est FS-CLI ? réglage → installation globale npm (lancée avec node) → « fs-cli » du PATH */
@@ -74,7 +76,7 @@ function contextPrefix(ctx) {
 class Chat {
   constructor(context, webview, onTitle) {
     this.context = context; this.webview = webview; this.onTitle = onTitle;
-    this.proc = null; this.buf = ''; this.pendingDiff = new Map(); this.useContext = vscode.workspace.getConfiguration('fsCli').get('shareSelection') !== false;
+    this.proc = null; this.buf = ''; this.pendingDiff = new Map(); this.proposals = new Map(); this.useContext = vscode.workspace.getConfiguration('fsCli').get('shareSelection') !== false;
     this.disposables = [];
     webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] };
     webview.html = this.html();
@@ -124,6 +126,11 @@ class Chat {
       let ev; try { ev = JSON.parse(line.slice(k + 1)); } catch { continue; }
       if (ev.type === 'diffBefore') { const r = this.pendingDiff.get(ev.id); if (r) { this.pendingDiff.delete(ev.id); r(ev); } continue; }
       if (ev.type === 'status') { if (ev.title !== undefined) this.onTitle?.(ev.title); if (ev.cwd) this.cwd = ev.cwd; }
+      if (ev.type === 'busy' && !ev.busy) this.closeProposals();          // tour terminé (ou interrompu) : plus aucune proposition en attente
+      if (ev.type === 'select' && ev.proposal && typeof ev.proposal.after === 'string') {
+        this.showProposal(ev);
+        ev = { ...ev, proposal: { path: String(ev.proposal.path || ''), created: !!ev.proposal.created } };   // le panneau n'a pas besoin des contenus
+      }
       this.post({ type: 'event', ev });
     }
   }
@@ -141,7 +148,8 @@ class Chat {
         this.toCli({ type: 'submit', text: contextPrefix(ctx) + text });
         return;
       }
-      case 'select': return this.toCli({ type: 'select', id: m.id, index: m.index });
+      case 'select': this.closeProposal(m.id); return this.toCli({ type: 'select', id: m.id, index: m.index });
+      case 'openProposal': return this.openProposal(m.id);
       case 'command': { const t = String(m.text || ''); if (/^\/[\w-]+( |$)/.test(t)) this.toCli({ type: 'submit', text: t }); return; }
       case 'mcpAction': return this.toCli({ type: 'mcpAction', action: String(m.action || ''), name: String(m.name || '') });
       case 'historyOpen': return this.toCli({ type: 'historyOpen' });
@@ -217,6 +225,54 @@ class Chat {
     await vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.file(p), `${name} (${ev.created ? 'créé' : 'avant'} ↔ maintenant)`, { viewColumn: vscode.ViewColumn.One });
   }
 
+  // ── proposition de modification : diff natif « actuel ↔ proposé », accepter / refuser depuis le panneau ou la barre du diff ──
+  showProposal(ev) {
+    const pr = ev.proposal, name = path.basename(String(pr.path || 'fichier')) || 'fichier';
+    const key = `${ev.id}-${crypto.randomBytes(4).toString('hex')}`;
+    const left = vscode.Uri.from({ scheme: 'fs-cli-before', path: `/p${key}/${name}` });
+    const right = vscode.Uri.from({ scheme: 'fs-cli-proposal', path: `/${key}/${name}` });
+    beforeDocs.set(left.toString(), String(pr.before ?? ''));
+    proposalDocs.set(right.toString(), pr.after);
+    proposalOwners.set(right.toString(), { chat: this, id: ev.id });
+    const opts = Array.isArray(ev.options) ? ev.options : [];
+    const reject = opts.indexOf('Refuser');
+    this.proposals.set(ev.id, { left, right, name, created: !!pr.created, accept: 0, reject: reject >= 0 ? reject : -1 });   // -1 = refus (comme Échap)
+    this.openProposal(ev.id);
+  }
+
+  openProposal(id) {
+    const p = this.proposals.get(id);
+    if (!p) return;
+    const title = `${p.name} (proposition de FS-CLI${p.created ? ' · nouveau fichier' : ''})`;
+    // preserveFocus : le panneau garde le clavier (↑↓ Entrée) pendant qu'on lit le diff
+    return vscode.commands.executeCommand('vscode.diff', p.left, p.right, title, { viewColumn: vscode.ViewColumn.One, preview: true, preserveFocus: true }).then(undefined, () => {});
+  }
+
+  /** réponse donnée depuis l'éditeur (barre du diff) : transmise au CLI, et la carte du panneau est marquée comme répondue */
+  answerProposal(id, accept) {
+    const p = this.proposals.get(id);
+    if (!p) return;
+    const index = accept ? p.accept : p.reject;
+    this.closeProposal(id);
+    this.toCli({ type: 'select', id, index });
+    this.post({ type: 'selectAnswered', id, index });
+  }
+
+  closeProposal(id) {
+    const p = this.proposals.get(id);
+    if (!p) return;
+    this.proposals.delete(id);
+    const r = p.right.toString();
+    proposalOwners.delete(r);
+    try {
+      const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs).filter(t => t.input instanceof vscode.TabInputTextDiff && t.input.modified.toString() === r);
+      if (tabs.length) vscode.window.tabGroups.close(tabs).then(() => { proposalDocs.delete(r); beforeDocs.delete(p.left.toString()); }, () => {});
+      else { proposalDocs.delete(r); beforeDocs.delete(p.left.toString()); }
+    } catch {}
+  }
+
+  closeProposals() { for (const id of [...this.proposals.keys()]) this.closeProposal(id); }
+
   insertSelection() {
     const ctx = editorContext();
     if (!ctx || !ctx.text) return;
@@ -225,6 +281,7 @@ class Chat {
   }
 
   stop() {
+    this.closeProposals();
     const p = this.proc; this.proc = null;
     if (!p) return;
     try { p.stdin.write('{"type":"quit"}\n'); } catch {}
@@ -256,6 +313,18 @@ class SidebarProvider {
   }
 }
 
+/** Accepter / Refuser depuis l'éditeur : l'uri reçue (ou l'onglet actif) désigne la proposition */
+function answerFromEditor(uri, accept) {
+  let key = uri && uri.scheme === 'fs-cli-proposal' ? uri.toString() : null;
+  if (!key) {
+    const inp = vscode.window.tabGroups.activeTabGroup?.activeTab?.input;
+    if (inp instanceof vscode.TabInputTextDiff && inp.modified.scheme === 'fs-cli-proposal') key = inp.modified.toString();
+  }
+  const o = key && proposalOwners.get(key);
+  if (!o) { vscode.window.showInformationMessage('Cette proposition de FS-CLI n\'attend plus de réponse.'); return; }
+  o.chat.answerProposal(o.id, accept);
+}
+
 function activate(context) {
   const sidebar = new SidebarProvider(context);
   const tabs = new Set();
@@ -263,6 +332,10 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('fs-cli-before', { provideTextDocumentContent: uri => beforeDocs.get(uri.toString()) ?? '' }),
+    vscode.workspace.registerTextDocumentContentProvider('fs-cli-proposal', { provideTextDocumentContent: uri => proposalDocs.get(uri.toString()) ?? '' }),
+    // boutons ✓ / ✗ de la barre du diff proposé (côté droit = fs-cli-proposal:)
+    vscode.commands.registerCommand('fsCli.acceptProposal', uri => answerFromEditor(uri, true)),
+    vscode.commands.registerCommand('fsCli.rejectProposal', uri => answerFromEditor(uri, false)),
     vscode.window.registerWebviewViewProvider('fsCli.chat', sidebar, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('fsCli.open', () => {
       const panel = vscode.window.createWebviewPanel('fsCli.tab', 'FS-CLI', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
