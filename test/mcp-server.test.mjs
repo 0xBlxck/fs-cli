@@ -52,7 +52,7 @@ test('stdio : initialize, tools/list, méthode inconnue, dossier non approuvé �
   assert.equal(by[1].result.protocolVersion, '2025-06-18');
   assert.ok(by[1].result.capabilities.tools);
   assert.equal(by[1].result.serverInfo.name, 'fs-cli');
-  assert.deepEqual(by[2].result.tools.map(t => t.name), ['fs_models', 'fs_ask', 'fs_agent']);
+  assert.deepEqual(by[2].result.tools.map(t => t.name), ['fs_models', 'fs_ask', 'fs_agent', 'fs_image', 'fs_web', 'fs_files', 'fs_conversations', 'fs_usage']);
   assert.deepEqual(by[2].result.tools.find(t => t.name === 'fs_agent').inputSchema.required, ['task', 'folder']);
   assert.equal(by[3].error.code, -32601);
   assert.deepEqual(by[4].result, {});
@@ -66,8 +66,8 @@ test('stdio : initialize, tools/list, méthode inconnue, dossier non approuvé �
 test('sans clé de session : initialize et tools/list répondent, les outils expliquent comment se connecter', async () => {
   const s = srv.createMcpServer({ hasToken: () => false, stream: async () => { throw new Error('aucun appel réseau attendu'); }, fetchAgents: async () => null, fetchAgentsFull: async () => { throw new Error('aucun appel réseau attendu'); } });
   assert.equal((await s.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })).result.protocolVersion, '2024-11-05');
-  assert.equal((await s.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.length, 3);
-  for (const [name, args] of [['fs_models', {}], ['fs_ask', { prompt: 'bonjour' }]]) {
+  assert.equal((await s.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.length, 8);
+  for (const [name, args] of [['fs_models', {}], ['fs_ask', { prompt: 'bonjour' }], ['fs_image', { prompt: 'un chat' }], ['fs_web', { question: 'q' }], ['fs_files', { paths: ['/x.png'], prompt: 'p' }], ['fs_conversations', {}], ['fs_usage', {}]]) {
     const r = (await s.handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } })).result;
     assert.equal(r.isError, true); assert.match(r.content[0].text, /Lance « fs-cli » une fois/);
   }
@@ -310,4 +310,64 @@ test('fs_agent : dossier non approuvé → l\'IDE demande à l\'utilisateur (Oui
   assert.equal(r3.isError, true);
   assert.equal(asked.length, 0, 'jamais proposé pour le dossier personnel');
   cfg.mcpAskWhere = true;
+});
+
+test('nouveaux outils : fs_image (GPT choisi), fs_web (recherche web), fs_files (envoi + refus des secrets), fs_conversations, fs_usage', async () => {
+  cfg.mcpChat = null; cfg.mcpAskWhere = false;
+  const reqs = [], uploads = [];
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const stream = async o => {
+    reqs.push({ agentId: o.agentId, web: o.webSearch, files: o.files, content: o.content, chatId: o.chatId });
+    if (!o.chatId) o.onChat?.('mcp-outils');
+    if (/Génère une image/.test(o.content)) return { text: 'Voici.', sawImage: true, images: [{ id: 'img12345', url: '/x', contentType: 'image/png', ext: 'png' }] };
+    return { text: 'ok' };
+  };
+  const s = srv.createMcpServer({
+    hasToken: () => true, stream, fetchApiFile: async () => png,
+    fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5', '-1002': 'GPT-6 Luna', '-1003': 'GPT-6.1 Sol' }),
+    fetchAgentsFull: async () => ({ data: [{ id: -2003, name: 'Claude Sonnet 5.5', modelProvider: 'anthropic' }, { id: -1002, name: 'GPT-6 Luna', modelProvider: 'openai' }, { id: -1003, name: 'GPT-6.1 Sol', modelProvider: 'openai' }] }),
+    upload: async (buf, name, mime) => { uploads.push({ name, mime }); return `file-${uploads.length}`; },
+    listChats: async () => [{ id: 'site-aaaa-1111', title: '[ab12] Révisions bac', createdAt: new Date().toISOString(), lastMessageAt: new Date().toISOString() }],
+    listProjects: async () => [{ id: 'p1', name: 'Cours' }],
+    projectChats: async () => [{ id: 'proj-bbbb-2222', title: 'Chapitre 3', createdAt: '2020-01-01T00:00:00Z' }],
+    fetchChat: async id => ({ title: 'Révisions bac', chatMessages: [{ role: 'user', content: '[ab12] Explique la photosynthèse' }, { role: 'assistant', content: 'La photosynthèse…' }] }),
+    userUsage: async () => ({ chatBudget: { remainingPercent: 72, resetAt: new Date().toISOString() }, rateLimits: [] }),
+  });
+  const call = async (name, args) => (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })).result;
+
+  const img = await call('fs_image', { prompt: 'un chat roux' });
+  assert.ok(img.content.some(c => c.type === 'image'), JSON.stringify(img));
+  assert.equal(reqs.at(-1).agentId, -1003, 'GPT Sol choisi pour les images');
+  const notGpt = await call('fs_image', { prompt: 'x', model: 'sonnet' });
+  assert.equal(notGpt.isError, true); assert.match(notGpt.content[0].text, /ne génère pas d'images/);
+
+  await call('fs_web', { question: 'dernière version de Node ?' });
+  assert.equal(reqs.at(-1).web, true);
+  await call('fs_ask', { prompt: 'sans web' });
+  assert.equal(reqs.at(-1).web, false);
+
+  const dir = fs.mkdtempSync(path.join(tmp, 'fichiers-'));
+  fs.writeFileSync(path.join(dir, 'capture.png'), png); fs.writeFileSync(path.join(dir, 'notes.md'), '# Titre\nbonjour');
+  await call('fs_files', { paths: [path.join(dir, 'capture.png'), path.join(dir, 'notes.md')], prompt: 'Analyse' });
+  assert.deepEqual(uploads, [{ name: 'capture.png', mime: 'image/png' }]);
+  assert.deepEqual(reqs.at(-1).files, ['file-1']);
+  assert.match(reqs.at(-1).content, /--- notes\.md ---\n# Titre/);
+  fs.writeFileSync(path.join(dir, '.env'), 'SECRET=1');
+  const secret = await call('fs_files', { paths: [path.join(dir, '.env')], prompt: 'lis' });
+  assert.equal(secret.isError, true); assert.match(secret.content[0].text, /Refusé/);
+  assert.equal(uploads.length, 1, 'rien envoyé');
+
+  const list = (await call('fs_conversations', {})).content[0].text;
+  assert.match(list, /Révisions bac · id site-aaaa-1111/);
+  assert.match(list, /Chapitre 3 · id proj-bbbb-2222 · projet « Cours »/);
+  const read = (await call('fs_conversations', { action: 'read', conversation_id: 'site-aaaa-1111' })).content[0].text;
+  assert.match(read, /Utilisateur : Explique la photosynthèse/);
+  await call('fs_conversations', { action: 'select', conversation_id: 'site-aaaa-1111' });
+  await call('fs_ask', { prompt: 'suite' });
+  assert.equal(reqs.at(-1).chatId, 'site-aaaa-1111', 'conversation choisie utilisée');
+
+  const usage = (await call('fs_usage', {})).content[0].text;
+  assert.match(usage, /72 % restant/);
+  assert.match(usage, /Nouvelles conversations aujourd'hui : \d+ \/ 50/);
+  cfg.mcpAskWhere = true; cfg.mcpChat = null;
 });

@@ -8,8 +8,10 @@ import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys, FILES, ROOT } from './config.js';
-import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects } from './api.js';
-import { newSid, tag } from './chats.js';
+import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat } from './api.js';
+import { fetchUserUsage } from './account.js';
+import { sensitivePathReason } from './permissions.js';
+import { newSid, tag, lastReset, createdToday, DAILY_LIMIT } from './chats.js';
 import { isFolderTrusted, isBroadFolder, trustFolder } from './trust.js';
 import { summarizeChanges } from './changes.js';
 import * as ui from './ui.js';
@@ -28,8 +30,10 @@ const NO_TOKEN = 'Aucune clé de session France Student n\'est configurée pour 
   'Lance « fs-cli » une fois dans un terminal pour te connecter (assistant de connexion), puis redémarre l\'application de l\'agent.';
 
 const INSTRUCTIONS = 'Serveur MCP de FS-CLI (client communautaire non officiel de France Student AI). ' +
-  'fs_models liste les modèles ; fs_ask pose une question à un modèle France Student (texte seulement) ; ' +
-  'fs_agent confie une tâche de code à l\'agent FS-CLI dans un dossier que l\'utilisateur a déjà approuvé avec fs-cli. ' +
+  'fs_models liste les modèles ; fs_ask pose une question à un modèle France Student (texte, recherche web en option) ; ' +
+  'fs_agent confie une tâche de code à l\'agent FS-CLI dans un dossier que l\'utilisateur a approuvé ; fs_image génère une image ; ' +
+  'fs_web répond avec la recherche web ; fs_files fait analyser des images, PDF ou fichiers texte ; fs_conversations liste, relit ou choisit une conversation du compte ; ' +
+  'fs_usage montre ce qu\'il reste du quota. ' +
   'Le compte est limité à 50 nouvelles conversations par jour : les conversations sont réutilisées, n\'utilise new_conversation que si c\'est nécessaire.';
 
 export const TOOL_DEFS = [
@@ -56,6 +60,7 @@ export const TOOL_DEFS = [
         new_conversation: { type: 'boolean', description: 'true = nouvelle conversation (oublie les échanges précédents). Par défaut false.', default: false },
         conversation_id: { type: 'string', description: 'Identifiant d\'une conversation France Student précise à utiliser pour cette demande (facultatif, seulement si l\'utilisateur le donne).' },
         save_dir: { type: 'string', description: 'Dossier (chemin absolu) où enregistrer les images générées. Facultatif : sans lui, les images sont seulement renvoyées dans la réponse.' },
+        web_search: { type: 'boolean', description: 'true = le modèle peut chercher sur le web pour répondre. Par défaut false.', default: false },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -82,6 +87,83 @@ export const TOOL_DEFS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'fs_image',
+    title: 'Générer une image (France Student)',
+    description: 'Génère une image avec un modèle GPT de France Student et la renvoie directement (contenu image). Décris précisément ce que tu veux (sujet, style, cadrage, couleurs, texte éventuel). ' +
+      'save_dir (chemin absolu) pour l\'enregistrer aussi sur le disque. Utilise la conversation du MCP (pas de nouvelle conversation).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'Description de l\'image à générer.' },
+        model: { type: 'string', description: 'Modèle GPT à utiliser (facultatif ; par défaut le meilleur modèle GPT du compte).' },
+        save_dir: { type: 'string', description: 'Dossier (chemin absolu) où enregistrer l\'image. Facultatif.' },
+        conversation_id: { type: 'string', description: 'Conversation France Student précise (facultatif).' },
+      },
+      required: ['prompt'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'fs_web',
+    title: 'Recherche web (France Student)',
+    description: 'Pose une question à un modèle France Student AVEC sa recherche web activée : actualité, documentation récente, prix, versions de bibliothèques… Renvoie une réponse rédigée, avec ses sources quand le modèle les donne.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'La question, précise (ce qu\'il faut chercher et ce qu\'il faut en retenir).' },
+        model: { type: 'string', description: 'Modèle (facultatif, voir fs_models).' },
+        conversation_id: { type: 'string', description: 'Conversation France Student précise (facultatif).' },
+      },
+      required: ['question'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'fs_files',
+    title: 'Analyser des fichiers (France Student)',
+    description: 'Envoie 1 à 5 fichiers du PC à un modèle France Student avec une consigne : images (capture d\'écran, maquette, photo, schéma), PDF, ou fichiers texte (code, Markdown, CSV, JSON, logs). ' +
+      'Chemins ABSOLUS. Les fichiers sensibles (clés, mots de passe, .env, dossiers système) sont refusés.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5, description: 'Chemins absolus des fichiers.' },
+        prompt: { type: 'string', description: 'Ce que le modèle doit faire avec ces fichiers.' },
+        model: { type: 'string', description: 'Modèle (facultatif, voir fs_models).' },
+        conversation_id: { type: 'string', description: 'Conversation France Student précise (facultatif).' },
+      },
+      required: ['paths', 'prompt'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'fs_conversations',
+    title: 'Conversations France Student',
+    description: 'Les conversations du compte France Student (y compris celles faites sur le site et rangées dans des projets). ' +
+      'action « list » : les plus récentes (titre, identifiant, projet, date) ; « read » : relit les messages d\'une conversation (conversation_id) ; ' +
+      '« select » : en fait la conversation utilisée par fs_ask / fs_agent / fs_image (seulement si l\'utilisateur le demande).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'read', 'select'], default: 'list' },
+        conversation_id: { type: 'string', description: 'Pour read et select.' },
+        limit: { type: 'integer', minimum: 1, maximum: 60, description: 'list : nombre de conversations (20 par défaut) ; read : nombre de derniers messages (20 par défaut).' },
+        search: { type: 'string', description: 'list : ne garder que les titres qui contiennent ce texte.' },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, openWorldHint: true },
+  },
+  {
+    name: 'fs_usage',
+    title: 'Consommation France Student',
+    description: 'Ce qu\'il reste sur le compte France Student : budget de chat du jour (pourcentage, heure de remise à zéro), nouvelles conversations créées aujourd\'hui sur 50, autres limites. À consulter avant une grosse tâche.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: true },
   },
 ];
 
@@ -135,6 +217,10 @@ export function createMcpServer(deps = {}) {
     fetchApiFile,
     listChats: n => fetchChatsList(n),
     listProjects: listFsProjects,
+    projectChats: async id => { const j = (await requestJson('GET', `/projects/${encodeURIComponent(id)}/chats`)).data; return Array.isArray(j) ? j : (j?.chats || []); },
+    fetchChat,
+    upload: uploadFile,
+    userUsage: fetchUserUsage,
     runNative: null,                                                   // chargé à la demande (moteur natif + outils locaux)
     allowCommands: process.env.FS_MCP_ALLOW_COMMANDS === '1',
     ...deps,
@@ -252,11 +338,11 @@ export function createMcpServer(deps = {}) {
     return textResult(`${list.length} modèle${list.length > 1 ? 's' : ''} France Student :\n${lines.join('\n')}\n\nJSON : ${JSON.stringify(list)}`);
   }
 
-  async function toolAsk(args, signal) {
+  async function toolAsk(args, signal, extra = {}) {
     const prompt = typeof args.prompt === 'string' ? args.prompt : '';
     if (!prompt.trim()) return textResult('Paramètre « prompt » manquant ou vide.', true);
     if (!d.hasToken()) return textResult(NO_TOKEN, true);
-    const m = await pickModel(args.model);
+    const m = extra.modelId != null ? { id: extra.modelId } : await pickModel(args.model);
     if (m.error) return textResult(m.error, true);
     const target = chatFor(args);                                      // conversation précise demandée par l'utilisateur
     if (!target && args.new_conversation !== true && (await chooseWhere(signal))?.cancel) return CANCELLED();
@@ -265,7 +351,8 @@ export function createMcpServer(deps = {}) {
       let content = prompt;
       if (!chatId && cfg.tagChats !== false) content = tag(askState.sid, 'mcp') + content;
       return d.stream({
-        agentId: m.id, chatId, content, signal, webSearch: false, register: { sid: askState.sid, role: 'mcp' },
+        agentId: m.id, chatId, content, signal, webSearch: !!(extra.web || args.web_search === true), register: { sid: askState.sid, role: 'mcp' },
+        ...(extra.files?.length ? { files: extra.files } : {}),
         onChat: id => { if (!target && !askState.chatId) { askState.chatId = id; remember(id); } },
       });
     };
@@ -376,11 +463,154 @@ export function createMcpServer(deps = {}) {
     };
   }
 
+  // ── outils en plus : image, web, fichiers, conversations, consommation ──
+  const str = v => (typeof v === 'string' ? v.trim() : '');
+  let agentsFull = null;
+  async function fullAgents() {
+    if (!agentsFull) {
+      const j = await d.fetchAgentsFull().catch(() => null);
+      const arr = Array.isArray(j) ? j : (j?.data || j?.agents);
+      agentsFull = Array.isArray(arr) ? arr.filter(a => a && a.isActive !== false) : [];
+      if (agentsFull.length) agents = Object.fromEntries(agentsFull.map(a => [String(a.id), a.name]));
+    }
+    return agentsFull;
+  }
+  /** modèle qui sait générer des images (GPT) : celui demandé s'il est GPT, sinon le meilleur GPT du compte */
+  async function imageModel(arg) {
+    const list = await fullAgents();
+    const gpt = list.filter(a => /openai/i.test(String(a.modelProvider || '')) || /\bgpt\b/i.test(String(a.name || '')));
+    if (str(arg)) {
+      const m = await pickModel(arg);
+      if (m.error || !gpt.length || gpt.some(a => String(a.id) === String(m.id))) return m;
+      return { error: `${nameOf(m.id)} ne génère pas d'images. Modèles qui le font : ${gpt.map(a => a.name).join(', ')}.` };
+    }
+    const best = gpt.find(a => /sol/i.test(a.name)) || gpt.find(a => /luna/i.test(a.name)) || gpt[0];
+    return { id: best ? Number(best.id) : -1003 };
+  }
+
+  async function toolImage(args, signal) {
+    const prompt = str(args.prompt);
+    if (!prompt) return textResult('Paramètre « prompt » manquant : décris l\'image à générer.', true);
+    if (!d.hasToken()) return textResult(NO_TOKEN, true);
+    const m = await imageModel(args.model);
+    if (m.error) return textResult(m.error, true);
+    const r = await toolAsk({ prompt: `Génère une image : ${prompt}`, save_dir: args.save_dir, conversation_id: args.conversation_id }, signal, { modelId: m.id });
+    if (r.isError || r.content.some(x => x.type === 'image')) return r;
+    const said = r.content.find(x => x.type === 'text')?.text || '';
+    return textResult(`${nameOf(m.id)} n'a pas généré d'image.${said ? ` Sa réponse : ${said.slice(0, 1500)}` : ''}`, true);
+  }
+
+  async function toolWeb(args, signal) {
+    const q = str(args.question);
+    if (!q) return textResult('Paramètre « question » manquant.', true);
+    return toolAsk({ prompt: q, model: args.model, conversation_id: args.conversation_id }, signal, { web: true });
+  }
+
+  const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|jsonl|ya?ml|toml|ini|xml|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|php|java|kt|go|rs|c|h|cpp|hpp|cs|swift|sql|sh|ps1|bat|lua|luau|log|r|dart|vue|svelte)$/i;
+  const UPLOAD_EXT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', pdf: 'application/pdf' };
+  async function toolFiles(args, signal) {
+    const prompt = str(args.prompt);
+    const paths = (Array.isArray(args.paths) ? args.paths : typeof args.paths === 'string' ? [args.paths] : []).map(str).filter(Boolean);
+    if (!prompt) return textResult('Paramètre « prompt » manquant : dis ce qu\'il faut faire avec les fichiers.', true);
+    if (!paths.length) return textResult('Paramètre « paths » manquant : donne 1 à 5 chemins absolus.', true);
+    if (paths.length > 5) return textResult('5 fichiers au maximum par appel.', true);
+    if (!d.hasToken()) return textResult(NO_TOKEN, true);
+    const ids = [], texts = [];
+    let textBudget = 120_000;
+    for (const p of paths) {
+      if (!path.isAbsolute(p)) return textResult(`Chemin non absolu : ${p}`, true);
+      const why = sensitivePathReason(p);
+      if (why) return textResult(`Refusé : ${p} (${why}). Ce fichier n'est jamais envoyé.`, true);
+      let st = null; try { st = fs.statSync(p); } catch {}
+      if (!st?.isFile()) return textResult(`Fichier introuvable : ${p}`, true);
+      const ext = path.extname(p).slice(1).toLowerCase();
+      if (UPLOAD_EXT[ext]) {
+        if (st.size > 20 * 1024 * 1024) return textResult(`${path.basename(p)} est trop gros (20 Mo au maximum).`, true);
+        try { ids.push(await d.upload(fs.readFileSync(p), path.basename(p), UPLOAD_EXT[ext])); }
+        catch (e) { return textResult(`Envoi de ${path.basename(p)} impossible : ${e?.message || e}`, true); }
+      } else if (TEXT_EXT.test(p)) {
+        const t = fs.readFileSync(p, 'utf8');
+        const cut = t.length > textBudget ? t.slice(0, textBudget) + '\n[… fichier coupé]' : t;
+        textBudget -= cut.length;
+        texts.push(`--- ${path.basename(p)} ---\n${cut}`);
+        if (textBudget <= 0) break;
+      } else return textResult(`Type de fichier non pris en charge : ${path.basename(p)} (images, PDF ou fichiers texte).`, true);
+    }
+    const full = texts.length ? `${prompt}\n\n${texts.join('\n\n')}` : prompt;
+    return toolAsk({ prompt: full, model: args.model, conversation_id: args.conversation_id }, signal, { files: ids });
+  }
+
+  const cleanUser = t => {
+    let s = String(t || '').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '');
+    for (let k = 0; k < 4 && /^\[(?:L'utilisateur|Dossier courant|Info de FS-CLI|Résultats|Contenu de la page|Contexte VS Code|Préférences)[\s\S]*?\]\s*\n/.test(s); k++) s = s.replace(/^\[[\s\S]*?\]\s*\n/, '');
+    const cut = s.search(/\n\n\[(?:Info de FS-CLI|Guide «|Format de réponse|Préférences|Instructions du projet|Outils MCP|Contexte)/);
+    return (cut > 0 ? s.slice(0, cut) : s).trim();
+  };
+  async function toolConversations(args) {
+    if (!d.hasToken()) return textResult(NO_TOKEN, true);
+    const action = str(args.action) || 'list';
+    const id = str(args.conversation_id);
+    const limit = Math.max(1, Math.min(60, Number(args.limit) || 20));
+    if (action === 'list') {
+      const [mine, projects] = await Promise.all([d.listChats(50).catch(() => []), d.listProjects().catch(() => [])]);
+      const all = [], seen = new Set();
+      const add = (arr, project) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); all.push({ id: x.id, title: cleanTitle(x.title), project: project || '', at: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0 }); } };
+      add(mine);
+      const some = (Array.isArray(projects) ? projects : []).filter(p => p?.id).slice(0, 10);
+      (await Promise.all(some.map(p => d.projectChats(p.id).catch(() => [])))).forEach((arr, i) => add(arr, some[i].name));
+      const q = str(args.search).toLowerCase();
+      const list = all.filter(x => !q || x.title.toLowerCase().includes(q)).sort((a, b) => b.at - a.at).slice(0, limit);
+      if (!list.length) return textResult(q ? `Aucune conversation dont le titre contient « ${args.search} ».` : 'Aucune conversation sur le compte.');
+      const when = t => (t ? new Date(t).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '?');
+      return textResult(`${list.length} conversation${list.length > 1 ? 's' : ''} :\n` + list.map(x =>
+        `- ${x.title} · id ${x.id}${x.project ? ` · projet « ${x.project} »` : ''} · ${when(x.at)}${x.id === askState.chatId ? ' · conversation du MCP' : ''}`).join('\n'));
+    }
+    if (!/^[\w-]{8,64}$/.test(id)) return textResult('Paramètre « conversation_id » manquant ou invalide (voir action « list »).', true);
+    const chat = await d.fetchChat(id).catch(() => null);
+    if (!chat) return textResult(`Conversation introuvable : ${id}`, true);
+    if (action === 'select') {
+      askState.chatId = id; remember(id, chat.title || ''); folders.clear();
+      return textResult(`Conversation du MCP : « ${cleanTitle(chat.title)} ». fs_ask, fs_agent, fs_image, fs_web et fs_files l'utilisent désormais.`);
+    }
+    if (action !== 'read') return textResult(`Action inconnue : ${action} (list, read ou select).`, true);
+    const msgs = (chat.chatMessages || []).filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, text: m.role === 'user' ? cleanUser(m.content) : String(m.content || '').trim() })).filter(m => m.text);
+    const last = msgs.slice(-limit);
+    const body = last.map(m => `${m.role === 'user' ? 'Utilisateur' : 'Assistant'} : ${m.text.length > 4000 ? m.text.slice(0, 4000) + ' […]' : m.text}`).join('\n\n');
+    return textResult(`« ${cleanTitle(chat.title)} » · ${msgs.length} message${msgs.length > 1 ? 's' : ''}${msgs.length > last.length ? ` (les ${last.length} derniers)` : ''}\n\n${body || '(aucun message)'}`);
+  }
+
+  async function toolUsage() {
+    if (!d.hasToken()) return textResult(NO_TOKEN, true);
+    const since = lastReset();
+    const [u, mine, projects] = await Promise.all([d.userUsage().catch(() => null), d.listChats(50).catch(() => []), d.listProjects().catch(() => [])]);
+    const ids = new Set();
+    const addAll = arr => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && Date.parse(x.createdAt) >= since) ids.add(x.id); };
+    addAll(mine);
+    const some = (Array.isArray(projects) ? projects : []).filter(p => p?.id).slice(0, 10);
+    (await Promise.all(some.map(p => d.projectChats(p.id).catch(() => [])))).forEach(addAll);
+    const made = Math.max(ids.size, createdToday());
+    const hour = iso => { const t = new Date(iso); return isNaN(t) ? '?' : t.toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' }); };
+    const lines = [];
+    if (u?.chatBudget) lines.push(`Budget de chat : ${Math.round(u.chatBudget.remainingPercent)} % restant (remise à zéro ${hour(u.chatBudget.resetAt)})`);
+    else lines.push('Budget de chat : indisponible');
+    lines.push(`Nouvelles conversations aujourd'hui : ${made} / ${DAILY_LIMIT} (remise à zéro ${hour(new Date(since + 86400000).toISOString())})`);
+    const NAMES = { TRANSCRIPT_UPLOAD: 'Transcriptions (jour)', USER_INVITES: 'Invitations (mois)' };
+    for (const rl of u?.rateLimits || []) lines.push(`${NAMES[rl.type] || String(rl.type || '?').toLowerCase().replace(/_/g, ' ')} : ${rl.used} / ${rl.limit} (remise à zéro ${hour(rl.resetAt)})`);
+    if (u?.rateLimitPowerUpActive) lines.push('Power-up actif : limites doublées');
+    return textResult(lines.join('\n'));
+  }
+
   async function callTool(params, signal) {
     const name = params?.name, args = params?.arguments && typeof params.arguments === 'object' ? params.arguments : {};
     if (name === 'fs_models') return toolModels();
     if (name === 'fs_ask') return serial(() => toolAsk(args, signal));
     if (name === 'fs_agent') { const progress = progressFor(params); return serial(() => toolAgent(args, signal, progress)); }
+    if (name === 'fs_image') return serial(() => toolImage(args, signal));
+    if (name === 'fs_web') return serial(() => toolWeb(args, signal));
+    if (name === 'fs_files') return serial(() => toolFiles(args, signal));
+    if (name === 'fs_conversations') return toolConversations(args);
+    if (name === 'fs_usage') return toolUsage();
     return null;
   }
 

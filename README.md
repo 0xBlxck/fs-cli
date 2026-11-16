@@ -131,11 +131,16 @@ Cette commande ajoute le serveur **`france-student`** (`node <chemin>/cli.js --m
 
 Seule l'entrée `france-student` est ajoutée ou mise à jour : tes autres serveurs ne bougent pas, une copie `.bak` est faite avant chaque modification, et un fichier illisible n'est jamais touché. **Redémarre ensuite l'application de l'agent.** Pour Claude Code, ferme-le avant de lancer la commande, sinon il risque de réécrire son fichier par-dessus.
 
-L'agent voit alors trois outils :
+L'agent voit alors huit outils :
 
 - **`fs_models`** : la liste des modèles France Student (id, nom, taille du contexte).
-- **`fs_ask`** : pose une question à un modèle (texte seulement, sans accès à tes fichiers). Une seule conversation est réutilisée, même après un redémarrage, pour ne pas encombrer ton compte ni la limite de 50 nouvelles conversations par jour. `new_conversation: true` en démarre une nouvelle, `conversation_id` en vise une précise.
+- **`fs_ask`** : pose une question à un modèle (sans accès à tes fichiers ; `web_search: true` pour qu'il cherche sur le web). Une seule conversation est réutilisée, même après un redémarrage, pour ne pas encombrer ton compte ni la limite de 50 nouvelles conversations par jour. `new_conversation: true` en démarre une nouvelle, `conversation_id` en vise une précise.
 - **`fs_agent`** : lance le vrai agent FS-CLI dans un dossier (`task`, `folder` en chemin absolu, `model` facultatif). Il renvoie le compte rendu du modèle, les fichiers modifiés et le nombre d'appels d'outils. Il utilise la même conversation que `fs_ask`.
+- **`fs_image`** : génère une image avec le meilleur modèle GPT du compte et la renvoie directement (`save_dir` pour l'enregistrer aussi).
+- **`fs_web`** : répond à une question avec la recherche web de France Student (actualité, docs récentes, versions…).
+- **`fs_files`** : fait analyser 1 à 5 fichiers du PC (images, PDF, code, Markdown, CSV, logs…). Les fichiers sensibles (`.env`, clés, mots de passe, dossiers système) sont toujours refusés.
+- **`fs_conversations`** : liste tes conversations (celles du site et de tes projets comprises), en relit une, ou la choisit comme conversation du MCP.
+- **`fs_usage`** : ce qu'il reste du budget du jour et des 50 nouvelles conversations.
 
 **Choisir où le MCP parle** : au premier appel de chaque session, un IDE qui sait afficher des formulaires (Claude Code…) ouvre une fenêtre pour choisir la conversation (celle du MCP, une nouvelle, ou une de tes conversations du site) et le projet où la ranger. Ailleurs, ou pour régler ça une fois pour toutes : `/mcp conversation` dans fs-cli, puis redémarre l'agent.
 
