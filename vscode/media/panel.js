@@ -62,7 +62,8 @@
   tools.append(bPlus, bSlash, bModel, h('div', 'spacer'), bMode, bSend);
   box.append(ctxbar, ta, tools);
   const foot = h('div', 'foot'); const footL = h('span', 'fdir'); const footR = h('span'); foot.append(footL, footR);
-  footL.onclick = () => {                                              // changer à tout moment où l'IA travaille et où elle écrit
+  footL.onclick = e => {                                               // changer à tout moment où l'IA travaille et où elle écrit
+    e.stopPropagation();                                               // sinon le clic remonte et referme aussitôt le menu
     if (S.busy) return showFlash('attends la fin de la réponse');
     const st = S.status || {};
     const items = [

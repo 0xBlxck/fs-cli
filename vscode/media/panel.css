@@ -270,7 +270,7 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 /* ── sélecteur de conversations (façon Claude Code) ── */
 #app { position: relative; }
 .pop { position: absolute; top: 40px; right: 10px; width: min(380px, calc(100% - 20px)); max-height: min(460px, calc(100vh - 60px)); display: flex; flex-direction: column; background: var(--vscode-editorWidget-background, var(--panel-bg)); border: 1px solid var(--border); border-radius: 9px; box-shadow: 0 10px 30px rgba(0,0,0,.45); z-index: 15; padding: 6px; }
-.ptabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--box); border-radius: 7px; padding: 3px; }
+.ptabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; background: var(--box); border-radius: 7px; padding: 3px; }
 .ptab { padding: 4px 0; border-radius: 5px; font-size: 12px; color: var(--dim); }
 .ptab.on { background: var(--hover); color: var(--fg); }
 .pf { margin: 6px 0; background: var(--box); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; font: inherit; font-size: 12.5px; outline: none; }
