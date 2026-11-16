@@ -53,6 +53,7 @@ export async function compactSession(S, { instruction = '', signal } = {}) {
 export function compactLimit(S) {
   if (cfg.compactTokens > 0) return cfg.compactTokens;
   const win = Number(S.ctxWindows?.[String(S.agentId)]) || 0;
+  if (win && win < 200000) return Math.max(30000, Math.round(win * 0.45));   // petit contexte (Haiku 100k) : résumé plus tôt, une longue conversation le rend plus frileux
   return win ? Math.max(60000, Math.min(200000, Math.round(win * 0.3))) : 80000;
 }
 

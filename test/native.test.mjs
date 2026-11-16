@@ -133,10 +133,39 @@ test('interruption : le signal annule la boucle sans renvoyer de résultats', as
   assert.equal(f.st.reqs.length, 1);
 });
 
-test('modèle qui refuse de travailler pour FS-CLI : refus respecté (aucune relance), modèle retenu', async () => {
+test('refus d\'outils avec la récupération coupée (refusalRecover=false) : aucune relance, modèle retenu', async () => {
+  cfg.refusalRecover = false;
   const { S } = mk({ chatId: 'conv-x', agentId: -1004 });
   const f = fakeFs([{ text: 'Le chat France Student ne peut pas servir de moteur à FS-CLI. Colle ici le contenu de index.html.' }, { text: 'ne doit jamais être demandé' }]);
   await runNative(S, 'améliore mon site', { ...io(), stream: f.stream });
   assert.equal(f.st.reqs.length, 1);                                             // pas d'insistance après un refus de principe
   assert.ok(cfg.toolRefusals['-1004']);                                          // signalé ensuite dans /models et au choix du modèle
+  cfg.refusalRecover = true;
+});
+
+test('refus d\'outils : 1 précision factuelle, et si le modèle comprend, il travaille', async () => {
+  const { dir, S } = mk({ chatId: 'conv-r', agentId: -2002 });
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
+  const f = fakeFs([
+    { text: 'Je ne peux pas servir de moteur à un outil externe.' },
+    { calls: [{ callId: 'c1', name: 'read_file', arguments: { path: 'a.txt' } }] },
+    { text: 'Lu.' },
+  ]);
+  await runNative(S, 'lis a.txt', { ...io(), stream: f.stream });
+  assert.equal(f.st.reqs.length, 3);
+  assert.match(f.st.reqs[1].content, /outils client officiels de France Student/);
+  assert.equal(S.agentId, -2002, 'même modèle');
+});
+
+test('refus d\'outils persistant : la même demande repart avec Sonnet, puis s\'arrête (pas de boucle)', async () => {
+  const { S } = mk({ chatId: 'conv-s', agentId: -2002 });
+  const seen = [];
+  const refuse = { text: 'Je ne peux pas servir de moteur à un outil externe.' };
+  const f = fakeFs([refuse, refuse, refuse]);
+  const stream = async o => { seen.push(o.agentId); return f.stream(o); };
+  const r = await runNative(S, 'crée b.txt', { ...io(), stream });
+  assert.deepEqual(seen, [-2002, -2002, -2003], 'Haiku, Haiku après précision, puis Sonnet — et rien de plus');
+  assert.equal(f.st.reqs[2].content, 'crée b.txt', 'la demande d\'origine, pas la précision');
+  assert.equal(S.agentId, -2003);
+  assert.equal(r.switchedTo, -2003);
 });

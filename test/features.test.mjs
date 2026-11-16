@@ -260,7 +260,8 @@ test('résumé automatique : seuil adapté à la fenêtre de contexte du modèle
     cfg.compactTokens = 0;
     const S = w => ({ agentId: 7, ctxWindows: { 7: w } });
     assert.equal(compactLimit(S(1000000)), 200000);
-    assert.equal(compactLimit(S(100000)), 60000);
+    assert.equal(compactLimit(S(100000)), 45000);                   // Haiku : résumé plus tôt
+    assert.equal(compactLimit(S(272000)), 81600);
     assert.equal(compactLimit({ agentId: 7 }), 80000);
     cfg.compactTokens = 150000;
     assert.equal(compactLimit(S(1000000)), 150000);

@@ -928,7 +928,9 @@ async function chatTurn(text, { keepLast = false } = {}) {
     mem.observe(text, S.cwd);
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);
     try {
+      const agentBefore = S.agentId;
       await runAgent(S, message, { signal: turnAbort.signal, ask });
+      if (S.agentId !== agentBefore) { saveSession(); refreshPrompt(); }   // refus d'outils : la demande est repartie avec Sonnet → modèle affiché à jour
       if (S.chatId && S.pendingSummary) { S.pendingSummary = null; S.compactedFrom = null; }   // nouvelle conversation ouverte avec le résumé
       if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));
       if (!opts.stdio && ui.tasks.blocks > 1 && ui.tasks.list.length) {               // liste mise à jour pendant le travail : état final écrit une seule fois
