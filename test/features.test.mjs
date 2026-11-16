@@ -307,3 +307,14 @@ test('webhook : https obligatoire (http seulement en local), envoi JSON réel ve
     assert.equal(await notifyWebhook({ event: 'x' }), false, 'adresse non autorisée : rien envoyé');
   } finally { cfg.webhook = prev; srv.close(); }
 });
+
+test('modèles rangés du plus puissant au moins puissant, groupés par fournisseur (terminal et panneau)', async () => {
+  const { sortedModelIds } = await import('../src/models-order.js');
+  const agents = { 66: 'gpt-5.6-terra', 65: 'gpt-5.6-luna', 64: 'gpt-5.6-sol', '-1001': 'GPT 6 Sol', '-1002': 'GPT 6 Luna', '-1003': 'GPT 6.1 Sol', '-1004': 'GPT-6 Astra', '-1005': 'GPT-6.1 Terra',
+    '-2001': 'Claude Opus 5.5', '-2002': 'Claude Haiku 5.5', '-2003': 'Claude Sonnet 5.5', '-2005': 'Claude Fable 5.2' };
+  assert.deepEqual(sortedModelIds(agents).map(id => agents[id]), ['Claude Fable 5.2', 'Claude Opus 5.5', 'Claude Sonnet 5.5', 'Claude Haiku 5.5',
+    'GPT-6 Astra', 'GPT 6.1 Sol', 'GPT-6.1 Terra', 'GPT 6 Sol', 'GPT 6 Luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+  const panel = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'vscode', 'media', 'panel.js'), 'utf8');
+  assert.match(panel, /\['fable', 'opus', 'sonnet', 'haiku'\]/, 'le panneau suit la même règle');
+  assert.match(panel, /\['astra', 'sol', 'terra', 'luna'\]/);
+});

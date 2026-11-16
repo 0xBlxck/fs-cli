@@ -505,11 +505,20 @@
     { key: 'google', name: 'Google', test: m => /google|gemini/i.test(m.provider + ' ' + m.name), icon: "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"#4F8DF7\"><path d=\"M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81\"/></svg>" },
   ];
   const ctxLabel = n => (!n ? '' : n >= 1e6 ? `${n / 1e6} M` : `${Math.round(n / 1000)} k`);
+  /** du plus puissant au moins puissant : Claude Fable > Opus > Sonnet > Haiku ; GPT : Astra (phare), puis la version la plus récente, Sol > Terra > Luna */
+  function modelRank(name) {
+    const n = String(name || '').toLowerCase(), ver = parseFloat((n.match(/(\d+(?:\.\d+)?)/) || [])[1]) || 0;
+    const claude = ['fable', 'opus', 'sonnet', 'haiku'].findIndex(k => n.includes(k));
+    if (claude >= 0) return [claude, -ver, 0];
+    const tier = ['astra', 'sol', 'terra', 'luna'].findIndex(k => n.includes(k));
+    return [tier === 0 ? 0 : 1, -ver, tier < 0 ? 9 : tier];
+  }
+  const byPower = (a, b) => { const x = modelRank(a.name), y = modelRank(b.name); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
   function modelMenu() {
     if (S.menu && !S.menu.filter) return closeMenu();
     const items = [], used = new Set();
     for (const p of [...PROVIDERS, { key: 'autres', name: 'Autres', test: () => true, icon: '' }]) {
-      const group = S.models.filter(m => !used.has(m.id) && p.test(m));
+      const group = S.models.filter(m => !used.has(m.id) && p.test(m)).sort(byPower);
       if (!group.length) continue;
       group.forEach(m => used.add(m.id));
       items.push({ section: p.name });

@@ -34,6 +34,7 @@ import { uploadFile } from './src/api.js';
 import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
+import { sortedModelIds } from './src/models-order.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
@@ -142,7 +143,7 @@ function resolveModel(arg) {
   arg = String(arg || '').trim();
   if (!arg) return null;
   if (AGENTS[arg]) return parseInt(arg);
-  const keys = Object.keys(AGENTS);
+  const keys = sortedModelIds(AGENTS);                               // du plus puissant au moins puissant (n° de /models, recherche par nom)
   if (/^\d{1,2}$/.test(arg) && keys[parseInt(arg) - 1]) return parseInt(keys[parseInt(arg) - 1]);
   const low = arg.toLowerCase();
   const hit = keys.find(k => AGENTS[k].toLowerCase() === low) || keys.find(k => AGENTS[k].toLowerCase().includes(low));
@@ -593,7 +594,7 @@ async function command(line) {
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
-      println(); Object.entries(AGENTS).forEach(([id, n], i) =>
+      println(); sortedModelIds(AGENTS).map(id => [id, AGENTS[id]]).forEach(([id, n], i) =>
         println(`  ${c.dim(String(i + 1).padStart(2))}  ${c.dim(id.padStart(6))}  ${n}${id === String(S.agentId) ? c.accent('  ◀') : ''}${cfg.toolRefusals?.[id] ? c.dim('  · a refusé les outils une fois') : ''}`));
       return println();
     }
