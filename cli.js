@@ -444,11 +444,13 @@ const extraEnv = () => ({
   chatTurn: (t, o) => chatTurn(t, o),
   ...(opts.stdio && panelAtLeast('0.4.0') ? { mcpPanel: () => openMcpPanel() } : {}),
   ...(opts.stdio && panelAtLeast('0.5.0') ? { card: data => stdioSend('card', data) } : {}),
+  ...(opts.stdio && PANEL_FEATURES.has('agents') ? { agentMap: true } : {}),   // le panneau affiche l'équipe d'agents en bloc « Agents »
 });
 
 const PANEL_VER = String(process.env.FS_CLI_PANEL || '');            // version de l'extension qui pilote ce CLI (vide = ancienne extension)
 const verNum = v => String(v || '0').split('.').map(n => parseInt(n, 10) || 0).reduce((a, n) => a * 1000 + n, 0);
 const panelAtLeast = v => !!PANEL_VER && verNum(PANEL_VER) >= verNum(v);
+const PANEL_FEATURES = new Set(String(process.env.FS_CLI_PANEL_FEATURES || '').split(',').map(s => s.trim()).filter(Boolean));   // ce que sait afficher le panneau (ex. « agents »)
 
 /** sessions dont la conversation existe encore sur le site (vérification légère, en parallèle). Une conversation supprimée est marquée et masquée ;
  *  si aucune vérification n'aboutit (réseau coupé), on ne masque rien. */
