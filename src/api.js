@@ -5,8 +5,8 @@ import https from 'node:https';
 import { TOKEN, VERSION, cfg, saveCfg } from './config.js';
 import { register as registerChat, localTime } from './chats.js';
 
-const HOST = 'api.francestudent.ai';
-// Identification honnête (pas de faux navigateur) ; le token ne part que vers api.francestudent.ai en HTTPS
+const HOST = 'api.francestudent.org';                       // adresse utilisée par le site officiel (l'ancienne, .ai, répond parfois en 30 s)
+// Identification honnête (pas de faux navigateur) ; le token ne part que vers api.francestudent.org en HTTPS
 const baseHeaders = () => ({
   'Authorization': `Bearer ${TOKEN}`,
   'User-Agent': `fs-cli/${VERSION} (client communautaire non officiel)`,

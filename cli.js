@@ -452,29 +452,40 @@ const verNum = v => String(v || '0').split('.').map(n => parseInt(n, 10) || 0).r
 const panelAtLeast = v => !!PANEL_VER && verNum(PANEL_VER) >= verNum(v);
 const PANEL_FEATURES = new Set(String(process.env.FS_CLI_PANEL_FEATURES || '').split(',').map(s => s.trim()).filter(Boolean));   // ce que sait afficher le panneau (ex. « agents »)
 
-/** sessions dont la conversation existe encore sur le site (vérification légère, en parallèle). Une conversation supprimée est marquée et masquée ;
- *  si aucune vérification n'aboutit (réseau coupé), on ne masque rien. */
-async function liveSessions(limit = 50) {
+/** conversations du compte vues au dernier passage (affichées tout de suite à l'ouverture suivante) */
+let remoteCache = [];
+const within = (p, ms, dflt) => Promise.race([Promise.resolve(p).catch(() => dflt), new Promise(r => setTimeout(() => r(dflt), ms).unref?.())]);
+
+/** sessions dont la conversation existe encore sur le site + conversations du compte absentes de ce PC (autre PC, site, projets).
+ *  Rapide : onQuick reçoit tout de suite la liste locale (+ celles du compte vues la dernière fois), puis UN passage réseau en parallèle :
+ *  listes du compte et des projets ; seules les conversations locales récentes absentes de ces listes sont vérifiées une à une.
+ *  Une conversation supprimée est marquée et masquée ; si rien ne répond (réseau coupé), on ne masque rien. */
+async function liveSessions(limit = 50, onQuick) {
   const list = loadSessions().filter(s => s.chatId && !s.gone).slice(0, limit);
-  const check = s => Promise.race([fetchChatUsage(s.chatId).then(r => !!r).catch(() => null), new Promise(r => setTimeout(() => r(null), 5000))]);
-  const res = [];
-  for (let i = 0; i < list.length; i += 8) res.push(...await Promise.all(list.slice(i, i + 8).map(check)));
-  if (list.length && !res.some(Boolean)) return list;                // rien n'a répondu : réseau ? on montre tout (jamais quand ce PC n'a encore aucune conversation)
-  markSessionsGone(list.filter((s, i) => res[i] === false).map(s => s.chatId));   // seulement un « n'existe pas » net
-  const local = list.filter((s, i) => res[i] !== false);              // délai dépassé : gardée (dans le doute, on montre)
-  // conversations du compte absentes de ce PC (faites sur un autre PC ou sur le site) : liste du compte + celles rangées dans ses projets
-  const known = new Set(loadSessions().map(s => s.chatId));
-  const remote = [];
-  const add = (arr, project) => { for (const x of arr || []) if (x?.id && !known.has(x.id) && !remote.some(r => r.chatId === x.id)) remote.push({ chatId: x.id, title: String(x.title || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, ''), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: project || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); };
-  const projectChats = async p => (await requestJson('GET', `/projects/${encodeURIComponent(p.id)}/chats`).catch(() => ({}))).data;
+  const merge = (local, remote) => {
+    const ids = new Set(local.map(s => s.chatId));
+    return [...local, ...remote.filter(r => !ids.has(r.chatId))].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
+  };
+  try { onQuick?.(merge(list, remoteCache)); } catch {}
+  const clean = t => String(t || '(sans titre)').replace(/^[[0-9a-f]{4}(?:·[^]]*)?]s*/i, '');
+  const seen = new Set(), remote = [];
+  const add = (arr, project) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); remote.push({ chatId: x.id, title: clean(x.title), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: project || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); } };
   const chatsOf = j => (Array.isArray(j) ? j : j?.chats);
-  try {
-    const [mine, projects] = await Promise.all([fetchChatsList(50).catch(() => []), listFsProjects().catch(() => [])]);
-    add(mine);
-    const some = projects.filter(p => p?.id).slice(0, 15);            // une conversation rangée dans un projet n'apparaît plus dans la liste générale du site
-    (await Promise.all(some.map(p => projectChats(p).catch(() => null)))).forEach((j, i) => add(chatsOf(j), some[i].name));
-  } catch {}
-  return [...local, ...remote].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
+  const [mine, projects] = await Promise.all([within(fetchChatsList(50), 6000, null), within(listFsProjects(), 6000, null)]);
+  add(mine);
+  const some = (projects || []).filter(p => p?.id).slice(0, 15);      // une conversation rangée dans un projet n'apparaît plus dans la liste générale du site
+  const toCheck = list.filter(s => !seen.has(s.chatId)).slice(0, 15); // les autres : présentes dans les listes du compte = elles existent
+  const [projChats, res] = await Promise.all([
+    Promise.all(some.map(p => within(requestJson('GET', `/projects/${encodeURIComponent(p.id)}/chats`).then(r => r.data), 6000, null))),
+    Promise.all(toCheck.map(s => within(fetchChatUsage(s.chatId).then(r => !!r), 4000, null))),
+  ]);
+  projChats.forEach((j, i) => add(chatsOf(j), some[i].name));
+  const answered = mine !== null || res.some(r => r !== null && r !== undefined);
+  const gone = new Set(answered ? toCheck.filter((s, i) => res[i] === false && !seen.has(s.chatId)).map(s => s.chatId) : []);   // seulement un « n'existe pas » net
+  if (gone.size) markSessionsGone([...gone]);
+  const local = list.filter(s => !gone.has(s.chatId)).map(s => { const r = remote.find(x => x.chatId === s.chatId); return r?.project && !s.project ? { ...s, project: r.project } : s; });
+  if (mine !== null) remoteCache = remote.filter(r => !list.some(s => s.chatId === r.chatId));
+  return merge(local, remote.filter(r => !local.some(s => s.chatId === r.chatId)));
 }
 
 /** messages d'une conversation, sans les ajouts internes de FS-CLI (étiquette, notes, consignes jointes) */
@@ -1087,10 +1098,12 @@ if (opts.stdio) {                                                    // commande
   });
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
-    stdioSend('history', { sessions: (await liveSessions(80)).map(s => ({
+    const send = (list, partial) => stdioSend('history', { partial, sessions: list.map(s => ({
       chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });
+    // liste immédiate (panneau récent seulement : un ancien panneau rouvrirait sa fenêtre à la 2e liste), puis la liste vérifiée
+    send(await liveSessions(80, panelAtLeast('0.10.1') ? quick => send(quick, true) : null), false);
   });
   input.on('resumeChat', async chatId => {
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de conversation' });

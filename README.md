@@ -216,7 +216,7 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 
 Résumé ; le détail et le modèle de menace sont dans [SECURITY.md](SECURITY.md).
 
-- **Ta clé** n'est envoyée qu'à `api.francestudent.ai` (HTTPS), n'est jamais affichée ni journalisée, et **n'est pas transmise** aux commandes, scripts et serveurs MCP que le CLI lance.
+- **Ta clé** n'est envoyée qu'à `api.francestudent.org` (l’adresse du site officiel, en HTTPS), n'est jamais affichée ni journalisée, et **n'est pas transmise** aux commandes, scripts et serveurs MCP que le CLI lance.
 - **Confiance par dossier** : le CLI demande avant d'agir dans un nouveau dossier. S'il doit écrire **en dehors** du dossier de travail, il te le demande une fois (« faire confiance à ce dossier » évite les questions suivantes).
 - **Commandes analysées** : refus net (formatage de disque, code téléchargé puis exécuté, `git push --force`, suppression de la racine ou du dossier personnel…), confirmation (suppressions, `git push`, installations globales, `npx`…) ou autorisation.
 - **Fichiers sensibles** (`.env`, clés, `.ssh`…) et **secrets** écrits dans un fichier : toujours une confirmation, même en mode auto.

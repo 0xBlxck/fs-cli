@@ -9,7 +9,7 @@ Utilise **« Report a vulnerability »** (onglet *Security* du dépôt, signalem
 
 | Donnée | Où | Protection |
 |---|---|---|
-| Ton token de session France Student (`FS_SESSION_TOKEN`) | un fichier `.env` **que tu crées toi-même** (ou une variable d'environnement) | lu au démarrage puis **retiré de l'environnement** : les commandes du modèle, Python et les serveurs MCP lancés par le CLI ne le voient pas. Envoyé **uniquement** à `api.francestudent.ai` en HTTPS. Jamais écrit dans un journal ni affiché. `.env` est dans `.gitignore`. |
+| Ton token de session France Student (`FS_SESSION_TOKEN`) | un fichier `.env` **que tu crées toi-même** (ou une variable d'environnement) | lu au démarrage puis **retiré de l'environnement** : les commandes du modèle, Python et les serveurs MCP lancés par le CLI ne le voient pas. Envoyé **uniquement** à `api.francestudent.org` (l’adresse du site officiel) en HTTPS. Jamais écrit dans un journal ni affiché. `.env` est dans `.gitignore`. |
 | Sessions, historique, mémoire, règles « toujours autoriser » | `~/.fs-cli/` | fichiers locaux, jamais envoyés ailleurs |
 | Contenu de tes messages et des fichiers que tu joins | envoyé à France Student comme n'importe quel message | — |
 

@@ -745,6 +745,7 @@
   function histShow(ev) {
     if (ev.sessions) clearTimeout(HIST.timer);
     HIST.data = ev.sessions;
+    HIST.partial = !!ev.partial;                                       // liste instantanée : la liste vérifiée suit
     if (!HIST.el) {
       const pop = h('div', 'pop');
       const tabs = h('div', 'ptabs');
@@ -771,6 +772,7 @@
     const q = HIST.filter.value.trim().toLowerCase();
     let items = HIST.data.filter(s => !q || s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q));
     if (HIST.tab === 'here') items = items.filter(s => s.here);
+    if (!items.length && HIST.partial && !q) { list.append(h('div', 'pnote', 'Chargement…')); return; }
     if (!items.length) { list.append(h('div', 'pnote', q ? 'Aucune conversation ne correspond.' : HIST.tab === 'here' ? 'Aucune conversation dans ce dossier (onglet « Tous » pour les autres).' : 'Aucune conversation enregistrée.')); return; }
     for (const s of items) {
       const row = h('div', 'prow' + (s.current ? ' cur' : ''));
@@ -780,6 +782,7 @@
       row.onclick = () => { histClose(); if (!s.current) post({ type: 'resumeChat', chatId: s.chatId }); };
       list.append(row);
     }
+    if (HIST.partial) list.append(h('div', 'pnote', 'Mise à jour…'));
   }
   document.addEventListener('keydown', e => { if (HIST.el && e.key === 'Escape') { e.preventDefault(); histClose(); } });
 
@@ -1090,7 +1093,7 @@
       case 'agentStart': case 'agentUpdate': case 'agentDone': agentEv(ev); break;
       case 'teamDone': teamDone(ev); break;
       case 'skills': skShow(ev); break;
-      case 'history': histShow(ev); break;
+      case 'history': if (HIST.el) histShow(ev); break;               // fenêtre fermée entre-temps : on ne la rouvre pas
       case 'transcript': transcript(ev); break;
       case 'mcpStatus': mcpStatus(ev); break;
       case 'mcpLoginUrl': mcpStatus({ name: ev.name, loginUrl: ev.url }); break;
