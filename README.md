@@ -134,8 +134,10 @@ Seule l'entrée `france-student` est ajoutée ou mise à jour : tes autres serve
 L'agent voit alors trois outils :
 
 - **`fs_models`** : la liste des modèles France Student (id, nom, taille du contexte).
-- **`fs_ask`** : pose une question à un modèle (texte seulement, sans accès à tes fichiers). Une seule conversation est réutilisée pendant toute la session, pour ménager la limite de 50 nouvelles conversations par jour. `new_conversation: true` en démarre une nouvelle.
-- **`fs_agent`** : lance le vrai agent FS-CLI dans un dossier (`task`, `folder` en chemin absolu, `model` facultatif). Il renvoie le compte rendu du modèle, les fichiers modifiés et le nombre d'appels d'outils. Une conversation est réutilisée par dossier.
+- **`fs_ask`** : pose une question à un modèle (texte seulement, sans accès à tes fichiers). Une seule conversation est réutilisée, même après un redémarrage, pour ne pas encombrer ton compte ni la limite de 50 nouvelles conversations par jour. `new_conversation: true` en démarre une nouvelle, `conversation_id` en vise une précise.
+- **`fs_agent`** : lance le vrai agent FS-CLI dans un dossier (`task`, `folder` en chemin absolu, `model` facultatif). Il renvoie le compte rendu du modèle, les fichiers modifiés et le nombre d'appels d'outils. Il utilise la même conversation que `fs_ask`.
+
+**Choisir où le MCP parle** : au premier appel de chaque session, un IDE qui sait afficher des formulaires (Claude Code…) ouvre une fenêtre pour choisir la conversation (celle du MCP, une nouvelle, ou une de tes conversations du site) et le projet où la ranger. Ailleurs, ou pour régler ça une fois pour toutes : `/mcp conversation` dans fs-cli, puis redémarre l'agent.
 
 Règles de sécurité de `fs_agent` (personne n'est là pour répondre aux confirmations) :
 
