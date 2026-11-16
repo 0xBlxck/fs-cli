@@ -125,6 +125,7 @@ class Chat {
       if (k < 0) continue;                                         // tout ce qui n'est pas un événement est ignoré
       let ev; try { ev = JSON.parse(line.slice(k + 1)); } catch { continue; }
       if (ev.type === 'diffBefore') { const r = this.pendingDiff.get(ev.id); if (r) { this.pendingDiff.delete(ev.id); r(ev); } continue; }
+      if (ev.type === 'pickFolder') { this.pickFolder(String(ev.purpose || 'trust'), ev.title); continue; }   // FS-CLI demande un dossier (confiance)
       if (ev.type === 'status') { if (ev.title !== undefined) this.onTitle?.(ev.title); if (ev.cwd) this.cwd = ev.cwd; }
       if (ev.type === 'busy' && !ev.busy) this.closeProposals();          // tour terminé (ou interrompu) : plus aucune proposition en attente
       if (ev.type === 'select' && ev.proposal && typeof ev.proposal.after === 'string') {
@@ -136,6 +137,17 @@ class Chat {
   }
 
   toCli(m) { if (this.proc && this.proc.stdin.writable) this.proc.stdin.write(JSON.stringify(m) + '\n'); }
+
+  /** sélecteur de dossiers de l'éditeur → FS-CLI (dossier de travail, dossier où écrire, ou réponse à la question de confiance) */
+  async pickFolder(purpose, title) {
+    const label = purpose === 'target' ? 'Écrire les fichiers ici' : 'Travailler dans ce dossier';
+    let uri;
+    try {
+      const r = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, openLabel: label, title: title || label, defaultUri: this.cwd ? vscode.Uri.file(this.cwd) : undefined });
+      uri = r && r[0];
+    } catch {}
+    this.toCli({ type: 'folderPicked', purpose, path: uri ? uri.fsPath : '' });
+  }
 
   async fromPanel(m) {
     if (!m || typeof m !== 'object') return;
@@ -156,6 +168,8 @@ class Chat {
       case 'skillsOpen': return this.toCli({ type: 'skillsOpen' });
       case 'skillToggle': return this.toCli({ type: 'skillToggle', kind: String(m.kind || ''), name: String(m.name || '') });
       case 'resumeChat': return this.toCli({ type: 'resumeChat', chatId: String(m.chatId || '') });
+      case 'projectUse': return this.toCli({ type: 'projectUse', id: String(m.id || '') });
+      case 'pickFolder': return this.pickFolder(m.purpose === 'target' ? 'target' : 'cwd');
       case 'ask': return this.toCli({ type: 'ask', id: m.id, text: String(m.text ?? '') });
       case 'interrupt': return this.toCli({ type: 'interrupt' });
       case 'setMode': return this.toCli({ type: 'setMode', mode: String(m.mode) });

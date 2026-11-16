@@ -20,6 +20,7 @@ const ENV = { ...process.env, FS_CLI_HOME: fsHome, FS_IMPORT_HOME: home, FS_SESS
 const srv = await import('../src/mcp-server.js');
 const { cfg, FILES } = await import('../src/config.js');
 const { trustFolder } = await import('../src/trust.js');
+cfg.mcpAskWhere = false;                                             // par défaut ici : pas de question « où écrire » (testée à part)
 
 /** lance « fs-cli --mcp », envoie les lignes, attend `want` réponses ; renvoie les messages reçus et la sortie brute */
 function talk(lines, want) {
@@ -201,7 +202,7 @@ test('fs_ask : une image générée par France Student est renvoyée à l\'agent
 });
 
 test('conversation du MCP : retenue d\'un démarrage à l\'autre, conversation_id ponctuel, conversation supprimée → une neuve', async () => {
-  cfg.mcpChat = null; cfg.mcpAskWhere = true;
+  cfg.mcpChat = null; cfg.mcpAskWhere = false;   // ici on teste la conversation retenue, pas la question
   const reqs = [];
   let n = 0;
   const stream = async o => {
@@ -274,13 +275,22 @@ test('IDE avec formulaires (elicitation) : choix de la conversation et du projet
   const saved = JSON.parse(fs.readFileSync(FILES.cfg, 'utf8'));
   assert.equal(saved.mcpAskWhere, false, 'ne plus demander');
   assert.equal(saved.mcpProject, false, 'aucun projet');
-  // 5) un IDE sans formulaires : aucune question, choix enregistré
+  // 5) un IDE sans formulaires (Antigravity…) : rien n'est envoyé, l'agent doit demander à l'utilisateur ; son choix vaut pour la session
   cfg.mcpAskWhere = true; sent.length = 0;
-  s = srv.createMcpServer({ hasToken: () => true, notify, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }), listChats: async () => [], listProjects: async () => [] });
+  const nBefore = reqs.length;
+  s = srv.createMcpServer({ hasToken: () => true, notify, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }),
+    listChats: async () => [{ id: 'site-conv-888', title: '[cd34] Mes révisions...' }], listProjects: async () => [], projectChats: async () => [] });
   await s.handle({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {} } });
-  await ask({ prompt: 'v' });
-  assert.equal(sent.length, 0);
-  assert.equal(reqs.at(-1), 'neuve-1');
+  const q = await ask({ prompt: 'v' });
+  assert.equal(sent.length, 0, 'aucune fenêtre demandée à un IDE qui ne sait pas l\'afficher');
+  assert.equal(reqs.length, nBefore, 'rien envoyé à France Student');
+  assert.match(q.content[0].text, /DEMANDE-LUI/); assert.match(q.content[0].text, /"mcp"/); assert.match(q.content[0].text, /"new"/);
+  assert.match(q.content[0].text, /Mes révisions\.\.\. · id site-conv-888/);
+  await ask({ prompt: 'w', conversation_id: 'site-conv-888' });     // l'utilisateur a choisi une de ses conversations
+  assert.equal(reqs.at(-1), 'site-conv-888');
+  await ask({ prompt: 'x' });                                         // plus de question ensuite : même conversation
+  assert.equal(reqs.at(-1), 'site-conv-888');
+  assert.equal(cfg.mcpChat.id, 'site-conv-888');
   const { setProjectOverride } = await import('../src/api.js');
   setProjectOverride(undefined);
 });
@@ -372,3 +382,23 @@ test('nouveaux outils : fs_image (GPT choisi), fs_web (recherche web), fs_files 
   cfg.mcpAskWhere = true; cfg.mcpChat = null;
 });
 
+
+test('IDE sans fenêtre (Antigravity) : "new" et "mcp" sont compris, le choix vaut pour la session', async () => {
+  cfg.mcpChat = { id: 'mcp-existante', title: 'MCP' }; cfg.mcpAskWhere = true;
+  const reqs = [];
+  const stream = async o => { reqs.push(o.chatId); if (!o.chatId) o.onChat?.('neuve-xyz'); return { text: 'ok' }; };
+  const mk = () => srv.createMcpServer({ hasToken: () => true, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }), listChats: async () => [], listProjects: async () => [], projectChats: async () => [] });
+  const call = async (s, a) => (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_ask', arguments: a } })).result;
+  let s = mk();
+  assert.match((await call(s, { prompt: 'a' })).content[0].text, /"mcp" : la conversation du MCP/);
+  await call(s, { prompt: 'b', conversation_id: 'mcp' });
+  await call(s, { prompt: 'c' });
+  assert.deepEqual(reqs, ['mcp-existante', 'mcp-existante']);
+  s = mk();
+  await call(s, { prompt: 'd' });                                     // nouvelle session : on redemande
+  await call(s, { prompt: 'e', conversation_id: 'new' });
+  assert.equal(reqs.at(-1), null, 'nouvelle conversation');
+  await call(s, { prompt: 'f' });
+  assert.equal(reqs.at(-1), 'neuve-xyz');
+  cfg.mcpAskWhere = false; cfg.mcpChat = null;
+});

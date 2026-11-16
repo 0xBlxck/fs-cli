@@ -75,7 +75,7 @@ export function workerTask(task, W, plan, dir, { same = false, reused = false } 
   if (!W.files.length) return task;                                   // une seule part, sans fichiers précis : la demande telle quelle
   const others = plan.flatMap(p => p.files).filter(f => !W.files.includes(f));
   return (reused ? '(Nouvelle tâche, indépendante des précédentes de cette conversation.)\n' : '') +
-    `Dans le dossier ${dir} : ${W.consigne}.\n` +
+    `${W.consigne[0].toUpperCase() + W.consigne.slice(1)} (dossier : ${dir}).\n` +      // la consigne d'abord : c'est elle qui donne son titre à la conversation
     `C'est une partie du projet « ${task} ».` +
     (others.length ? ` Les autres fichiers du projet (${others.join(', ')}) sont faits ${same ? 'juste avant ou juste après' : 'en même temps, séparément'} : ` +
       `garde des noms, ids, classes et liens cohérents avec eux${same ? '' : ', sans les créer toi-même'}.` : '') +

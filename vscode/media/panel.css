@@ -196,6 +196,8 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .send svg { width: 15px; height: 15px; }
 .foot { font-size: 11px; color: var(--dim); padding: 4px 4px 0; display: flex; justify-content: space-between; gap: 8px; }
 .foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.foot .fdir { cursor: pointer; }
+.foot .fdir:hover { color: var(--fg); text-decoration: underline; }
 
 /* menus (commandes /, modèles) */
 .menu { position: absolute; left: 12px; right: 12px; bottom: calc(100% - 4px); background: var(--vscode-editorWidget-background, var(--box)); border: 1px solid var(--border); border-radius: 8px; max-height: 260px; overflow-y: auto; padding: 4px; box-shadow: 0 6px 20px rgba(0,0,0,.3); z-index: 5; }

@@ -61,7 +61,17 @@
   const bSend = h('button', 'send'); bSend.innerHTML = ICON.send; bSend.title = 'Envoyer (Entrée)';
   tools.append(bPlus, bSlash, bModel, h('div', 'spacer'), bMode, bSend);
   box.append(ctxbar, ta, tools);
-  const foot = h('div', 'foot'); const footL = h('span'); const footR = h('span'); foot.append(footL, footR);
+  const foot = h('div', 'foot'); const footL = h('span', 'fdir'); const footR = h('span'); foot.append(footL, footR);
+  footL.onclick = () => {                                              // changer à tout moment où l'IA travaille et où elle écrit
+    if (S.busy) return showFlash('attends la fin de la réponse');
+    const st = S.status || {};
+    const items = [
+      { label: 'Changer de dossier de travail…', desc: st.cwd || '', act: () => post({ type: 'pickFolder', purpose: 'cwd' }) },
+      { label: 'Écrire les fichiers dans un autre dossier…', desc: 'même hors du workspace', act: () => post({ type: 'pickFolder', purpose: 'target' }) },
+    ];
+    if (st.target) items.push({ label: 'Écrire de nouveau dans le dossier de travail', desc: 'oublier ' + st.target, act: () => post({ type: 'command', text: '/target clear' }) });
+    openMenu(items, it => it.act());
+  };
   composer.append(flash, box, foot);
   app.append(head, log, tasksEl, composer);
 
@@ -429,7 +439,9 @@
     bMode.textContent = MODE_UI[st.mode] || st.mode || '';
     bMode.className = 'pill mode-' + (st.mode || 'auto');
     const dir = String(st.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
-    footL.textContent = [dir ? `📁 ${dir}` : '', st.project ? `◆ projet ${st.project}` : ''].filter(Boolean).join('  ·  ');
+    const tgt = String(st.target || '').split(/[\\/]/).filter(Boolean).pop() || '';
+    footL.textContent = [dir ? `📁 ${dir}` : '', tgt ? `✎ écrit dans ${tgt}` : '', st.project ? `◆ projet ${st.project}` : ''].filter(Boolean).join('  ·  ');
+    footL.title = `Dossier de travail : ${st.cwd || '?'}${st.target ? `\nFichiers écrits dans : ${st.target}` : ''}\nCliquer pour changer`;
     footR.textContent = typeof st.ctx === 'number' ? `contexte ${Math.round(st.ctx)} %` : '';
   }
   function setBusy(b) {
@@ -747,12 +759,13 @@
     if (ev.sessions) clearTimeout(HIST.timer);
     HIST.data = ev.sessions;
     HIST.partial = !!ev.partial;                                       // liste instantanée : la liste vérifiée suit
+    if (ev.projects) { HIST.projects = ev.projects; HIST.normal = !!ev.normal; }
     if (!HIST.el) {
       const pop = h('div', 'pop');
       const tabs = h('div', 'ptabs');
-      for (const [id, label] of [['here', 'Ce dossier'], ['all', 'Tous']]) {
+      for (const [id, label] of [['here', 'Ce dossier'], ['all', 'Tous'], ['proj', 'Projets']]) {
         const b = h('button', 'ptab' + (HIST.tab === id ? ' on' : ''), label);
-        b.onclick = () => { HIST.tab = id; tabs.querySelectorAll('.ptab').forEach(x => x.classList.toggle('on', x === b)); histRender(); };
+        b.onclick = () => { HIST.tab = id; HIST.proj = undefined; tabs.querySelectorAll('.ptab').forEach(x => x.classList.toggle('on', x === b)); histRender(); };
         tabs.append(b);
       }
       const f = h('input', 'pf'); f.placeholder = 'Rechercher…'; f.oninput = histRender;
@@ -771,6 +784,7 @@
     const list = HIST.list; list.textContent = '';
     if (HIST.data === null) { list.append(h('div', 'pnote', 'Chargement…')); return; }
     const q = HIST.filter.value.trim().toLowerCase();
+    if (HIST.tab === 'proj') return projRender(list, q);
     let items = HIST.data.filter(s => !q || s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q));
     if (HIST.tab === 'here') items = items.filter(s => s.here);
     if (!items.length && HIST.partial && !q) { list.append(h('div', 'pnote', 'Chargement…')); return; }
@@ -784,6 +798,41 @@
       list.append(row);
     }
     if (HIST.partial) list.append(h('div', 'pnote', 'Mise à jour…'));
+  }
+  /** onglet « Projets » : les projets du site ; un projet ouvert montre ses conversations et permet d'y travailler */
+  function projRender(list, q) {
+    const P = HIST.projects;
+    if (!P) { list.append(h('div', 'pnote', HIST.partial ? 'Chargement…' : 'Mets FS-CLI à jour pour voir tes projets ici.')); return; }
+    const convs = id => HIST.data.filter(s => (id ? s.projectId === id : !s.projectId) && (!q || s.title.toLowerCase().includes(q)));
+    if (HIST.proj === undefined) {
+      const rows = [{ id: '', name: 'Conversations normales (aucun projet)', current: HIST.normal }, ...P].filter(p => !q || p.name.toLowerCase().includes(q));
+      if (!rows.length) { list.append(h('div', 'pnote', 'Aucun projet ne correspond.')); return; }
+      for (const p of rows) {
+        const row = h('div', 'prow' + (p.current ? ' cur' : ''));
+        const n = convs(p.id).length;
+        row.append(h('span', 'pt', (p.id ? '▣ ' : '') + p.name), h('span', 'pa', (p.current ? 'actuel · ' : '') + n + ' conv.'));
+        row.title = p.current ? 'Les nouvelles conversations vont ici' : 'Ouvrir';
+        row.onclick = () => { HIST.proj = p.id; histRender(); };
+        list.append(row);
+      }
+      if (HIST.partial) list.append(h('div', 'pnote', 'Mise à jour…'));
+      return;
+    }
+    const p = HIST.proj ? P.find(x => x.id === HIST.proj) : { id: '', name: 'Conversations normales', current: HIST.normal };
+    if (!p) { HIST.proj = undefined; return histRender(); }
+    const back = h('div', 'prow'); back.append(h('span', 'pt', '← ' + p.name), h('span', 'pa', 'projets')); back.onclick = () => { HIST.proj = undefined; histRender(); };
+    const use = h('div', 'prow'); use.append(h('span', 'pt', p.id ? '＋ Nouvelle conversation dans ce projet' : '＋ Nouvelle conversation hors projet'), h('span', 'pa', p.current ? 'projet actuel' : ''));
+    use.title = 'Les conversations suivantes iront aussi ' + (p.id ? 'dans ce projet' : 'hors projet');
+    use.onclick = () => { histClose(); post({ type: 'projectUse', id: p.id }); };
+    list.append(back, use);
+    const items = convs(p.id);
+    if (!items.length) list.append(h('div', 'pnote', 'Aucune conversation dans ce projet.'));
+    for (const s of items) {
+      const row = h('div', 'prow' + (s.current ? ' cur' : ''));
+      row.append(h('span', 'pt', s.title || '(sans titre)'), h('span', 'pa', ago(s.updatedAt)));
+      row.onclick = () => { histClose(); if (!s.current) post({ type: 'resumeChat', chatId: s.chatId }); };
+      list.append(row);
+    }
   }
   document.addEventListener('keydown', e => { if (HIST.el && e.key === 'Escape') { e.preventDefault(); histClose(); } });
 

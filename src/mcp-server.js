@@ -34,7 +34,7 @@ const INSTRUCTIONS = 'Serveur MCP de FS-CLI (client communautaire non officiel d
   'fs_agent confie une tâche de code à l\'agent FS-CLI dans un dossier que l\'utilisateur a approuvé ; fs_image génère une image ; ' +
   'fs_web répond avec la recherche web ; fs_files fait analyser des images, PDF ou fichiers texte ; fs_conversations liste, relit ou choisit une conversation du compte ; ' +
   'fs_usage montre ce qu\'il reste du quota. ' +
-  'Le compte est limité à 50 nouvelles conversations par jour : les conversations sont réutilisées, n\'utilise new_conversation que si c\'est nécessaire.';
+  'Si un outil répond « Rien n\'a été envoyé… », demande à l\'utilisateur où écrire avant de rappeler l\'outil. Le compte est limité à 50 nouvelles conversations par jour : les conversations sont réutilisées, n\'utilise new_conversation que si c\'est nécessaire.';
 
 export const TOOL_DEFS = [
   {
@@ -58,7 +58,7 @@ export const TOOL_DEFS = [
         prompt: { type: 'string', description: 'La question ou la demande, avec tout le contexte nécessaire.' },
         model: { type: 'string', description: 'Modèle à utiliser : nom (ex. « sonnet », « Claude Opus 5.5 », « luna ») ou identifiant (ex. « -2003 »). Par défaut : le modèle choisi dans fs-cli.' },
         new_conversation: { type: 'boolean', description: 'true = nouvelle conversation (oublie les échanges précédents). Par défaut false.', default: false },
-        conversation_id: { type: 'string', description: 'Identifiant d\'une conversation France Student précise à utiliser pour cette demande (facultatif, seulement si l\'utilisateur le donne).' },
+        conversation_id: { type: 'string', description: 'Où écrire : "mcp" (la conversation du MCP), "new" (nouvelle conversation) ou l\'identifiant d\'une conversation France Student. Seulement selon le choix de l\'utilisateur.' },
         save_dir: { type: 'string', description: 'Dossier (chemin absolu) où enregistrer les images générées. Facultatif : sans lui, les images sont seulement renvoyées dans la réponse.' },
         web_search: { type: 'boolean', description: 'true = le modèle peut chercher sur le web pour répondre. Par défaut false.', default: false },
       },
@@ -81,7 +81,7 @@ export const TOOL_DEFS = [
         folder: { type: 'string', description: 'Chemin absolu du dossier de travail (déjà approuvé avec fs-cli).' },
         model: { type: 'string', description: 'Modèle (nom ou identifiant, voir fs_models). Par défaut : le modèle choisi dans fs-cli. Les modèles Claude acceptent le mieux de travailler avec les outils.' },
         new_conversation: { type: 'boolean', description: 'true = nouvelle conversation pour ce dossier. Par défaut false.', default: false },
-        conversation_id: { type: 'string', description: 'Identifiant d\'une conversation France Student précise à utiliser (facultatif, seulement si l\'utilisateur le donne).' },
+        conversation_id: { type: 'string', description: 'Où écrire : "mcp", "new" ou l\'identifiant d\'une conversation France Student. Seulement selon le choix de l\'utilisateur.' },
       },
       required: ['task', 'folder'],
       additionalProperties: false,
@@ -99,7 +99,7 @@ export const TOOL_DEFS = [
         prompt: { type: 'string', description: 'Description de l\'image à générer.' },
         model: { type: 'string', description: 'Modèle GPT à utiliser (facultatif ; par défaut le meilleur modèle GPT du compte).' },
         save_dir: { type: 'string', description: 'Dossier (chemin absolu) où enregistrer l\'image. Facultatif.' },
-        conversation_id: { type: 'string', description: 'Conversation France Student précise (facultatif).' },
+        conversation_id: { type: 'string', description: 'Où écrire : "mcp", "new" ou l\'identifiant d\'une conversation (selon le choix de l\'utilisateur).' },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -115,7 +115,7 @@ export const TOOL_DEFS = [
       properties: {
         question: { type: 'string', description: 'La question, précise (ce qu\'il faut chercher et ce qu\'il faut en retenir).' },
         model: { type: 'string', description: 'Modèle (facultatif, voir fs_models).' },
-        conversation_id: { type: 'string', description: 'Conversation France Student précise (facultatif).' },
+        conversation_id: { type: 'string', description: 'Où écrire : "mcp", "new" ou l\'identifiant d\'une conversation (selon le choix de l\'utilisateur).' },
       },
       required: ['question'],
       additionalProperties: false,
@@ -133,7 +133,7 @@ export const TOOL_DEFS = [
         paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5, description: 'Chemins absolus des fichiers.' },
         prompt: { type: 'string', description: 'Ce que le modèle doit faire avec ces fichiers.' },
         model: { type: 'string', description: 'Modèle (facultatif, voir fs_models).' },
-        conversation_id: { type: 'string', description: 'Conversation France Student précise (facultatif).' },
+        conversation_id: { type: 'string', description: 'Où écrire : "mcp", "new" ou l\'identifiant d\'une conversation (selon le choix de l\'utilisateur).' },
       },
       required: ['paths', 'prompt'],
       additionalProperties: false,
@@ -251,8 +251,35 @@ export function createMcpServer(deps = {}) {
   }
 
   /** premier appel de la session : l'IDE demande où parler (boutons). null = rien demandé · { cancel } = l'utilisateur a fermé la fenêtre */
+  /** IDE sans fenêtre de choix (Antigravity…) : rien n'est envoyé, l'agent doit d'abord demander à l'utilisateur où écrire */
+  let pendingChoice = false;
+  async function choiceText() {
+    const [chats, projects] = await Promise.all([d.listChats(15).catch(() => []), d.listProjects().catch(() => [])]);
+    const rows = [], seen = new Set();
+    const add = (arr, proj) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); rows.push({ id: x.id, title: cleanTitle(x.title), proj, at: Date.parse(x.lastMessageAt || x.createdAt) || 0 }); } };
+    add(chats);
+    const some = (Array.isArray(projects) ? projects : []).filter(x => x?.id).slice(0, 5);
+    (await Promise.all(some.map(x => d.projectChats(x.id).catch(() => [])))).forEach((arr, i) => add(arr, some[i].name));
+    const list = rows.sort((a, b) => b.at - a.at).slice(0, 12).map(x => `  - ${x.title} · id ${x.id}${x.proj ? ` · projet « ${cleanTitle(x.proj)} »` : ''}`).join('\n');
+    return 'Rien n\'a été envoyé à France Student. L\'utilisateur veut choisir la conversation où écrire : DEMANDE-LUI d\'abord, puis rappelle cet outil avec conversation_id :\n' +
+      (askState.chatId ? `- "mcp" : la conversation du MCP${cfg.mcpChat?.title ? ` (« ${cleanTitle(cfg.mcpChat.title)} »)` : ''}\n` : '') +
+      '- "new" : une nouvelle conversation (compte dans les 50 nouvelles conversations par jour)\n' +
+      (list ? `- ou l'identifiant d'une de ses conversations :\n${list}\n` : '') +
+      'Ensuite, ne redemande plus pendant cette session : les appels suivants utilisent la conversation choisie.';
+  }
+  /** choix de l'utilisateur transmis par l'agent : conversation_id = "mcp" | "new" | identifiant */
+  function applyChoice(args) {
+    const v = typeof args.conversation_id === 'string' ? args.conversation_id.trim() : '';
+    if (/^(new|nouvelle?)$/i.test(v)) { delete args.conversation_id; args.new_conversation = true; }
+    else if (/^(mcp|courante|current|session)$/i.test(v)) delete args.conversation_id;
+    else if (/^[\w-]{8,64}$/.test(v)) { if (pendingChoice) { askState.chatId = v; remember(v); folders.clear(); delete args.conversation_id; } }
+    else if (args.new_conversation !== true) return;                   // aucun choix exprimé
+    askedWhere = true; pendingChoice = false;
+  }
+
   async function chooseWhere(signal) {
-    if (askedWhere || !clientCanAsk || cfg.mcpAskWhere === false) return null;
+    if (askedWhere || cfg.mcpAskWhere === false) return null;
+    if (!clientCanAsk) { pendingChoice = true; return { ask: await choiceText() }; }
     askedWhere = true;
     const [chats, projects] = await Promise.all([d.listChats(12).catch(() => []), d.listProjects().catch(() => [])]);
     const conv = [], convNames = [];
@@ -344,8 +371,11 @@ export function createMcpServer(deps = {}) {
     if (!d.hasToken()) return textResult(NO_TOKEN, true);
     const m = extra.modelId != null ? { id: extra.modelId } : await pickModel(args.model);
     if (m.error) return textResult(m.error, true);
+    applyChoice(args);
     const target = chatFor(args);                                      // conversation précise demandée par l'utilisateur
-    if (!target && args.new_conversation !== true && (await chooseWhere(signal))?.cancel) return CANCELLED();
+    const cw = !target && args.new_conversation !== true ? await chooseWhere(signal) : null;
+    if (cw?.cancel) return CANCELLED();
+    if (cw?.ask) return textResult(cw.ask);
     if (args.new_conversation === true) { askState.chatId = null; askState.sid = newSid(); }
     const send = async chatId => {
       let content = prompt;
@@ -399,7 +429,10 @@ export function createMcpServer(deps = {}) {
       d.runNative = (await import('./native.js')).runNative;
     }
     const key = process.platform === 'win32' ? dir.toLowerCase() : dir;
-    if (!folders.has(key) && !chatFor(args) && args.new_conversation !== true && (await chooseWhere(signal))?.cancel) return CANCELLED();
+    applyChoice(args);
+    const cw = !folders.has(key) && !chatFor(args) && args.new_conversation !== true ? await chooseWhere(signal) : null;
+    if (cw?.cancel) return CANCELLED();
+    if (cw?.ask) return textResult(cw.ask);
     let S = folders.get(key);
     if (!S || args.new_conversation === true) {
       S = { chatId: chatFor(args) || (args.new_conversation === true ? null : askState.chatId), sid: newSid(), agentId: m.id, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: [], tokens: { in: 0, out: 0 }, slots: {}, stats: { turns: 0, requests: 0, tools: 0 }, lastResponse: '' };
@@ -569,7 +602,7 @@ export function createMcpServer(deps = {}) {
     const chat = await d.fetchChat(id).catch(() => null);
     if (!chat) return textResult(`Conversation introuvable : ${id}`, true);
     if (action === 'select') {
-      askState.chatId = id; remember(id, chat.title || ''); folders.clear();
+      askState.chatId = id; remember(id, chat.title || ''); folders.clear(); askedWhere = true; pendingChoice = false;
       return textResult(`Conversation du MCP : « ${cleanTitle(chat.title)} ». fs_ask, fs_agent, fs_image, fs_web et fs_files l'utilisent désormais.`);
     }
     if (action !== 'read') return textResult(`Action inconnue : ${action} (list, read ou select).`, true);

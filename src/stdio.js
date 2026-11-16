@@ -11,7 +11,7 @@ export function send(type, data = {}) {
 export class StdioInput {
   constructor() {
     this.kind = 'stdio';
-    this.handlers = { instant: [], submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [], setMode: [], setModel: [], diffBefore: [], undoFile: [], mcpAction: [], historyOpen: [], resumeChat: [], skillsOpen: [], skillToggle: [] };
+    this.handlers = { instant: [], submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [], setMode: [], setModel: [], diffBefore: [], undoFile: [], mcpAction: [], historyOpen: [], resumeChat: [], projectUse: [], folderPicked: [], skillsOpen: [], skillToggle: [] };
     this.queue = []; this.busy = false; this.pending = new Map(); this.seq = 0;
     this.rl = readline.createInterface({ input: process.stdin, terminal: false });
     this.rl.on('line', line => this.onLine(line));
@@ -50,6 +50,8 @@ export class StdioInput {
       case 'skillsOpen': return this.emit('skillsOpen');
       case 'skillToggle': return this.emit('skillToggle', String(m.kind || ''), String(m.name || ''));
       case 'resumeChat': return this.emit('resumeChat', String(m.chatId || ''));
+      case 'projectUse': return this.emit('projectUse', String(m.id || ''));
+      case 'folderPicked': return this.emit('folderPicked', String(m.purpose || ''), String(m.path || ''));
       case 'quit': return this.emit('quit');
     }
   }

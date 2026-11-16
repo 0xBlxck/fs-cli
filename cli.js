@@ -341,7 +341,7 @@ const input = opts.stdio ? new StdioInput() : createInput({
 
 let busy = false, turnAbort = null;
 const ask = query => input.askLine(query);
-const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : '' } : {}) });
+const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : '', target: S.targetDir || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
 
 function banner() {
@@ -470,6 +470,7 @@ const PANEL_FEATURES = new Set(String(process.env.FS_CLI_PANEL_FEATURES || '').s
 
 /** conversations du compte vues au dernier passage (affichées tout de suite à l'ouverture suivante) */
 let remoteCache = [];
+let lastProjects = [];                                               // projets France Student vus au dernier passage (onglet « Projets » du panneau)
 const within = (p, ms, dflt) => Promise.race([Promise.resolve(p).catch(() => dflt), new Promise(r => setTimeout(() => r(dflt), ms).unref?.())]);
 
 /** titre d'une conversation tel que France Student l'affiche, sans l'étiquette technique « [7f3a] » de FS-CLI */
@@ -488,7 +489,7 @@ async function liveSessions(limit = 50, onQuick) {
   try { onQuick?.(merge(list, remoteCache)); } catch {}
   const clean = t => String(t || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '');
   const seen = new Set(), remote = [];
-  const add = (arr, project) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); remote.push({ chatId: x.id, raw: String(x.title || ''), title: clean(x.title), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: project || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); } };
+  const add = (arr, proj) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); remote.push({ chatId: x.id, raw: String(x.title || ''), title: clean(x.title), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: proj?.name || '', projectId: proj?.id || x.projectId || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); } };
   const chatsOf = j => (Array.isArray(j) ? j : j?.chats);
   const [mine, projects] = await Promise.all([within(fetchChatsList(50), 6000, null), within(listFsProjects(), 6000, null)]);
   add(mine);
@@ -498,23 +499,49 @@ async function liveSessions(limit = 50, onQuick) {
     Promise.all(some.map(p => within(requestJson('GET', `/projects/${encodeURIComponent(p.id)}/chats`).then(r => r.data), 6000, null))),
     Promise.all(toCheck.map(s => within(fetchChatUsage(s.chatId).then(r => !!r), 4000, null))),
   ]);
-  projChats.forEach((j, i) => add(chatsOf(j), some[i].name));
+  projChats.forEach((j, i) => add(chatsOf(j), some[i]));
+  if (projects) lastProjects = some.map(p => ({ id: p.id, name: p.name || '(sans nom)' }));
   const answered = mine !== null || res.some(r => r !== null && r !== undefined);
   const gone = new Set(answered ? toCheck.filter((s, i) => res[i] === false && !seen.has(s.chatId)).map(s => s.chatId) : []);   // seulement un « n'existe pas » net
   if (gone.size) markSessionsGone([...gone]);
-  const local = list.filter(s => !gone.has(s.chatId)).map(s => { const r = remote.find(x => x.chatId === s.chatId); return r?.project && !s.project ? { ...s, project: r.project } : s; });
-  // titre : celui de France Student fait foi (tel quel, seule l'étiquette technique « [7f3a] » est retirée) ;
-  // renommée sur le site → renommée ici aussi (liste, sessions enregistrées, conversation ouverte)
+  const local = list.filter(s => !gone.has(s.chatId)).map(s => { const r = remote.find(x => x.chatId === s.chatId); return r?.projectId && !s.projectId ? { ...s, project: r.project, projectId: r.projectId } : s; });
+  // titres : renommée sur le site (titre choisi par toi) → ce titre-là, partout ici aussi ;
+  // titre automatique du site, coupé à 3 mots (« Salut... ») → le début de ta 1re demande, en entier (lu une fois, gardé ; rien n'est renommé sur le site)
+  const autoTitle = raw => { const t = clean(raw).trim(); return !t || t === '(sans titre)' || (/(\.\.\.|…)\s*$/.test(t) && t.replace(/(\.\.\.|…)\s*$/, '').trim().split(/\s+/).length <= 3); };
+  const tc = loadTitleCache();
+  const need = [...local.filter(s => !tc[s.chatId] && autoTitle(s.title || '') && remote.some(r => r.chatId === s.chatId && autoTitle(r.raw))),
+    ...remote.filter(r => !tc[r.chatId] && autoTitle(r.raw) && !local.some(s => s.chatId === r.chatId))].slice(0, 12);
+  if (need.length) {
+    const got = await Promise.all(need.map(x => within(fetchChat(x.chatId).then(ch => firstAsk(ch)), 3000, '')));
+    need.forEach((x, i) => { if (got[i]) tc[x.chatId] = got[i]; });
+    saveTitleCache(tc);
+  }
+  for (const r of remote) if (autoTitle(r.raw) && tc[r.chatId]) r.title = tc[r.chatId];
   for (const s of local) {
     const r = remote.find(x => x.chatId === s.chatId);
-    if (!r || !r.raw || r.title === s.title) continue;
-    s.title = r.title;
+    if (!r) continue;
+    const t = !autoTitle(r.raw) ? r.title : autoTitle(s.title || '') ? (tc[s.chatId] || s.title) : null;
+    if (!t || t === s.title) continue;
+    s.title = t;
     const cur = loadSessions().find(x => x.chatId === s.chatId);
-    if (cur && cur.title !== r.title) upsertSession({ ...cur, title: r.title }, { touch: false });
-    if (s.chatId === S.chatId && S.title !== r.title) { S.title = r.title; refreshPrompt(); }
+    if (cur && cur.title !== t) upsertSession({ ...cur, title: t }, { touch: false });
+    if (s.chatId === S.chatId && S.title !== t) { S.title = t; refreshPrompt(); }
   }
   if (mine !== null) remoteCache = remote.filter(r => !list.some(s => s.chatId === r.chatId));
   return merge(local, remote.filter(r => !local.some(s => s.chatId === r.chatId)));
+}
+
+/** titres lisibles des conversations dont le site n'a gardé que 3 mots (affichage seulement, jamais renvoyés au site) */
+const TITLES_FILE = () => path.join(HOME_DIR, 'titles.json');
+function loadTitleCache() { try { const j = JSON.parse(fs.readFileSync(TITLES_FILE(), 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; } }
+function saveTitleCache(tc) { try { const keys = Object.keys(tc).slice(-400); fs.writeFileSync(TITLES_FILE(), JSON.stringify(Object.fromEntries(keys.map(k => [k, tc[k]]))), { mode: 0o600 }); } catch {} }
+/** début de la 1re demande d'une conversation (1re ligne, coupée sur un mot) */
+function firstAsk(chat) {
+  const t = (transcriptOf(chat).find(m => m.role === 'user')?.text || '').split('\n').find(l => l.trim()) || '';
+  const s = t.replace(/\s+/g, ' ').trim();
+  if (s.length <= 80) return s;
+  const cut = s.slice(0, 79), sp = cut.lastIndexOf(' ');
+  return (sp > 40 ? cut.slice(0, sp) : cut) + '…';
 }
 
 /** messages d'une conversation, sans les ajouts internes de FS-CLI (étiquette, notes, consignes jointes) */
@@ -600,15 +627,14 @@ async function command(line) {
     case '/cd': {
       const dir = resolveP(arg || os.homedir(), S.cwd);
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return println(c.red('  dossier introuvable'));
-      if (!(await ensureFolderTrust(dir))) return println(c.dim('  dossier inchangé'));
-      S.cwd = dir; S.targetDir = null; S.notes.push(`Dossier courant changé : ${dir}`); refreshPrompt(); return println(c.dim('  → ' + dir));
+      return changeCwd(dir);
     }
     case '/target': {
       if (!arg) return println(c.dim(S.targetDir ? `  dossier cible : ${S.targetDir}  (détecté dans ta demande ; /target clear pour l'oublier)` : `  pas de dossier cible : les fichiers vont dans ${S.cwd}  (cite un chemin dans ta demande, ou /target <dossier>)`));
-      if (/^(clear|off|aucun)$/i.test(arg)) { S.targetDir = null; return println(c.dim('  → dossier cible oublié')); }
+      if (/^(clear|off|aucun)$/i.test(arg)) { S.targetDir = null; refreshPrompt(); return println(c.dim('  → dossier cible oublié : les fichiers vont de nouveau dans ' + S.cwd)); }
       const d = resolveP(arg, S.cwd);
       if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) return println(c.red('  dossier introuvable'));
-      S.targetDir = d; return println(c.dim('  → dossier cible : ' + d));
+      S.targetDir = d; refreshPrompt(); return println(c.dim('  → dossier cible : ' + d));
     }
     case '/read': {
       if (!arg) return println(c.red('  usage: /read <fichier>'));
@@ -1143,12 +1169,30 @@ if (opts.stdio) {                                                    // commande
   });
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
-    const send = (list, partial) => stdioSend('history', { partial, sessions: list.map(s => ({
+    const send = (list, partial) => stdioSend('history', { partial, normal: !cfg.fsProject?.id,
+      projects: lastProjects.map(p => ({ ...p, current: cfg.fsProject?.id === p.id })), sessions: list.map(s => ({ projectId: s.projectId || '',
       chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });
     // liste immédiate (panneau récent seulement : un ancien panneau rouvrirait sa fenêtre à la 2e liste), puis la liste vérifiée
     send(await liveSessions(80, panelAtLeast('0.10.1') ? quick => send(quick, true) : null), false);
+  });
+  input.on('folderPicked', async (purpose, p) => {                  // sélecteur de dossiers de l'éditeur
+    if (purpose === 'trust') { const w = folderWaiter; folderWaiter = null; return w?.(p || ''); }
+    if (!p) return;
+    if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de dossier' });
+    if (!fs.existsSync(p) || !fs.statSync(p).isDirectory()) return stdioSend('flash', { text: 'dossier introuvable' });
+    if (purpose === 'cwd') return changeCwd(path.resolve(p));
+    if (purpose === 'target') { S.targetDir = path.resolve(p); refreshPrompt(); return println(c.dim('  → les fichiers seront écrits dans : ' + S.targetDir)); }
+  });
+  input.on('projectUse', async id => {                              // onglet « Projets » : les nouvelles conversations vont dans ce projet (ou hors projet)
+    if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de projet' });
+    const p = lastProjects.find(x => x.id === id);
+    if (id && !p) return;
+    cfg.fsProject = p ? { id: p.id, name: p.name } : false; cfg.fsProjectChosen = true; saveCfg();
+    await runInput('/new');
+    refreshPrompt();
+    stdioSend('flash', { text: p ? `nouvelle conversation dans le projet « ${p.name} »` : 'nouvelle conversation hors projet' });
   });
   input.on('resumeChat', async chatId => {
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de conversation' });
@@ -1213,22 +1257,46 @@ function installVscode({ editors = null, all = false, log }) {
 }
 
 /** Première ouverture d'un dossier : on demande la confiance avant que le modèle puisse y agir. */
+/** dossier de travail changé (commande /cd ou sélecteur du panneau) ; la confiance peut mener à un autre dossier */
+async function changeCwd(dir) {
+  const ok = await ensureFolderTrust(dir);
+  if (!ok) return println(c.dim('  dossier inchangé'));
+  S.cwd = ok; S.targetDir = null; S.notes.push(`Dossier courant changé : ${ok}`); refreshPrompt();
+  return println(c.dim('  → dossier de travail : ' + ok));
+}
+
+/** demande un dossier : sélecteur de l'éditeur (panneau), sinon chemin tapé */
+let folderWaiter = null;
+async function pickFolder(title) {
+  if (opts.stdio && panelAtLeast('0.10.3')) {
+    return new Promise(res => { folderWaiter = res; stdioSend('pickFolder', { purpose: 'trust', title }); });
+  }
+  const a = ((await ask('  chemin du dossier (Entrée = annuler) : ')) || '').trim().replace(/^["']|["']$/g, '');
+  return a ? resolveP(a, S.cwd) : '';
+}
+
 async function ensureFolderTrust(dir) {
-  if (isFolderTrusted(dir)) return true;
+  if (isFolderTrusted(dir)) return dir;
   const broad = isBroadFolder(dir);
   const detail = `Le modèle pourra lire et modifier les fichiers de ce dossier et y lancer des commandes (avec confirmation pour les actions sensibles).` +
     (broad ? `\n⚠ C'est un dossier très large (racine du disque ou dossier personnel) : préfère le dossier précis d'un projet.` : '\nLa confiance vaut aussi pour ses sous-dossiers.');
-  const options = broad ? ['Oui, pour cette session seulement', 'Non'] : ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Non'];
+  const options = broad ? ['Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'] : ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'];
   let idx;
   if (input.select && interactive) idx = await input.select({ title: `Faire confiance à ce dossier ? ${dir}`, detail, options, defaultIndex: 0 });
   else {
     println(c.yellow(`  ? Faire confiance à ce dossier ? ${dir}`)); println(c.dim('    ' + detail.replace(/\n/g, '\n    ')));
     const a = ((await ask(`  [o]ui / [s]ession seulement / [N]on `)) || '').trim().toLowerCase();
-    idx = /^(o|oui|y|yes)$/.test(a) ? (broad ? 0 : 0) : /^s/.test(a) ? (broad ? 0 : 1) : options.length - 1;
+    idx = /^(o|oui|y|yes)$/.test(a) ? 0 : /^s/.test(a) ? (broad ? 0 : 1) : /^(a|autre|c|choisir)$/.test(a) ? options.indexOf('Choisir un autre dossier…') : options.length - 1;
   }
   if (idx === null || idx === undefined || options[idx] === 'Non') return false;
+  if (options[idx] === 'Choisir un autre dossier…') {
+    const other = await pickFolder('Dossier de travail de FS-CLI');
+    if (!other) return false;
+    if (!fs.existsSync(other) || !fs.statSync(other).isDirectory()) { println(c.red('  dossier introuvable : ' + other)); return false; }
+    return ensureFolderTrust(path.resolve(other));
+  }
   trustFolder(dir, { remember: options[idx].startsWith('Oui, je') });
-  return true;
+  return dir;
 }
 
 /** Sortie propre : on ferme d'abord les serveurs MCP (sinon Node peut planter sous Windows en fermant leurs connexions). */
@@ -1265,7 +1333,9 @@ requestJson('GET', '/chats/agents').then(r => {                      // fourniss
   stdioSend('models', { models: r.data.filter(a => a && a.isActive !== false).map(a => ({ id: String(a.id), name: a.name, provider: String(a.modelProvider || ''), contextWindow: Number(a.contextWindow) || null })) });
 }).catch(() => {});
 if (opts.stdio) input.setBusy(true);                                 // panneau : rien ne part au modèle tant que la confiance n'est pas décidée
-if (!(await ensureFolderTrust(S.cwd))) {
+const trustedCwd = await ensureFolderTrust(S.cwd);
+if (trustedCwd && trustedCwd !== S.cwd) { S.cwd = trustedCwd; refreshPrompt(); }
+if (!trustedCwd) {
   println(c.dim('  Dossier non approuvé : relance FS-CLI depuis le dossier de ton projet (ou --cwd <dossier>).'));
   saveSession(); input.stop(); process.exit(0);
 }
