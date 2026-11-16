@@ -233,7 +233,7 @@ export async function attachChatToProject(projectId, chatId) {
 /** Rangement automatique : projet « FS-CLI » par défaut, /fr-project <nom> pour un autre, /fr-project off pour désactiver. Ne lève jamais. */
 let projectPromise = null;
 function attachToFsProject(chatId) {
-  if (cfg.fsProject === false) return;
+  if (!cfg.fsProject) return;                                       // pas de projet choisi : conversation normale, visible dans ta liste du site
   const name = cfg.fsProject?.name || 'FS-CLI';
   if (!projectPromise || projectPromise.name !== name) {
     projectPromise = (cfg.fsProject?.id && cfg.fsProject.name === name ? Promise.resolve(cfg.fsProject.id)

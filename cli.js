@@ -11,7 +11,7 @@ import { execSync, spawnSync } from 'node:child_process';
 
 import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
-import { fetchAgents, listFsProjects } from './src/api.js';
+import { fetchAgents, listFsProjects, fetchChatsList, requestJson } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
@@ -446,7 +446,16 @@ async function liveSessions(limit = 50) {
   for (let i = 0; i < list.length; i += 8) res.push(...await Promise.all(list.slice(i, i + 8).map(check)));
   if (!res.some(Boolean)) return list;                               // rien n'a répondu : réseau ? on montre tout
   markSessionsGone(list.filter((s, i) => res[i] === false).map(s => s.chatId));   // seulement un « n'existe pas » net
-  return list.filter((s, i) => res[i] !== false);                    // délai dépassé : gardée (dans le doute, on montre)
+  const local = list.filter((s, i) => res[i] !== false);              // délai dépassé : gardée (dans le doute, on montre)
+  // conversations du compte absentes de ce PC (faites sur un autre PC ou sur le site) : liste du compte + projet choisi
+  const known = new Set(loadSessions().map(s => s.chatId));
+  const remote = [];
+  const add = arr => { for (const x of arr || []) if (x?.id && !known.has(x.id) && !remote.some(r => r.chatId === x.id)) remote.push({ chatId: x.id, title: String(x.title || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, ''), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.createdAt) || 0, ctxSent: true }); };
+  try {
+    add(await fetchChatsList(30));
+    if (cfg.fsProject?.id) add((await requestJson('GET', `/projects/${encodeURIComponent(cfg.fsProject.id)}/chats`).catch(() => ({}))).data?.chats);
+  } catch {}
+  return [...local, ...remote].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
 }
 
 /** messages d'une conversation, sans les ajouts internes de FS-CLI (étiquette, notes, consignes jointes) */
@@ -1055,14 +1064,13 @@ if (opts.stdio) {                                                    // commande
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
     stdioSend('history', { sessions: (await liveSessions(50)).map(s => ({
-      chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || '',
+      chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? 'compte France Student' : ''), remote: !!s.remote,
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });
   });
   input.on('resumeChat', async chatId => {
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de conversation' });
-    const s = loadSessions().find(x => x.chatId === chatId);
-    if (!s) return stdioSend('flash', { text: 'conversation introuvable' });
+    const s = loadSessions().find(x => x.chatId === chatId) || { chatId, title: '', agentId: S.agentId, ctxSent: true };   // conversation du compte (autre PC, site)
     applySession(s); refreshPrompt(); saveSession();
     let messages = [];
     try { messages = transcriptOf(await fetchChat(chatId)); } catch {}
@@ -1172,6 +1180,16 @@ if (opts.stdio) { input.setBusy(false); const q = input.takeQueued(); if (q) run
 if (!opts.stdio && !cfg.vscodeTip) {                                 // une seule fois : le panneau de chat existe aussi pour l'éditeur
   try { const eds = findEditors(); if (eds.length) println(c.dim('  💡 FS-CLI existe aussi en panneau de chat dans ' + eds.map(e => e.name).join(', ') + ' : tape ') + c.accent('/vscode')); } catch {}
   cfg.vscodeTip = true; saveCfg();
+}
+// où ranger les conversations sur le site ? demandé une seule fois (avant : projet « FS-CLI » imposé)
+if (interactive && input.select && !cfg.fsProjectChosen) {
+  const idx = await input.select({ title: 'Où ranger tes conversations FS-CLI sur le site France Student ?', detail: 'Tu pourras changer plus tard avec /projet.',
+    options: ['Dans mes conversations normales (visibles dans la liste du site)', 'Dans un projet « FS-CLI » à part', 'Dans un de mes projets…'], defaultIndex: 0 });
+  cfg.fsProjectChosen = true;
+  if (idx === 1) cfg.fsProject = { name: 'FS-CLI' };
+  else if (idx === 2) { saveCfg(); await extraCommand('/projet', '', extraEnv()); }
+  else cfg.fsProject = false;
+  saveCfg();
 }
 // nouvelle version disponible ? (en arrière-plan, au plus une fois toutes les 12 h, n'empêche jamais de démarrer)
 checkUpdate().then(u => {

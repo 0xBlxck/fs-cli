@@ -39,6 +39,8 @@ const DEFAULTS = {
   agentId: -1002,
   mcpAskImported: false,
   toolRefusals: {},
+  fsProject: null,         // projet du site où ranger les conversations : null/false = conversations normales · { id, name } = ce projet
+  fsProjectChosen: false,  // le choix « conversations normales / projet » a été fait (demandé une fois)
   disabledSkills: [],      // skills du PC désactivés (noms en minuscules) : jamais joints ni annoncés au modèle
   dailyLimitHitAt: 0,      // France Student a répondu « limite de 50 nouvelles conversations atteinte » à cette date        // agentId → date : modèles qui refusent de travailler avec les outils de FS-CLI (prévenu à la sélection)   // false = serveurs MCP importés (Claude Code, Codex…) actifs directement · true = accord demandé avant le 1er démarrage (/mcp ask on)
   engine: 'native',    // native = vrais appels d'outils (mode officiel « outils client » de FS) · chat = le modèle écrit du code, le CLI l'exécute (secours)

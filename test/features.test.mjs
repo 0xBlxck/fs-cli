@@ -229,3 +229,16 @@ test('1er message : aucun protocole d\'outils dans le texte (bloqué par France 
   assert.doesNotMatch(t, /fs-mcp|programme qui exécute|FS-CLI|serveur MCP|cle=valeur/i);
   assert.match(t, /- \[ \]/);                                              // la liste de tâches reste demandée (préférence de forme)
 });
+
+test('/vscode : seulement les éditeurs de la famille VS Code (pas une appli du même nom)', async () => {
+  const os = await import('node:os'), fs = await import('node:fs'), path = await import('node:path');
+  const { isVsCodeFamily } = await import('../src/vscode-install.js');
+  const t = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-ed-'));
+  const mk = (rel, json) => { const f = path.join(t, ...rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, json ? JSON.stringify(json) : ''); return f; };
+  const code = mk(['code', 'bin', 'code.cmd']); mk(['code', 'abc1234', 'resources', 'app', 'product.json'], { dataFolderName: '.vscode' });   // VS Code récent
+  const fork = mk(['fork', 'bin', 'fork']); mk(['fork', 'resources', 'app', 'product.json'], { dataFolderName: '.fork' });
+  const agent = mk(['agent', 'Agent.exe']); mk(['agent', 'resources', 'app.asar']);                                                         // appli Electron ordinaire
+  assert.equal(isVsCodeFamily(code), true);
+  assert.equal(isVsCodeFamily(fork), true);
+  assert.equal(isVsCodeFamily(agent), false);
+});

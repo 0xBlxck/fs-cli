@@ -33,10 +33,27 @@ function onPath(cmd) {
 }
 
 /** éditeurs installés sur la machine (un par produit) */
+/** vrai éditeur de la famille VS Code ? (son product.json est à côté : resources/app/product.json). Écarte les applis du même nom
+ *  qui ne sont pas des éditeurs (ex. l'agent Antigravity, AppImage…) : les lancer ouvrirait une fenêtre au lieu d'installer. */
+export function isVsCodeFamily(bin) {
+  let real = bin; try { real = fs.realpathSync(bin); } catch {}
+  let dir = path.dirname(real);
+  for (let k = 0; k < 5; k++) {
+    const bases = [dir];
+    try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) if (e.isDirectory() && /^[0-9a-f]{6,}$/i.test(e.name)) bases.push(path.join(dir, e.name)); } catch {}   // VS Code récent : <dossier>/<commit>/resources/…
+    for (const b of bases) for (const rel of [['resources', 'app', 'product.json'], ['Resources', 'app', 'product.json']]) {
+      try { const p = JSON.parse(fs.readFileSync(path.join(b, ...rel), 'utf8')); if (p && p.dataFolderName) return true; } catch {}
+    }
+    const up = path.dirname(dir); if (up === dir) break; dir = up;
+  }
+  return false;
+}
+
 export function findEditors() {
   const out = [];
   for (const c of candidates()) {
     const bin = c.paths.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } }) || onPath(c.cmd);
+    if (bin && !isVsCodeFamily(bin)) continue;
     if (bin && !out.some(e => e.bin.toLowerCase() === bin.toLowerCase())) out.push({ name: c.name, bin });
   }
   return out;
@@ -71,5 +88,7 @@ export function buildVsix() {
 
 export function installInto(editor, vsix) {
   const r = runEditor(editor.bin, ['--install-extension', vsix, '--force']);
-  return { ok: r.ok && /success|install/i.test(r.out), out: r.out.split(/\r?\n/).filter(l => !/depends on|NOT registered/.test(l)).slice(-2).join(' ') };
+  const ok = r.ok && /success|install/i.test(r.out);
+  const err = r.out.split(/\r?\n/).filter(l => l.trim() && !/depends on|NOT registered|^\[\d+:\d+\/|libva|AppImage|GPU|gpu_/i.test(l)).slice(-2).join(' ');
+  return { ok, out: ok ? r.out : (err || 'l\'éditeur n\'a pas accepté l\'installation : installe le fichier .vsix à la main (Extensions › ⋯ › Installer depuis un VSIX)') };
 }
