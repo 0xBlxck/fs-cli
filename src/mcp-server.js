@@ -8,7 +8,7 @@ import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfg, FILES, ROOT } from './config.js';
-import { streamChat, fetchAgents, getJson } from './api.js';
+import { streamChat, fetchAgents, requestJson } from './api.js';
 import { newSid, tag } from './chats.js';
 import { isFolderTrusted } from './trust.js';
 import { summarizeChanges } from './changes.js';
@@ -108,7 +108,7 @@ export function createMcpServer(deps = {}) {
     hasToken: () => !!TOKEN,
     stream: streamChat,
     fetchAgents,
-    fetchAgentsFull: () => getJson('/chats/agents'),
+    fetchAgentsFull: async () => (await requestJson('GET', '/chats/agents').catch(() => ({}))).data,   // { data: [...] } déballé
     runNative: null,                                                   // chargé à la demande (moteur natif + outils locaux)
     allowCommands: process.env.FS_MCP_ALLOW_COMMANDS === '1',
     ...deps,
@@ -136,7 +136,7 @@ export function createMcpServer(deps = {}) {
   async function toolModels() {
     if (!d.hasToken()) return textResult(NO_TOKEN, true);
     const j = await d.fetchAgentsFull();
-    const arr = Array.isArray(j) ? j : j?.agents;
+    const arr = Array.isArray(j) ? j : (j?.data || j?.agents);   // la vraie API renvoie { data: [...] }
     if (!Array.isArray(arr)) return textResult('Impossible de récupérer la liste des modèles France Student (réseau, ou clé de session expirée : relance « fs-cli --login »).', true);
     const list = arr.filter(a => a && a.isActive !== false).map(a => ({ id: a.id, name: a.name, contextWindow: Number(a.contextWindow) || null }));
     agents = Object.fromEntries(list.map(a => [String(a.id), a.name]));
@@ -409,7 +409,7 @@ function installToml(t, entry) {
 }
 
 /** Ajoute (ou met à jour) l'entrée « france-student » sans toucher aux autres serveurs. Renvoie un résultat par agent trouvé. */
-export function installMcp({ home = installHome(), cliPath = path.join(ROOT, 'cli.js'), command = 'node' } = {}) {
+export function installMcp({ home = installHome(), cliPath = path.join(ROOT, 'cli.js'), command = process.execPath } = {}) {   // chemin complet : une appli graphique (Antigravity, Mac) n'a pas toujours « node » dans son PATH
   if (!home) return [];
   const entry = { command, args: [path.resolve(cliPath), '--mcp'] };
   return mcpTargets(home).map(t => {

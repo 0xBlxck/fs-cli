@@ -156,18 +156,18 @@ test('--install-mcp : ajoute « france-student » sans rien perdre, sauvegarde .
   assert.match(r1.stdout, /Redémarre/);
   const a = JSON.parse(fs.readFileSync(agy, 'utf8'));
   assert.deepEqual(Object.keys(a.mcpServers), ['autre', 'distant', 'france-student']);
-  assert.equal(a.mcpServers['france-student'].command, 'node');
+  assert.equal(a.mcpServers['france-student'].command, process.execPath);
   assert.deepEqual(a.mcpServers['france-student'].args, [path.resolve(CLI), '--mcp']);
   assert.equal(fs.readFileSync(agy + '.bak', 'utf8'), agyOrig);
   assert.equal(fs.readFileSync(ide, 'utf8'), '{ ceci n\'est pas du JSON', 'JSON illisible laissé tel quel');
   assert.match(r1.stdout, /illisible/);
   const cj = JSON.parse(fs.readFileSync(claude, 'utf8'));
   assert.equal(cj.numStartups, 3); assert.deepEqual(cj.projects, { x: { a: 1 } }); assert.ok(cj.mcpServers.faux);
-  assert.deepEqual(cj.mcpServers['france-student'], { type: 'stdio', command: 'node', args: [path.resolve(CLI), '--mcp'] });
+  assert.deepEqual(cj.mcpServers['france-student'], { type: 'stdio', command: process.execPath, args: [path.resolve(CLI), '--mcp'] });
   assert.ok(fs.existsSync(claude + '.bak'));
   const t1 = fs.readFileSync(toml, 'utf8');
   assert.ok(t1.startsWith(tomlOrig.trimEnd()), 'TOML existant conservé');
-  assert.match(t1, /\[mcp_servers\.france-student\]\ncommand = "node"\nargs = \[".*cli\.js", "--mcp"\]/);
+  assert.match(t1, /\[mcp_servers\.france-student\]\ncommand = ".*node(\.exe)?"\nargs = \[".*cli\.js", "--mcp"\]/);
   assert.equal(fs.readFileSync(toml + '.bak', 'utf8'), tomlOrig);
 
   const r2 = run();                                                  // 2e passage : rien ne change, aucune nouvelle sauvegarde
