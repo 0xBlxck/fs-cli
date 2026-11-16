@@ -38,7 +38,7 @@ import { sortedModelIds } from './src/models-order.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
-import { fetchChat } from './src/api.js';
+import { fetchChat, isBrokenHistory } from './src/api.js';
 import { toolsCatalog, loadMcpConfig, saveMcpConfig } from './src/mcp.js';
 import { getMcp, activeServers } from './src/mcp-runtime.js';
 import * as ui from './src/ui.js';
@@ -1028,6 +1028,19 @@ async function chatTurn(text, { keepLast = false } = {}) {
       println(c.yellow('  cette conversation a été supprimée du site : ton message part dans une nouvelle conversation'));
       turnAbort = null;
       return chatTurn(text, { keepLast: true });
+    }
+    if (isBrokenHistory(e) && S.chatId && !S.recovering) {            // France Student ne peut plus relire cette conversation : on repart, avec la fin de l'ancienne
+      const old = S.chatId;
+      println(c.yellow('\n  ⚠ France Student ne peut plus relire cette conversation (un ancien élément, souvent un résultat de recherche web, y est devenu invalide) : elle est bloquée.'));
+      println(c.dim('    Ton message repart dans une nouvelle conversation, avec la fin de celle-ci comme contexte.'));
+      let recap = '';
+      try { recap = transcriptOf(await fetchChat(old)).slice(-10).map(m => `${m.role === 'user' ? 'Utilisateur' : 'Assistant'} : ${m.text.slice(0, 1500)}`).join('\n\n'); } catch {}
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      S.pendingSummary = recap ? `Derniers échanges de la conversation précédente (devenue inutilisable à cause d'une erreur du serveur) :\n${recap}` : null;
+      S.compactedFrom = null;
+      turnAbort = null;
+      S.recovering = true;
+      try { return await chatTurn(text, { keepLast: true }); } finally { S.recovering = false; }
     }
     if (e.code === 'DAILY_CHAT_LIMIT' && S.compactedFrom && !S.chatId) {   // impossible d'ouvrir la conversation légère : on reste dans l'actuelle, rien n'est perdu
       S.chatId = S.compactedFrom; S.compactedFrom = null; S.pendingSummary = null; S.ctxSent = true;

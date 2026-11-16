@@ -318,3 +318,15 @@ test('modèles rangés du plus puissant au moins puissant, groupés par fourniss
   assert.match(panel, /\['fable', 'opus', 'sonnet', 'haiku'\]/, 'le panneau suit la même règle');
   assert.match(panel, /\['astra', 'sol', 'terra', 'luna'\]/);
 });
+
+test('conversation bloquée par France Student (élément de l\'historique refusé) : reconnue, pour repartir dans une nouvelle', async () => {
+  const { isBrokenHistory } = await import('../src/api.js');
+  const julot = 'Erreur du serveur: 400 BAD_REQUEST "Claude request failed: {type=error, error={type=invalid_request_error, message=messages.11.content.0: Invalid `encrypted_content` in `search_result` block}, request_id=req_011Ch7VTLpw1WRqeXsDCyzXE}"';
+  assert.equal(isBrokenHistory(new Error(julot)), true);
+  assert.equal(isBrokenHistory('messages.3.content.1: Invalid `signature` in `thinking` block'), true);
+  assert.equal(isBrokenHistory(new Error('Erreur du serveur: 429 Too Many Requests')), false);
+  assert.equal(isBrokenHistory(new Error('Chat not found with id x')), false);
+  assert.equal(isBrokenHistory(null), false);
+  const cli = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'cli.js'), 'utf8');
+  assert.match(cli, /isBrokenHistory\(e\) && S\.chatId && !S\.recovering/, 'une seule reprise automatique (pas de boucle)');
+});

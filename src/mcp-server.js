@@ -8,7 +8,7 @@ import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys, FILES, ROOT } from './config.js';
-import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat } from './api.js';
+import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat, isBrokenHistory } from './api.js';
 import { fetchUserUsage } from './account.js';
 import { sensitivePathReason } from './permissions.js';
 import { newSid, tag, lastReset, createdToday, DAILY_LIMIT } from './chats.js';
@@ -335,7 +335,7 @@ export function createMcpServer(deps = {}) {
     return true;
   }
   const CANCELLED = () => textResult('L\'utilisateur a fermé la fenêtre de choix de la conversation : rien n\'a été envoyé à France Student. Demande-lui avant de réessayer.', true);
-  const gone = e => /Chat not found|not found with id/i.test(String(e?.message || e));
+  const gone = e => /Chat not found|not found with id/i.test(String(e?.message || e)) || isBrokenHistory(e);   // supprimée, ou bloquée par France Student → une neuve
   const folders = new Map();                                           // dossier normalisé → état de session de l'agent
   const running = new Map();                                           // id de requête → AbortController
   let queue = Promise.resolve();                                       // fs_ask / fs_agent : un à la fois (réglages globaux, quotas)

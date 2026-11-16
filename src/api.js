@@ -16,6 +16,11 @@ export class ApiError extends Error {
   constructor(msg, { status, retry = false } = {}) { super(msg); this.status = status; this.retry = retry; }
 }
 
+/** Erreur de France Student qui bloque toute la conversation : un ANCIEN message de l'historique (souvent un résultat de recherche web
+ *  ou une réflexion signée) est refusé par le modèle à chaque nouvel envoi, ex. « messages.11.content.0: Invalid `encrypted_content`
+ *  in `search_result` block ». Rien à corriger de notre côté : on ne peut que repartir d'une nouvelle conversation. */
+export const isBrokenHistory = e => /Invalid\s+`?(?:encrypted_content|signature)`?\s+in\s+`?(?:search_result|web_search_tool_result|thinking|redacted_thinking)|messages\.\d+\.content\.\d+:\s*Invalid/i.test(String(e?.message || e || ''));
+
 /** corps d'une réponse 429 « Daily new chat limit… » → erreur claire (sans nouvel essai), sinon null */
 export function parseDailyLimit(body) {
   if (!/Daily new chat limit/i.test(body || '')) return null;
