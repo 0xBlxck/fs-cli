@@ -156,6 +156,11 @@ Il faut une clé de session France Student : si FS-CLI n'est pas encore connect�
 - **Diff coloré** : chaque modification montre les lignes retirées (rouge) et ajoutées (vert), avec les numéros de ligne.
 - **Mode plan** : le modèle propose un plan en lecture seule, puis te demande s'il doit l'appliquer (automatiquement ou en validant chaque action).
 - **Commandes perso** : un fichier `ma-commande.md` dans `.fs-cli/commands/` (projet) ou `~/.fs-cli/commands/` devient `/ma-commande` (`$ARGUMENTS` = ce que tu tapes après). Tes commandes de Claude Code (`.claude/commands/`) marchent aussi.
+- **Valider dans l'éditeur** : en mode « confirmer », chaque modification proposée s'ouvre dans le diff de l'éditeur avec Accepter / Refuser (panneau ou boutons ✓ / ✗ du diff). En mode auto ou « modifs auto », il fait tout seul.
+- **Agents** : avec `/team`, le panneau suit chaque agent en direct (état, durée, tokens, résultat), avec une vue en arbre comme l'« Agent map » de Claude.
+- **Images** : les modèles GPT de France Student génèrent des images ; elles s'affichent directement dans le panneau (bouton « Enregistrer… »), et sont renvoyées aux autres agents via le serveur MCP.
+- **Contexte adapté au modèle** : résumé automatique à 200k tokens par message pour Claude (1M), ~80k pour GPT, 60k pour Haiku (`/autocompact 150k` pour choisir).
+- **Sélecteur de modèle** groupé par fournisseur (Anthropic, OpenAI) avec logos et taille de contexte.
 - **Bilan des fichiers** : après chaque demande, la liste des fichiers modifiés (+/− lignes) ; `/changes` montre le diff d'un fichier et permet de **l'annuler seul**.
 - **Alerte** : quand l'agent attend ta réponse, le terminal bipe (la barre des tâches clignote) — tu peux faire autre chose pendant qu'il travaille.
 - **Retour en arrière** : `/rewind` (ou « reviens en arrière ») remet tous les fichiers dans l'état d'avant la demande de ton choix.

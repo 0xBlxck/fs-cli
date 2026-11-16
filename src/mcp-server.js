@@ -8,7 +8,7 @@ import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfg, FILES, ROOT } from './config.js';
-import { streamChat, fetchAgents, requestJson } from './api.js';
+import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile } from './api.js';
 import { newSid, tag } from './chats.js';
 import { isFolderTrusted } from './trust.js';
 import { summarizeChanges } from './changes.js';
@@ -46,13 +46,15 @@ export const TOOL_DEFS = [
     title: 'Demander à France Student',
     description: 'Envoie une question à un modèle France Student et renvoie sa réponse en texte. Le modèle n\'a AUCUN accès aux fichiers ni aux commandes : ' +
       'mets dans « prompt » tout le contexte utile. Une seule conversation est réutilisée pendant toute la session du serveur (le modèle se souvient des échanges précédents) ; ' +
-      'new_conversation=true en démarre une nouvelle (à éviter : le compte est limité à 50 nouvelles conversations par jour).',
+      'new_conversation=true en démarre une nouvelle (à éviter : le compte est limité à 50 nouvelles conversations par jour). ' +
+      'Les modèles GPT savent GÉNÉRER DES IMAGES : demande-le dans « prompt » ; l\'image est renvoyée dans la réponse (save_dir pour l\'enregistrer aussi sur le disque).',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'La question ou la demande, avec tout le contexte nécessaire.' },
         model: { type: 'string', description: 'Modèle à utiliser : nom (ex. « sonnet », « Claude Opus 5.5 », « luna ») ou identifiant (ex. « -2003 »). Par défaut : le modèle choisi dans fs-cli.' },
         new_conversation: { type: 'boolean', description: 'true = nouvelle conversation (oublie les échanges précédents). Par défaut false.', default: false },
+        save_dir: { type: 'string', description: 'Dossier (chemin absolu) où enregistrer les images générées. Facultatif : sans lui, les images sont seulement renvoyées dans la réponse.' },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -94,6 +96,25 @@ export function resolveModelIn(agents, arg) {
 }
 
 const textResult = (text, isError = false) => ({ content: [{ type: 'text', text: String(text) }], ...(isError ? { isError: true } : {}) });
+/** images générées → contenus MCP « image » (+ enregistrement si save_dir est donné) */
+const MAX_IMG = 8_000_000;
+function imageContents(imgs, saveDir) {
+  const out = [], saved = [];
+  for (const im of imgs) {
+    if (!im?.data || im.data.length > MAX_IMG) continue;
+    out.push({ type: 'image', data: im.data.toString('base64'), mimeType: /^image\/(png|jpeg|webp|gif)$/.test(im.mime) ? im.mime : 'image/png' });
+    if (saveDir) { try { fs.mkdirSync(saveDir, { recursive: true }); const f = path.join(saveDir, String(im.name || 'image.png').replace(/[^\w.-]/g, '_')); fs.writeFileSync(f, im.data); saved.push(f); } catch {} }
+  }
+  return { out, saved };
+}
+const withImages = (result, imgs, saveDir) => {
+  if (!imgs.length) return result;
+  const { out, saved } = imageContents(imgs, saveDir);
+  if (!out.length) return result;
+  const note = `${out.length} image${out.length > 1 ? 's' : ''} générée${out.length > 1 ? 's' : ''} par France Student (jointe${out.length > 1 ? 's' : ''} ci-dessous)${saved.length ? ` · enregistrée${saved.length > 1 ? 's' : ''} : ${saved.join(', ')}` : ' · non enregistrée sur le disque (paramètre save_dir pour l\'enregistrer)'}.`;
+  return { ...result, content: [...result.content, { type: 'text', text: note }, ...out] };
+};
+
 const rpcError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 
 /** Réponse automatique aux confirmations : toujours NON (aucun humain derrière le serveur MCP). */
@@ -109,6 +130,7 @@ export function createMcpServer(deps = {}) {
     stream: streamChat,
     fetchAgents,
     fetchAgentsFull: async () => (await requestJson('GET', '/chats/agents').catch(() => ({}))).data,   // { data: [...] } déballé
+    fetchApiFile,
     runNative: null,                                                   // chargé à la demande (moteur natif + outils locaux)
     allowCommands: process.env.FS_MCP_ALLOW_COMMANDS === '1',
     ...deps,
@@ -159,8 +181,13 @@ export function createMcpServer(deps = {}) {
         onChat: id => { if (!askState.chatId) askState.chatId = id; },
       });
       const text = String(res?.text || '').trim();
-      if (!text) return textResult(`${nameOf(m.id)} n'a renvoyé aucune réponse.`, true);
-      return textResult(text);
+      let imgs = [];
+      if (res?.sawImage && askState.chatId) {                            // image générée côté France Student (modèles GPT) : récupérée en mémoire
+        const list = res.images?.length ? res.images : await lastMessageImages(askState.chatId).catch(() => []);
+        for (const im of list) { try { imgs.push({ data: await d.fetchApiFile(im.url), mime: im.contentType, prompt: im.prompt, name: `image-${String(im.id || Date.now()).slice(0, 8)}.${im.ext}` }); } catch {} }
+      }
+      if (!text && !imgs.length) return textResult(`${nameOf(m.id)} n'a renvoyé aucune réponse.`, true);
+      return withImages(textResult(text || '(image seule)'), imgs, typeof args.save_dir === 'string' && path.isAbsolute(args.save_dir) ? args.save_dir : '');
     } catch (e) {
       if (e?.name === 'AbortError') return textResult('Demande annulée.', true);
       return textResult(`Erreur France Student : ${e?.message || e}`, true);
@@ -214,9 +241,12 @@ export function createMcpServer(deps = {}) {
     cfg.mode = d.allowCommands ? 'auto' : 'edits';
     ui.attachSink({ print: s => { for (const l of ui.stripAnsi(String(s)).split('\n')) if (l.trim()) { log.push(l); if (log.length > 400) log.shift(); progress(l.trim()); } }, spinner: () => {} });
     let error = null;
+    const agentImages = [];
+    ui.onImage(im => agentImages.push(im));                            // images générées pendant la tâche : renvoyées à l'appelant
     try { await d.runNative(S, task, { signal, ask }); }
     catch (e) { error = e; }
     finally {
+      ui.onImage(null);
       cfg.mode = savedMode;
       restoreSavedMode(savedMode);
       ui.attachSink(SILENT_SINK);
@@ -233,7 +263,7 @@ export function createMcpServer(deps = {}) {
       : 'Fichiers modifiés : aucun.');
     parts.push(`Appels d'outils : ${nTools}.`);
     if (refused.length) parts.push(`Actions refusées automatiquement (${refused.length}) :\n${[...new Set(refused)].slice(0, 20).map(r => `- ${r}`).join('\n')}`);
-    return textResult(parts.join('\n\n'), !!error && !S.lastResponse);
+    return withImages(textResult(parts.join('\n\n'), !!error && !S.lastResponse), agentImages, '');
   }
 
   /** notifications/progress (si le client a fourni un progressToken) : l'agent appelant voit que le travail avance (au plus une toutes les 2 s) */

@@ -183,3 +183,18 @@ test('--install-mcp ne touche jamais au vrai dossier personnel pendant les tests
   try { assert.equal(srv.installHome(), null); assert.deepEqual(srv.installMcp(), []); }
   finally { process.env.FS_IMPORT_HOME = saved; }
 });
+
+test('fs_ask : une image générée par France Student est renvoyée à l\'agent appelant (contenu MCP « image »)', async () => {
+  const { createMcpServer } = await import('../src/mcp-server.js');
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const srv = createMcpServer({
+    hasToken: () => true, fetchAgents: async () => ({ '-1002': 'GPT 6 Luna' }),
+    stream: async o => { o.onChat?.('chat-img'); return { text: 'Voici.', toolCalls: [], sawImage: true, images: [{ id: 'abc12345', url: '/chats/chat-img/messages/m/images/abc12345', contentType: 'image/png', ext: 'png', prompt: 'un chat' }] }; },
+    fetchApiFile: async () => png,
+  });
+  const r = await srv.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_ask', arguments: { prompt: 'une image', model: '-1002' } } });
+  const img = r.result.content.find(c => c.type === 'image');
+  assert.ok(img, JSON.stringify(r.result));
+  assert.equal(img.mimeType, 'image/png');
+  assert.equal(Buffer.from(img.data, 'base64').toString('hex'), png.toString('hex'));
+});

@@ -106,7 +106,7 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
           } else {                                                           // terminal : il ne peut pas afficher d'image → fichier
             const file = path.join(HOME_DIR, 'images', name);
             fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data);
-            ui.image({ file, prompt: im.prompt, name });
+            ui.image({ data, file, mime: im.contentType, prompt: im.prompt, name });
             S.notes.push(`Image générée enregistrée sur le PC de l'utilisateur : ${file}. Pour l'utiliser dans le projet, copie-la dans le dossier voulu avec run_command.`);
           }
         } catch (e) { ui.println(c.yellow(`  image générée, mais récupération impossible : ${e.message}`)); }
