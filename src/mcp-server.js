@@ -7,8 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
-import { TOKEN, VERSION, cfg, saveCfg, FILES, ROOT } from './config.js';
-import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile } from './api.js';
+import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys, FILES, ROOT } from './config.js';
+import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects } from './api.js';
 import { newSid, tag } from './chats.js';
 import { isFolderTrusted } from './trust.js';
 import { summarizeChanges } from './changes.js';
@@ -45,7 +45,7 @@ export const TOOL_DEFS = [
     name: 'fs_ask',
     title: 'Demander à France Student',
     description: 'Envoie une question à un modèle France Student et renvoie sa réponse en texte. Le modèle n\'a AUCUN accès aux fichiers ni aux commandes : ' +
-      'mets dans « prompt » tout le contexte utile. Une seule conversation est réutilisée pendant toute la session du serveur (le modèle se souvient des échanges précédents) ; ' +
+      'mets dans « prompt » tout le contexte utile. Une seule conversation, choisie par l\'utilisateur, est réutilisée (le modèle se souvient des échanges précédents) ; ' +
       'new_conversation=true en démarre une nouvelle (à éviter : le compte est limité à 50 nouvelles conversations par jour). ' +
       'Les modèles GPT savent GÉNÉRER DES IMAGES : demande-le dans « prompt » ; l\'image est renvoyée dans la réponse (save_dir pour l\'enregistrer aussi sur le disque).',
     inputSchema: {
@@ -54,6 +54,7 @@ export const TOOL_DEFS = [
         prompt: { type: 'string', description: 'La question ou la demande, avec tout le contexte nécessaire.' },
         model: { type: 'string', description: 'Modèle à utiliser : nom (ex. « sonnet », « Claude Opus 5.5 », « luna ») ou identifiant (ex. « -2003 »). Par défaut : le modèle choisi dans fs-cli.' },
         new_conversation: { type: 'boolean', description: 'true = nouvelle conversation (oublie les échanges précédents). Par défaut false.', default: false },
+        conversation_id: { type: 'string', description: 'Identifiant d\'une conversation France Student précise à utiliser pour cette demande (facultatif, seulement si l\'utilisateur le donne).' },
         save_dir: { type: 'string', description: 'Dossier (chemin absolu) où enregistrer les images générées. Facultatif : sans lui, les images sont seulement renvoyées dans la réponse.' },
       },
       required: ['prompt'],
@@ -75,6 +76,7 @@ export const TOOL_DEFS = [
         folder: { type: 'string', description: 'Chemin absolu du dossier de travail (déjà approuvé avec fs-cli).' },
         model: { type: 'string', description: 'Modèle (nom ou identifiant, voir fs_models). Par défaut : le modèle choisi dans fs-cli. Les modèles Claude acceptent le mieux de travailler avec les outils.' },
         new_conversation: { type: 'boolean', description: 'true = nouvelle conversation pour ce dossier. Par défaut false.', default: false },
+        conversation_id: { type: 'string', description: 'Identifiant d\'une conversation France Student précise à utiliser (facultatif, seulement si l\'utilisateur le donne).' },
       },
       required: ['task', 'folder'],
       additionalProperties: false,
@@ -131,12 +133,80 @@ export function createMcpServer(deps = {}) {
     fetchAgents,
     fetchAgentsFull: async () => (await requestJson('GET', '/chats/agents').catch(() => ({}))).data,   // { data: [...] } déballé
     fetchApiFile,
+    listChats: n => fetchChatsList(n),
+    listProjects: listFsProjects,
     runNative: null,                                                   // chargé à la demande (moteur natif + outils locaux)
     allowCommands: process.env.FS_MCP_ALLOW_COMMANDS === '1',
     ...deps,
   };
   let agents = null;
-  const askState = { chatId: null, sid: newSid() };
+  const askState = { chatId: cfg.mcpChat?.id || null, sid: newSid() };   // conversation du MCP retenue dans ta config : réutilisée après un redémarrage
+  if (cfg.mcpProject !== 'same' && cfg.mcpProject !== undefined) setProjectOverride(cfg.mcpProject || false);
+  /** conversation à utiliser : celle demandée (conversation_id), sinon celle du MCP */
+  const chatFor = args => (typeof args.conversation_id === 'string' && /^[\w-]{8,64}$/.test(args.conversation_id) ? args.conversation_id : null);
+  const remember = (id, title) => { if (id && cfg.mcpChat?.id !== id) saveCfgKeys({ mcpChat: { id, title: title || '', since: Date.now() } }); };
+  const cleanTitle = t => String(t || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 60) || '(sans titre)';
+
+  // ── requêtes vers le client (elicitation : l'IDE affiche un petit formulaire à l'utilisateur) ──
+  let clientCanAsk = false, askedWhere = false, reqN = 0;
+  const waiting = new Map();
+  function request(method, params, signal, ms = 10 * 60_000) {
+    if (!d.notify) return Promise.reject(new Error('pas de canal vers le client'));
+    const id = `fs-cli-${++reqN}`;
+    return new Promise((resolve, reject) => {
+      const stop = () => { clearTimeout(timer); waiting.delete(id); signal?.removeEventListener?.('abort', onAbort); };
+      const onAbort = () => { stop(); reject(Object.assign(new Error('annulé'), { name: 'AbortError' })); };
+      const timer = setTimeout(() => { stop(); reject(new Error('pas de réponse de l\'utilisateur')); }, ms);
+      timer.unref?.();
+      signal?.addEventListener?.('abort', onAbort, { once: true });
+      waiting.set(id, msg => { stop(); if (msg.error) reject(new Error(msg.error.message || 'refus du client')); else resolve(msg.result); });
+      d.notify({ jsonrpc: '2.0', id, method, params });
+    });
+  }
+
+  /** premier appel de la session : l'IDE demande où parler (boutons). null = rien demandé · { cancel } = l'utilisateur a fermé la fenêtre */
+  async function chooseWhere(signal) {
+    if (askedWhere || !clientCanAsk || cfg.mcpAskWhere === false) return null;
+    askedWhere = true;
+    const [chats, projects] = await Promise.all([d.listChats(12).catch(() => []), d.listProjects().catch(() => [])]);
+    const conv = [], convNames = [];
+    if (askState.chatId) { conv.push('keep'); convNames.push(`Continuer la conversation du MCP${cfg.mcpChat?.title ? ` (« ${cleanTitle(cfg.mcpChat.title)} »)` : ''}`); }
+    conv.push('new'); convNames.push('Nouvelle conversation');
+    const titles = new Map();
+    for (const ch of (Array.isArray(chats) ? chats : []).slice(0, 10)) {
+      if (!ch?.id || ch.id === askState.chatId || !/^[\w-]{8,64}$/.test(ch.id)) continue;
+      conv.push(`chat:${ch.id}`); convNames.push(`Conversation « ${cleanTitle(ch.title)} »`); titles.set(ch.id, ch.title || '');
+    }
+    const properties = {
+      conversation: { type: 'string', title: 'Conversation France Student', description: 'Où le MCP doit écrire sur ton compte France Student', enum: conv, enumNames: convNames, default: conv[0] },
+    };
+    const projs = (Array.isArray(projects) ? projects : []).filter(p => p?.id).slice(0, 10);
+    const curProj = cfg.mcpProject === 'same' || cfg.mcpProject === undefined ? 'same' : cfg.mcpProject?.id ? `project:${cfg.mcpProject.id}` : 'none';
+    const pe = ['same', 'none', ...projs.map(p => `project:${p.id}`)];
+    properties.project = { type: 'string', title: 'Ranger une nouvelle conversation dans', description: 'Seulement pour une nouvelle conversation',
+      enum: pe, enumNames: ['Comme FS-CLI', 'Aucun projet (conversations normales)', ...projs.map(p => `Projet « ${cleanTitle(p.name)} »`)], default: pe.includes(curProj) ? curProj : 'same' };
+    properties.remember = { type: 'boolean', title: 'Retenir ce choix et ne plus demander', default: false };
+    let r;
+    try {
+      r = await request('elicitation/create', { message: 'France Student : dans quelle conversation le MCP doit-il parler ?', requestedSchema: { type: 'object', properties, required: ['conversation'] } }, signal);
+    } catch (e) { if (e?.name === 'AbortError') throw e; return null; }   // le client ne sait pas afficher le formulaire : choix enregistré
+    if (r?.action !== 'accept') { askedWhere = false; return { cancel: true }; }   // fenêtre fermée : on redemandera
+    const v = r.content || {};
+    if (typeof v.project === 'string' && pe.includes(v.project)) {
+      const p = v.project === 'same' ? undefined : v.project === 'none' ? false : (pr => pr && { id: pr.id, name: pr.name })(projs.find(x => `project:${x.id}` === v.project));
+      setProjectOverride(p);
+      if (v.remember === true) saveCfgKeys({ mcpProject: p === undefined ? 'same' : p });
+    }
+    if (v.conversation === 'new') { askState.chatId = null; askState.sid = newSid(); folders.clear(); }
+    else if (typeof v.conversation === 'string' && v.conversation.startsWith('chat:') && conv.includes(v.conversation)) {
+      const id = v.conversation.slice(5);
+      askState.chatId = id; remember(id, titles.get(id)); folders.clear();
+    }
+    if (v.remember === true) saveCfgKeys({ mcpAskWhere: false });
+    return null;
+  }
+  const CANCELLED = () => textResult('L\'utilisateur a fermé la fenêtre de choix de la conversation : rien n\'a été envoyé à France Student. Demande-lui avant de réessayer.', true);
+  const gone = e => /Chat not found|not found with id/i.test(String(e?.message || e));
   const folders = new Map();                                           // dossier normalisé → état de session de l'agent
   const running = new Map();                                           // id de requête → AbortController
   let queue = Promise.resolve();                                       // fs_ask / fs_agent : un à la fois (réglages globaux, quotas)
@@ -172,18 +242,27 @@ export function createMcpServer(deps = {}) {
     if (!d.hasToken()) return textResult(NO_TOKEN, true);
     const m = await pickModel(args.model);
     if (m.error) return textResult(m.error, true);
+    const target = chatFor(args);                                      // conversation précise demandée par l'utilisateur
+    if (!target && args.new_conversation !== true && (await chooseWhere(signal))?.cancel) return CANCELLED();
     if (args.new_conversation === true) { askState.chatId = null; askState.sid = newSid(); }
-    let content = prompt;
-    if (!askState.chatId && cfg.tagChats !== false) content = tag(askState.sid) + content;
-    try {
-      const res = await d.stream({
-        agentId: m.id, chatId: askState.chatId, content, signal, webSearch: false, register: { sid: askState.sid, role: 'mcp' },
-        onChat: id => { if (!askState.chatId) askState.chatId = id; },
+    const send = async chatId => {
+      let content = prompt;
+      if (!chatId && cfg.tagChats !== false) content = tag(askState.sid, 'mcp') + content;
+      return d.stream({
+        agentId: m.id, chatId, content, signal, webSearch: false, register: { sid: askState.sid, role: 'mcp' },
+        onChat: id => { if (!target && !askState.chatId) { askState.chatId = id; remember(id); } },
       });
+    };
+    try {
+      let res;
+      try { res = await send(target || askState.chatId); }
+      catch (e) { if (!gone(e) || target) throw e; askState.chatId = null; saveCfgKeys({ mcpChat: null }); res = await send(null); }   // conversation supprimée sur le site : une neuve
+      if (!target && askState.chatId) remember(askState.chatId);
       const text = String(res?.text || '').trim();
       let imgs = [];
-      if (res?.sawImage && askState.chatId) {                            // image générée côté France Student (modèles GPT) : récupérée en mémoire
-        const list = res.images?.length ? res.images : await lastMessageImages(askState.chatId).catch(() => []);
+      const usedChat = target || askState.chatId;
+      if (res?.sawImage && usedChat) {                            // image générée côté France Student (modèles GPT) : récupérée en mémoire
+        const list = res.images?.length ? res.images : await lastMessageImages(usedChat).catch(() => []);
         for (const im of list) { try { imgs.push({ data: await d.fetchApiFile(im.url), mime: im.contentType, prompt: im.prompt, name: `image-${String(im.id || Date.now()).slice(0, 8)}.${im.ext}` }); } catch {} }
       }
       if (!text && !imgs.length) return textResult(`${nameOf(m.id)} n'a renvoyé aucune réponse.`, true);
@@ -217,9 +296,10 @@ export function createMcpServer(deps = {}) {
       d.runNative = (await import('./native.js')).runNative;
     }
     const key = process.platform === 'win32' ? dir.toLowerCase() : dir;
+    if (!folders.has(key) && !chatFor(args) && args.new_conversation !== true && (await chooseWhere(signal))?.cancel) return CANCELLED();
     let S = folders.get(key);
     if (!S || args.new_conversation === true) {
-      S = { chatId: null, sid: newSid(), agentId: m.id, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: [], tokens: { in: 0, out: 0 }, slots: {}, stats: { turns: 0, requests: 0, tools: 0 }, lastResponse: '' };
+      S = { chatId: chatFor(args) || (args.new_conversation === true ? null : askState.chatId), sid: newSid(), agentId: m.id, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: [], tokens: { in: 0, out: 0 }, slots: {}, stats: { turns: 0, requests: 0, tools: 0 }, lastResponse: '' };
       folders.set(key, S);
     }
     S.agentId = m.id; S.allow = {};                                    // aucune autorisation « toujours » ne survit d'une tâche à l'autre
@@ -243,7 +323,10 @@ export function createMcpServer(deps = {}) {
     let error = null;
     const agentImages = [];
     ui.onImage(im => agentImages.push(im));                            // images générées pendant la tâche : renvoyées à l'appelant
-    try { await d.runNative(S, task, { signal, ask }); }
+    try {
+      await d.runNative(S, task, { signal, ask });
+      if (!chatFor(args) && S.chatId && !askState.chatId) { askState.chatId = S.chatId; remember(S.chatId); }   // même conversation pour fs_ask et fs_agent
+    }
     catch (e) { error = e; }
     finally {
       ui.onImage(null);
@@ -287,7 +370,7 @@ export function createMcpServer(deps = {}) {
 
   async function handle(msg) {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg) || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
-      if (msg && typeof msg === 'object' && !Array.isArray(msg) && msg.id !== undefined && msg.method === undefined) return null;   // réponse d'un client : ignorée
+      if (msg && typeof msg === 'object' && !Array.isArray(msg) && msg.id !== undefined && msg.method === undefined) { waiting.get(msg.id)?.(msg); return null; }   // réponse du client à une de nos requêtes
       return rpcError(msg?.id, -32600, 'Invalid Request');
     }
     const { id, method, params } = msg;
@@ -299,6 +382,7 @@ export function createMcpServer(deps = {}) {
     switch (method) {
       case 'initialize': {
         const asked = params?.protocolVersion;
+        clientCanAsk = !!params?.capabilities?.elicitation;           // Claude Code… : sait afficher un formulaire à l'utilisateur
         return { jsonrpc: '2.0', id, result: {
           protocolVersion: SUPPORTED_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },

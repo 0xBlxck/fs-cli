@@ -86,7 +86,7 @@ test('fs_ask : une seule conversation réutilisée, nouvelle seulement sur deman
   assert.deepEqual(reqs.map(r => r.chatId), [null, 'conv-1', null]);
   assert.equal(reqs[0].agentId, -2003);
   assert.ok(reqs.every(r => !r.clientTools), 'aucun outil client');
-  assert.match(reqs[0].content, /^\[[0-9a-f]{4}\] un$/);
+  assert.match(reqs[0].content, /^\[[0-9a-f]{4}·mcp\] un$/);
   const bad = await call({ prompt: 'x', model: 'modele-qui-nexiste-pas' });
   assert.equal(bad.isError, true); assert.match(bad.content[0].text, /inconnu/);
 });
@@ -113,6 +113,7 @@ test('fs_agent : fichiers modifiés dans le dossier, tout ce qui demande une con
   const fakeStream = async o => { seen.push(o); if (!o.chatId) o.onChat?.('chat-agent'); const t = turns[i++] || { text: 'fin' }; if (t.text) o.onText?.(t.text); return { text: t.text || '', toolCalls: t.calls || [] }; };
   const modeBefore = cfg.mode;
   const notes = [];
+  cfg.mcpChat = null;                                                  // pas de conversation du MCP retenue d'un test précédent
   const s = srv.createMcpServer({ hasToken: () => true, notify: m => notes.push(m), fetchAgents: async () => null, runNative: (S, task, o) => runNative(S, task, { ...o, stream: fakeStream, ctxPct: async () => null }) });
   const r = (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_agent', arguments: { task: 'crée hello.txt', folder: dir }, _meta: { progressToken: 'p1' } } })).result;
   const text = r.content[0].text;
@@ -197,4 +198,89 @@ test('fs_ask : une image générée par France Student est renvoyée à l\'agent
   assert.ok(img, JSON.stringify(r.result));
   assert.equal(img.mimeType, 'image/png');
   assert.equal(Buffer.from(img.data, 'base64').toString('hex'), png.toString('hex'));
+});
+
+test('conversation du MCP : retenue d\'un démarrage à l\'autre, conversation_id ponctuel, conversation supprimée → une neuve', async () => {
+  cfg.mcpChat = null; cfg.mcpAskWhere = true;
+  const reqs = [];
+  let n = 0;
+  const stream = async o => {
+    reqs.push(o.chatId);
+    if (o.chatId === 'supprimee-123') throw new Error('Chat not found with id supprimee-123');
+    if (!o.chatId) o.onChat?.(`mcp-${++n}`);
+    return { text: 'ok' };
+  };
+  const mk = () => srv.createMcpServer({ hasToken: () => true, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }) });
+  const ask = async (s, args) => (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_ask', arguments: args } })).result;
+  await ask(mk(), { prompt: 'un' });
+  let saved = JSON.parse(fs.readFileSync(FILES.cfg, 'utf8'));
+  assert.equal(saved.mcpChat?.id, 'mcp-1', 'conversation enregistrée dans la config');
+  await ask(mk(), { prompt: 'deux' });                                  // « redémarrage » : nouveau serveur, même conversation
+  assert.equal(reqs.at(-1), 'mcp-1');
+  const s = mk();
+  await ask(s, { prompt: 'ailleurs', conversation_id: 'autre-conv-42' });
+  assert.equal(reqs.at(-1), 'autre-conv-42', 'conversation_id utilisé');
+  assert.equal(cfg.mcpChat.id, 'mcp-1', 'sans changer la conversation retenue');
+  await ask(s, { prompt: 'trois' });
+  assert.equal(reqs.at(-1), 'mcp-1');
+  cfg.mcpChat = { id: 'supprimee-123' };                                // supprimée sur le site
+  const r = await ask(mk(), { prompt: 'quatre' });
+  assert.equal(r.isError, undefined, JSON.stringify(r));
+  assert.deepEqual(reqs.slice(-2), ['supprimee-123', null]);
+  assert.equal(cfg.mcpChat.id, 'mcp-2');
+});
+
+test('IDE avec formulaires (elicitation) : choix de la conversation et du projet avec des boutons, une fois par session', async () => {
+  cfg.mcpChat = { id: 'mcp-ancienne', title: '[ab12·mcp] vieux' }; cfg.mcpAskWhere = true; cfg.mcpProject = 'same';
+  const reqs = [], sent = [];
+  let answer = null;
+  let s;
+  const notify = m => { sent.push(m); if (m.method === 'elicitation/create') setImmediate(() => s.handle({ jsonrpc: '2.0', id: m.id, result: answer(m) })); };
+  const stream = async o => { reqs.push(o.chatId); if (!o.chatId) o.onChat?.('neuve-1'); return { text: 'ok' }; };
+  s = srv.createMcpServer({ hasToken: () => true, notify, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }),
+    listChats: async () => [{ id: 'site-conv-777', title: 'Mes révisions' }, { id: 'mcp-ancienne', title: 'doublon' }],
+    listProjects: async () => [{ id: 'proj-1', name: 'Cours' }] });
+  await s.handle({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: { elicitation: {} } } });
+  const ask = async args => (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_ask', arguments: args } })).result;
+  // 1) l'utilisateur ferme la fenêtre : rien n'est envoyé
+  answer = () => ({ action: 'cancel' });
+  const r0 = await ask({ prompt: 'x' });
+  assert.equal(r0.isError, true); assert.match(r0.content[0].text, /rien n'a été envoyé/);
+  assert.equal(reqs.length, 0);
+  // 2) il choisit une conversation du site
+  answer = m => {
+    const p = m.params.requestedSchema.properties;
+    assert.deepEqual(p.conversation.enum, ['keep', 'new', 'chat:site-conv-777'], 'la conversation du MCP n\'apparaît qu\'une fois');
+    assert.match(p.conversation.enumNames[0], /« vieux »/);
+    assert.equal(p.conversation.enumNames[2], 'Conversation « Mes révisions »');
+    assert.deepEqual(p.project.enum, ['same', 'none', 'project:proj-1']);
+    return { action: 'accept', content: { conversation: 'chat:site-conv-777', project: 'same', remember: false } };
+  };
+  await ask({ prompt: 'y' });
+  assert.equal(reqs.at(-1), 'site-conv-777');
+  assert.equal(cfg.mcpChat.id, 'site-conv-777');
+  // 3) plus de question pendant la session
+  const before = sent.filter(m => m.method === 'elicitation/create').length;
+  await ask({ prompt: 'z' });
+  assert.equal(sent.filter(m => m.method === 'elicitation/create').length, before);
+  assert.equal(reqs.at(-1), 'site-conv-777');
+  // 4) nouvelle session : nouvelle conversation rangée dans aucun projet, choix retenu
+  answer = () => ({ action: 'accept', content: { conversation: 'new', project: 'none', remember: true } });
+  s = srv.createMcpServer({ hasToken: () => true, notify, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }), listChats: async () => [], listProjects: async () => [{ id: 'proj-1', name: 'Cours' }] });
+  await s.handle({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: { elicitation: {} } } });
+  await ask({ prompt: 'w' });
+  assert.equal(reqs.at(-1), null);
+  assert.equal(cfg.mcpChat.id, 'neuve-1');
+  const saved = JSON.parse(fs.readFileSync(FILES.cfg, 'utf8'));
+  assert.equal(saved.mcpAskWhere, false, 'ne plus demander');
+  assert.equal(saved.mcpProject, false, 'aucun projet');
+  // 5) un IDE sans formulaires : aucune question, choix enregistré
+  cfg.mcpAskWhere = true; sent.length = 0;
+  s = srv.createMcpServer({ hasToken: () => true, notify, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }), listChats: async () => [], listProjects: async () => [] });
+  await s.handle({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {} } });
+  await ask({ prompt: 'v' });
+  assert.equal(sent.length, 0);
+  assert.equal(reqs.at(-1), 'neuve-1');
+  const { setProjectOverride } = await import('../src/api.js');
+  setProjectOverride(undefined);
 });

@@ -39,6 +39,9 @@ const DEFAULTS = {
   agentId: -1002,
   mcpAskImported: false,
   toolRefusals: {},
+  mcpChat: null,           // conversation France Student utilisée par le serveur MCP { id, title } : réutilisée même après un redémarrage
+  mcpAskWhere: true,       // serveur MCP : au premier appel de chaque session, l'IDE (Claude Code…) affiche un choix de conversation (boutons)
+  mcpProject: 'same',      // où ranger la conversation du MCP : 'same' = comme FS-CLI · false = conversations normales · { id, name } = ce projet
   fsProject: null,         // projet du site où ranger les conversations : null/false = conversations normales · { id, name } = ce projet
   fsProjectChosen: false,  // le choix « conversations normales / projet » a été fait (demandé une fois)
   disabledSkills: [],      // skills du PC désactivés (noms en minuscules) : jamais joints ni annoncés au modèle
@@ -77,6 +80,13 @@ if (!['auto', 'edits', 'ask', 'plan'].includes(cfg.mode)) cfg.mode = 'auto';
 if (cfg.compactTokens === 80000 && !cfg.compactTokensUser) cfg.compactTokens = 0;   // ancienne valeur par défaut enregistrée → seuil automatique selon le modèle
 if (!['native', 'chat'].includes(cfg.engine)) cfg.engine = 'native';
 if (!cfg.engineExplicit && cfg.engine === 'chat') cfg.engine = 'native';      // migration : le mode natif est désormais disponible
+
+/** enregistre seulement certaines clés (relit le fichier d'abord) : un autre processus FS-CLI peut tourner en même temps */
+export function saveCfgKeys(obj) {
+  Object.assign(cfg, obj);
+  try { const cur = JSON.parse(fs.readFileSync(FILES.cfg, 'utf8')); fs.writeFileSync(FILES.cfg, JSON.stringify({ ...cur, ...obj }, null, 2), { mode: 0o600 }); }
+  catch { saveCfg(); }
+}
 
 export function saveCfg() {
   try { fs.writeFileSync(FILES.cfg, JSON.stringify(cfg, null, 2), { mode: 0o600 }); } catch {}

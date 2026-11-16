@@ -1,7 +1,7 @@
 // Commandes supplémentaires : contexte, quota, compactage, duel, mémoire, skills, projet, historique
 import fs from 'node:fs';
 import path from 'node:path';
-import { cfg, saveCfg, upsertSession } from './config.js';
+import { cfg, saveCfg, saveCfgKeys, upsertSession } from './config.js';
 import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject, requestJson, listFsProjects } from './api.js';
 import { fetchChatUsage, fetchUserUsage, contextPercent, describeChatUsage, describeUserUsage } from './account.js';
 import * as mem from './memory.js';
@@ -161,7 +161,7 @@ async function mcpCommand(arg, env) {
   const cwd = S.cwd, mgr = getMcp(cwd);
   let [sub = 'list', ...rest] = splitArgs(arg);
   // « /mcp blender » = « /mcp tools blender » : démarre le serveur et montre ses outils
-  if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust|ask|login|logout)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
+  if (!/^(list|ls|presets|preset|add|rm|remove|toggle|test|tools|call|trust|ask|login|logout|conversation|conv)$/i.test(sub) && loadMcpConfig(cwd).mcpServers?.[sub]) { rest = [sub, ...rest]; sub = 'tools'; }
   const target = rest[0];
   // serveur importé d'un autre assistant (Claude Code, Codex…) : ton accord avant de le démarrer
   if (/^(tools|test|call)$/i.test(sub) && target) {
@@ -217,6 +217,43 @@ async function mcpCommand(arg, env) {
           println(r.ok ? c.green(`  ✓ connecté à ${target} : ${r.tools.length} outils`) : c.yellow(`  connecté, mais le serveur répond : ${r.error}`));
         } catch (e) { ui.spinner.stop(); println(c.red(`  ✗ ${e.message}`)); }
       });
+      return;
+    }
+    case 'conversation': case 'conv': {                              // où le serveur MCP (Antigravity, Claude Code…) parle à France Student
+      const cur = cfg.mcpChat?.id ? `conversation ${String(cfg.mcpChat.title || cfg.mcpChat.id).slice(0, 50)}` : 'une conversation dédiée, créée au prochain appel';
+      const curProj = cfg.mcpProject === 'same' || cfg.mcpProject === undefined ? 'comme FS-CLI' : cfg.mcpProject ? `projet « ${cfg.mcpProject.name} »` : 'conversations normales';
+      const askTxt = cfg.mcpAskWhere === false ? 'choix enregistré, sans question' : 'demandé dans l\'IDE au premier appel';
+      if (!env.select) return println(c.dim(`  serveur MCP : ${cur} · rangement : ${curProj} · ${askTxt}`));
+      const idx = await env.select({ title: 'Où le serveur MCP doit-il parler à France Student ?',
+        detail: `Actuellement : ${cur} · rangement : ${curProj} · ${askTxt}.\nLe MCP réutilise TOUJOURS la même conversation (même après un redémarrage) : ton compte n'est pas encombré.`,
+        options: ['Une conversation dédiée au MCP (conseillé)', 'Une de mes conversations existantes…', 'Ranger sa conversation dans un projet…', 'Ranger sa conversation dans mes conversations normales', 'Repartir sur une conversation neuve au prochain appel',
+          cfg.mcpAskWhere === false ? 'Me demander dans l\'IDE à chaque session (fenêtre avec boutons)' : 'Ne plus me demander dans l\'IDE', 'Annuler'] });
+      if (idx === 5) {
+        saveCfgKeys({ mcpAskWhere: cfg.mcpAskWhere === false });
+        println(c.green('  ✓ ') + (cfg.mcpAskWhere ? 'l\'IDE te demandera où parler au premier appel de chaque session (si l\'IDE sait afficher ce choix)' : 'l\'IDE ne demandera plus : le MCP utilise le choix enregistré'));
+        println(c.dim('  → redémarre l\'agent (Antigravity, Claude Code) pour qu\'il prenne ce réglage'));
+        return;
+      }
+      if (idx === 0 || idx === 4) { saveCfgKeys({ mcpChat: null }); println(c.green('  ✓ ') + 'le MCP ouvrira une conversation au prochain appel, puis la réutilisera toujours'); }
+      else if (idx === 1) {
+        ui.spinner.start('conversations…');
+        const list = await fetchChatsList(20).catch(() => []); ui.spinner.stop();
+        if (!list.length) return println(c.dim('  aucune conversation trouvée sur ton compte'));
+        const shown = list.slice(0, 15);
+        const j = await env.select({ title: 'Quelle conversation pour le MCP ?', options: [...shown.map(x => String(x.title || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '').slice(0, 60)), 'Annuler'] });
+        if (j == null || j >= shown.length) return;
+        saveCfgKeys({ mcpChat: { id: shown[j].id, title: shown[j].title || '' } });
+        println(c.green('  ✓ ') + `le MCP parlera dans « ${String(shown[j].title || '').slice(0, 50)} »`);
+      } else if (idx === 2) {
+        const projects = await listFsProjects().catch(() => []);
+        if (!projects.length) return println(c.dim('  aucun projet sur ton compte — crée-en un avec /projet nouveau'));
+        const j = await env.select({ title: 'Dans quel projet ranger la conversation du MCP ?', options: [...projects.slice(0, 15).map(p => p.name || '(sans nom)'), 'Annuler'] });
+        if (j == null || j >= Math.min(15, projects.length)) return;
+        saveCfgKeys({ mcpProject: { id: projects[j].id, name: projects[j].name }, mcpChat: null });
+        println(c.green('  ✓ ') + `la conversation du MCP sera rangée dans « ${projects[j].name} » (nouvelle au prochain appel)`);
+      } else if (idx === 3) { saveCfgKeys({ mcpProject: false, mcpChat: null }); println(c.green('  ✓ ') + 'la conversation du MCP sera dans tes conversations normales (nouvelle au prochain appel)'); }
+      else return;
+      println(c.dim('  → redémarre l\'agent (Antigravity, Claude Code) pour qu\'il prenne ce réglage'));
       return;
     }
     case 'ask': {                                                     // /mcp ask on : demander ton accord avant de démarrer un serveur importé d'un autre assistant

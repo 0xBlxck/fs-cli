@@ -459,16 +459,20 @@ async function liveSessions(limit = 50) {
   const check = s => Promise.race([fetchChatUsage(s.chatId).then(r => !!r).catch(() => null), new Promise(r => setTimeout(() => r(null), 5000))]);
   const res = [];
   for (let i = 0; i < list.length; i += 8) res.push(...await Promise.all(list.slice(i, i + 8).map(check)));
-  if (!res.some(Boolean)) return list;                               // rien n'a répondu : réseau ? on montre tout
+  if (list.length && !res.some(Boolean)) return list;                // rien n'a répondu : réseau ? on montre tout (jamais quand ce PC n'a encore aucune conversation)
   markSessionsGone(list.filter((s, i) => res[i] === false).map(s => s.chatId));   // seulement un « n'existe pas » net
   const local = list.filter((s, i) => res[i] !== false);              // délai dépassé : gardée (dans le doute, on montre)
-  // conversations du compte absentes de ce PC (faites sur un autre PC ou sur le site) : liste du compte + projet choisi
+  // conversations du compte absentes de ce PC (faites sur un autre PC ou sur le site) : liste du compte + celles rangées dans ses projets
   const known = new Set(loadSessions().map(s => s.chatId));
   const remote = [];
-  const add = arr => { for (const x of arr || []) if (x?.id && !known.has(x.id) && !remote.some(r => r.chatId === x.id)) remote.push({ chatId: x.id, title: String(x.title || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, ''), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.createdAt) || 0, ctxSent: true }); };
+  const add = (arr, project) => { for (const x of arr || []) if (x?.id && !known.has(x.id) && !remote.some(r => r.chatId === x.id)) remote.push({ chatId: x.id, title: String(x.title || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, ''), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: project || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); };
+  const projectChats = async p => (await requestJson('GET', `/projects/${encodeURIComponent(p.id)}/chats`).catch(() => ({}))).data;
+  const chatsOf = j => (Array.isArray(j) ? j : j?.chats);
   try {
-    add(await fetchChatsList(30));
-    if (cfg.fsProject?.id) add((await requestJson('GET', `/projects/${encodeURIComponent(cfg.fsProject.id)}/chats`).catch(() => ({}))).data?.chats);
+    const [mine, projects] = await Promise.all([fetchChatsList(30).catch(() => []), listFsProjects().catch(() => [])]);
+    add(mine);
+    const some = projects.filter(p => p?.id).slice(0, 8);             // une conversation rangée dans un projet n'apparaît plus dans la liste générale du site
+    (await Promise.all(some.map(p => projectChats(p).catch(() => null)))).forEach((j, i) => add(chatsOf(j), some[i].name));
   } catch {}
   return [...local, ...remote].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
 }
@@ -1084,7 +1088,7 @@ if (opts.stdio) {                                                    // commande
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
     stdioSend('history', { sessions: (await liveSessions(50)).map(s => ({
-      chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? 'compte France Student' : ''), remote: !!s.remote,
+      chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });
   });

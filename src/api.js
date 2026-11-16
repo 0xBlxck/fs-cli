@@ -236,10 +236,14 @@ export async function attachChatToProject(projectId, chatId) {
 }
 
 /** Rangement automatique : projet « FS-CLI » par défaut, /fr-project <nom> pour un autre, /fr-project off pour désactiver. Ne lève jamais. */
-let projectPromise = null;
+let projectPromise = null, projectOverride;
+/** serveur MCP : projet propre (undefined = comme FS-CLI · false = aucun · { id, name }) */
+export function setProjectOverride(p) { projectOverride = p; projectPromise = null; }
 function attachToFsProject(chatId) {
-  if (!cfg.fsProject) return;                                       // pas de projet choisi : conversation normale, visible dans ta liste du site
-  const name = cfg.fsProject?.name || 'FS-CLI';
+  const proj = projectOverride !== undefined ? projectOverride : cfg.fsProject;
+  if (!proj) return;                                                // pas de projet choisi : conversation normale, visible dans ta liste du site
+  if (proj.id) { attachChatToProject(proj.id, chatId).catch?.(() => {}); return; }
+  const name = proj.name || 'FS-CLI';
   if (!projectPromise || projectPromise.name !== name) {
     projectPromise = (cfg.fsProject?.id && cfg.fsProject.name === name ? Promise.resolve(cfg.fsProject.id)
       : findOrCreateFsProject(name).then(({ project }) => { cfg.fsProject = { id: project.id, name: project.name || name }; saveCfg(); return project.id; }))
