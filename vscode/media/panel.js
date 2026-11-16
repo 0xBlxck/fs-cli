@@ -345,20 +345,26 @@
     const el = h('div', 'ask'); el.tabIndex = 0;
     el.append(h('div', 'q', ev.title));
     if (ev.detail) el.append(h('div', 'detail', ev.detail));
+    if (ev.proposal) {                                                  // modification de fichier : diff ouvert dans l'éditeur (actuel ↔ proposé)
+      const pl = h('div', 'detail');
+      const a = h('a', null, ev.proposal.created ? 'voir le nouveau fichier dans l\'éditeur' : 'voir le diff proposé dans l\'éditeur');
+      a.onclick = e => { e.stopPropagation(); post({ type: 'openProposal', id: ev.id }); };
+      pl.append(a); el.append(pl);
+    }
     const opts = h('div', 'opts'); el.append(opts);
     let sel = Math.max(0, ev.defaultIndex || 0);
     const btns = ev.options.map((o, i) => { const b = h('button', 'opt'); b.append(h('span', 'k', String(i + 1)), h('span', null, o)); b.onclick = () => answer(i); opts.append(b); return b; });
     const paint = () => btns.forEach((b, i) => b.classList.toggle('sel', i === sel));
     paint();
-    el.append(h('div', 'hint', '↑↓ puis Entrée · 1-9 · Échap pour refuser'));
-    const answer = i => {
+    el.append(h('div', 'hint', '↑↓ puis Entrée · 1-9 · Échap pour refuser' + (ev.proposal ? ' · ou ✓ / ✗ en haut du diff' : '')));
+    const answer = (i, fromEditor = false) => {                       // fromEditor : déjà transmis au CLI par l'extension
       if (S.ask !== card) return;
       S.ask = null;
-      post({ type: 'select', id: ev.id, index: i == null ? -1 : i });
-      el.className = 'tl answered'; el.textContent = i == null ? '✗ refusé' : `✓ ${ev.options[i]}`;
+      if (!fromEditor) post({ type: 'select', id: ev.id, index: i == null ? -1 : i });
+      el.className = 'tl answered'; el.textContent = i == null || !ev.options[i] ? '✗ refusé' : `${ev.options[i] === 'Refuser' ? '✗' : '✓'} ${ev.options[i]}`;
       ta.focus();
     };
-    const card = { el, key: e => {
+    const card = { el, id: ev.id, answer, key: e => {
       if (e.key === 'ArrowDown') { sel = (sel + 1) % btns.length; paint(); }
       else if (e.key === 'ArrowUp') { sel = (sel - 1 + btns.length) % btns.length; paint(); }
       else if (e.key === 'Enter') answer(sel);
@@ -859,6 +865,7 @@
     if (m.type === 'context') { S.ctxOn = !!m.enabled; S.ctx = m.ctx || null; renderChip(); return; }
     if (m.type === 'insert') return insert(m.text);
     if (m.type === 'focusInput') { ta.focus(); return; }
+    if (m.type === 'selectAnswered') { if (S.ask && S.ask.id === m.id && S.ask.answer) S.ask.answer(m.index >= 0 ? m.index : null, true); return; }   // répondu depuis la barre du diff
     if (m.type === 'exit') {
       setBusy(false); S.started = false;
       if (m.needLogin) return notice('FS-CLI n\'est pas encore connecté à ton compte France Student.', 'error', [['Se connecter', () => post({ type: 'login' })], ['Relancer', () => post({ type: 'restart' }), true]]);

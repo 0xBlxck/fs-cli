@@ -10,7 +10,7 @@ import { newSid, tag } from './chats.js';
 import { runNative } from './native.js';
 import { judgeCommand, judgeCode, decide, addRulesForJudgement, sensitivePathReason, scanSecrets } from './permissions.js';
 import { extractBlocks, panelBlocks, pickAutoBlocks } from './blocks.js';
-import { TOOLS, normalizeArgs, riskInfo, resolveP, makeTmp, dropTmp } from './tools.js';
+import { TOOLS, normalizeArgs, riskInfo, resolveP, makeTmp, dropTmp, proposedChange } from './tools.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './trust.js';
@@ -50,8 +50,9 @@ async function oneStream(S, content, signal) {
 
 // ── Permissions ───────────────────────────────────────────────────────────────
 // Menu à flèches (interface plein écran) ; absent en mode readline → questions textuelles
-let selectHandler = null;
-export function setSelectHandler(fn) { selectHandler = fn; }
+let selectHandler = null, selectProposals = false;
+/** proposals : le menu sait afficher le contenu proposé (panneau VS Code → diff « accepter / refuser » dans l'éditeur) ; jamais dans le terminal */
+export function setSelectHandler(fn, { proposals = false } = {}) { selectHandler = fn; selectProposals = !!(fn && proposals); }
 
 /** Chemin réel (liens symboliques et jonctions résolus) ; pour un chemin pas encore créé, on résout son plus proche ancêtre existant. */
 function realish(p) {
@@ -77,26 +78,32 @@ function fitDetail(detail, maxRows = 8) {
   return rows.slice(0, maxRows - 1).join('\n') + `\n… +${hidden.length} ligne(s) masquée(s) (${hidden.join('').length} caractères) — vérifie la commande complète avant d'accepter`;
 }
 
-export async function confirm(ask, { title, detail, danger, allowAlways = false, trustDir = null, alwaysLabel = null, yesLabel = null, noAlways = false }) {
+export async function confirm(ask, { title, detail, danger, allowAlways = false, trustDir = null, alwaysLabel = null, yesLabel = null, noAlways = false, proposal = null }) {
   detail = fitDetail(detail);
   title = ui.sanitize(title);
-  const TRUST = trustDir ? `Oui, et faire confiance à ce dossier (${ui.shortPath ? ui.shortPath(trustDir, 40) : trustDir})` : null;
   if (selectHandler) {
+    // modification de fichier vue dans le diff de l'éditeur (panneau VS Code) : « Accepter / Refuser » comme Claude Code ; terminal : inchangé
+    const diffy = !!(proposal && selectProposals);
+    const YES = diffy ? 'Accepter' : 'Oui', NO = diffy ? 'Refuser' : 'Non';
     const alwaysOk = !noAlways && (!danger || allowAlways);
-    const options = [yesLabel || 'Oui'];
-    if (TRUST) options.push(TRUST);
-    else if (alwaysOk) options.push(alwaysLabel ? `Oui, ${alwaysLabel}` : danger ? 'Oui, et ne plus demander (règle enregistrée)' : 'Oui, et ne plus demander pendant cette session');
-    options.push('Non');
+    const options = [yesLabel || YES];
+    let trustIdx = -1, alwaysIdx = -1;
+    if (trustDir) trustIdx = options.push(`${YES}, et faire confiance à ce dossier (${ui.shortPath ? ui.shortPath(trustDir, 40) : trustDir})`) - 1;
+    else if (alwaysOk) alwaysIdx = options.push(alwaysLabel ? `${YES}, ${alwaysLabel}` : danger ? `${YES}, et ne plus demander (règle enregistrée)` : `${YES}, et ne plus demander pendant cette session`) - 1;
+    const noIdx = options.push(NO) - 1;
     const plainTitle = (danger ? '⚠ ' : '') + title.replace(/\x1b\[[0-9;]*m/g, '');
-    const idx = await selectHandler({ title: plainTitle, detail: detail || '', options, defaultIndex: TRUST ? 1 : danger ? options.length - 1 : 0 });
+    const req = { title: plainTitle, detail: detail || '', options, defaultIndex: trustDir ? 1 : danger ? noIdx : 0 };
+    if (diffy) req.proposal = proposal;
+    const idx = await selectHandler(req);
     if (idx === null || !options[idx]) return { allow: false };      // Échap (ou choix invalide) = refuser ; Ctrl+C interrompt le tour (signal) en parallèle
-    if (options[idx] === 'Non') {
+    if (idx === noIdx) {
       const why = await ask('raison / alternative pour le modèle (Entrée = rien)');
       return { allow: false, feedback: (why || '').trim() };
     }
-    if (options[idx] === TRUST) return { allow: true, trust: true };
-    return options[idx].startsWith('Oui, ') ? { allow: true, always: true } : { allow: true };
+    if (idx === trustIdx) return { allow: true, trust: true };
+    return idx === alwaysIdx ? { allow: true, always: true } : { allow: true };
   }
+  const TRUST = trustDir ? `Oui, et faire confiance à ce dossier (${ui.shortPath ? ui.shortPath(trustDir, 40) : trustDir})` : null;
   if (TRUST) {                                                        // mode texte
     ui.println(`  ${c.yellow('?')} ${c.bold(title)}`);
     if (detail) for (const l of detail.split('\n')) ui.println(`    ${c.dim(l)}`);
@@ -199,7 +206,9 @@ export async function execCall(S, call, { signal, ask, root = null }) {
     const detail = risk.secrets ? risk.secrets.slice(0, 5).map(s => `${s.name} : ${s.sample}`).join('\n') : tool.preview?.(args, ctx);
     // seul souci = dossier hors du dossier de travail → on propose de faire confiance à ce dossier (plus de question ensuite, même en auto)
     const trustDir = risk.outsideDir && !risk.danger && !risk.secrets && !isBroadFolder(risk.outsideDir) ? risk.outsideDir : null;
-    const r = await confirm(ask, { title, detail, danger, allowAlways: !!risk.judgement && !risk.protectedPath && !risk.secrets, trustDir });
+    // panneau VS Code : contenu proposé (calculé sans rien écrire) → diff natif de l'éditeur à côté de la carte
+    const proposal = selectProposals && (call.name === 'write_file' || call.name === 'edit_file') ? proposedChange(call.name, args, ctx.cwd) : null;
+    const r = await confirm(ask, { title, detail, danger, allowAlways: !!risk.judgement && !risk.protectedPath && !risk.secrets, trustDir, proposal });
     if (r.aborted || signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     if (!r.allow) {
       ui.toolNote('refusé', 'yellow');

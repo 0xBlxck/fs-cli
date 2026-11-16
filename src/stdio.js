@@ -69,10 +69,13 @@ export class StdioInput {
   insert(text) { send('insert', { text }); }
   echo() {}
   event(type, data) { send(type, data); }
-  select({ title, detail = '', options, defaultIndex = 0 }) {
+  select({ title, detail = '', options, defaultIndex = 0, proposal = null }) {
     const id = ++this.seq;
     const plain = s => String(s ?? '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
-    send('select', { id, title: plain(title), detail: plain(detail), options: (options || []).map(plain), defaultIndex });
+    // proposal : modification de fichier proposée → l'extension ouvre le diff natif (avant ↔ proposé) ; ignoré par les anciens panneaux
+    const extra = proposal && typeof proposal.path === 'string' && typeof proposal.after === 'string'
+      ? { proposal: { path: proposal.path, before: String(proposal.before ?? ''), after: proposal.after, created: !!proposal.created } } : {};
+    send('select', { id, title: plain(title), detail: plain(detail), options: (options || []).map(plain), defaultIndex, ...extra });
     return new Promise(resolve => this.pending.set(id, resolve));
   }
   askLine(label) {
