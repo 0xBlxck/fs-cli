@@ -140,8 +140,10 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
   const refused = !nTools && cfg.mode !== 'plan' && looksLikeToolRefusal(visible);
   if (refused) {
     cfg.toolRefusals = { ...(cfg.toolRefusals || {}), [String(S.agentId)]: Date.now() }; saveCfg();
-    ui.println('\n' + c.yellow('  ⚠ Ce modèle refuse de travailler avec les outils de FS-CLI (consigne de France Student) : il peut discuter, mais pas lire ni modifier tes fichiers.'));
-    ui.println(c.dim('    Les modèles Claude acceptent dans nos essais : ') + c.accent('/model sonnet') + c.dim(' ou ') + c.accent('/model opus'));
+    const other = String(S.agentId) === '-2003' ? '/model opus' : '/model sonnet';
+    ui.println('\n' + c.yellow('  ⚠ Le modèle a refusé d\'utiliser les outils pour cette demande : il n\'a rien lu ni modifié.'));
+    ui.println(c.dim('    Ça arrive surtout quand la demande ou le projet parle de France Student elle-même (son API, des outils externes), ou quand la conversation est très longue. Reformule, repars de zéro avec ') +
+      c.accent('/new') + c.dim(', ou essaie ') + c.accent(other));
   }
 
   const secs = (Date.now() - t0) / 1000;
