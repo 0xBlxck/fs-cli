@@ -34,7 +34,7 @@ import { uploadFile } from './src/api.js';
 import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
-import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
+import { extraCommand, maybeAutoCompact, notifyWebhook } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
 import { fetchChat } from './src/api.js';
@@ -52,6 +52,7 @@ for (let i = 0; i < argv.length; i++) {
   if (a === '-p' || a === '--print') opts.print = true;
   else if (a === '-c' || a === '--continue') opts.cont = true;
   else if (a === '-m' || a === '--model') opts.model = argv[++i];
+  else if (a === '--max-turns') opts.maxTurns = parseInt(argv[++i], 10);   // -p : nombre d'étapes max pour cette exécution
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--cwd') opts.cwd = argv[++i];
   else if (a === '--web') opts.web = true;
@@ -159,6 +160,7 @@ const [agents] = await Promise.all([fetchAgents(), detectEnv()]);
 ui.spinner.stop();
 if (agents) AGENTS = agents;
 
+if (Number.isFinite(opts.maxTurns) && opts.maxTurns > 0) S.maxSteps = Math.min(200, opts.maxTurns);   // --max-turns : cette exécution seulement (rien d'enregistré)
 if (opts.model) {
   const id = resolveModel(opts.model);
   if (id !== null) { S.agentId = id; cfg.agentId = id; } else console.log(c.yellow(`  modèle "${opts.model}" inconnu — ${modelName()} conservé`));
@@ -268,7 +270,7 @@ function copyToClipboard(text) {
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
   '/continue', '/navigateur ', '/doctor', '/vscode', '/projet ', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
-  '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
+  '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
   const idx = Math.max(frag.lastIndexOf('/'), frag.lastIndexOf('\\'));
@@ -392,6 +394,10 @@ const HELP_ROWS = [
     ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/projet', 'travailler dans un projet France Student (ses instructions sont suivies)'], ['/vscode', 'installer le panneau de chat FS-CLI dans VS Code, Cursor, Windsurf, Antigravity'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
+    ['/effort [niveau]', 'effort de raisonnement des modèles GPT : none, minimal, low, medium, high, xhigh (réglage du compte, aussi sur le site)'],
+    ['/export [fichier.md|.html]', 'enregistrer la conversation en Markdown ou en page HTML'],
+    ['/btw <question>', 'question à côté, sans encombrer la conversation en cours'],
+    ['/webhook [url|off|test]', 'adresse appelée à la fin de chaque demande (CI, notifications…)'],
     ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/rename <titre>', 'renommer la conversation (aussi sur le site)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
     ['/think', 'afficher/masquer le raisonnement'], ['/steps <n>', 'étapes max par demande'], ['/theme <nom>', Object.keys(THEMES).join(' · ')],
     ['/clear', 'effacer l\'écran'], ['/quit', 'quitter'],
@@ -449,6 +455,7 @@ async function withAbort(fn) {
 const extraEnv = () => ({
   S, AGENTS, modelName, resolveModel, withAbort, ask, readAttachment, buildMessage, applySession, refreshPrompt,
   select: input.select ? o => input.select(o) : null,
+  transcriptOf,
   chatTurn: (t, o) => chatTurn(t, o),
   ...(opts.stdio && panelAtLeast('0.4.0') ? { mcpPanel: () => openMcpPanel() } : {}),
   ...(opts.stdio && panelAtLeast('0.5.0') ? { card: data => stdioSend('card', data) } : {}),
@@ -957,8 +964,13 @@ async function chatTurn(text, { keepLast = false } = {}) {
     mem.observe(text, S.cwd);
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);   // provisoire : remplacé par le titre de France Student dès qu'il est connu
     try {
-      const agentBefore = S.agentId;
+      const agentBefore = S.agentId, turnT0 = Date.now();
       await runAgent(S, message, { signal: turnAbort.signal, ask });
+      if (cfg.webhook) {                                               // fin de demande → webhook (CI, notifications) : jamais de jeton ni de contenu de fichier
+        const mark = (S.turnMarks || []).at(-1);
+        const files = mark && S.undo.length > mark.at ? summarizeChanges(S.undo, mark.at).map(f => ({ file: path.relative(S.cwd, f.path), added: f.added, removed: f.removed, created: !!f.created, deleted: !!f.deleted })) : [];
+        notifyWebhook({ event: 'turn_done', title: S.title || '', chatId: S.chatId || null, model: modelName(), folder: path.basename(S.cwd), seconds: Math.round((Date.now() - turnT0) / 1000), files_changed: files, summary: String(S.lastResponse || '').slice(0, 2000) }).catch(() => {});
+      }
       if (S.agentId !== agentBefore) { saveSession(); refreshPrompt(); }   // refus d'outils : la demande est repartie avec Sonnet → modèle affiché à jour
       if (S.chatId && S.pendingSummary) { S.pendingSummary = null; S.compactedFrom = null; }   // nouvelle conversation ouverte avec le résumé
       if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));

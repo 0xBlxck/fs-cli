@@ -270,3 +270,40 @@ test('résumé automatique : seuil adapté à la fenêtre de contexte du modèle
   } finally { cfg.compactTokens = prev; }
 });
 
+
+test('/export : Markdown et page HTML autonome (code échappé, blocs de code, thème clair/sombre)', async () => {
+  const { exportMarkdown, exportHtml } = await import('../src/extra-commands.js');
+  const msgs = [{ role: 'user', text: 'Corrige <script> dans **index.html**' }, { role: 'assistant', text: 'Voilà :\n\n```html\n<p>ok</p>\n```\n\n- un\n- deux' }];
+  const md = exportMarkdown('Mon titre', 'Claude Sonnet 5.5', msgs);
+  assert.match(md, /^# Mon titre\n\n_Claude Sonnet 5\.5_/);
+  assert.match(md, /## Toi\n\nCorrige <script>/);
+  const html = exportHtml('Mon <titre>', 'meta', msgs);
+  assert.match(html, /<title>Mon &lt;titre&gt;<\/title>/);
+  assert.match(html, /Corrige &lt;script&gt; dans <strong>index\.html<\/strong>/);
+  assert.match(html, /<pre><code>&lt;p&gt;ok&lt;\/p&gt;<\/code><\/pre>/);
+  assert.match(html, /<ul><li>un<\/li><li>deux<\/li><\/ul>/);
+  assert.match(html, /prefers-color-scheme:dark/);
+  assert.ok(!/<script>/.test(html), 'aucun script exécutable');
+});
+
+test('webhook : https obligatoire (http seulement en local), envoi JSON réel vers un serveur local', async () => {
+  const { webhookAllowed, notifyWebhook } = await import('../src/extra-commands.js');
+  const { cfg } = await import('../src/config.js');
+  assert.equal(webhookAllowed('https://exemple.fr/hook'), true);
+  assert.equal(webhookAllowed('http://exemple.fr/hook'), false);
+  assert.equal(webhookAllowed('http://127.0.0.1:9/x'), true);
+  assert.equal(webhookAllowed('file:///etc/passwd'), false);
+  const http = await import('node:http');
+  let got = null;
+  const srv = http.createServer((q, r) => { let b = ''; q.on('data', d => b += d); q.on('end', () => { got = { method: q.method, ct: q.headers['content-type'], body: JSON.parse(b) }; r.end('ok'); }); });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  const prev = cfg.webhook;
+  try {
+    cfg.webhook = `http://127.0.0.1:${srv.address().port}/fin`;
+    assert.equal(await notifyWebhook({ event: 'turn_done', files_changed: [{ file: 'a.js', added: 2, removed: 0 }] }), true);
+    assert.equal(got.method, 'POST'); assert.equal(got.ct, 'application/json');
+    assert.equal(got.body.source, 'fs-cli'); assert.equal(got.body.event, 'turn_done'); assert.equal(got.body.files_changed[0].file, 'a.js');
+    cfg.webhook = 'http://exemple.invalid/x';
+    assert.equal(await notifyWebhook({ event: 'x' }), false, 'adresse non autorisée : rien envoyé');
+  } finally { cfg.webhook = prev; srv.close(); }
+});

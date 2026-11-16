@@ -169,3 +169,15 @@ test('refus d\'outils persistant : la même demande repart avec Sonnet, puis s\'
   assert.equal(S.agentId, -2003);
   assert.equal(r.switchedTo, -2003);
 });
+
+test('--max-turns : S.maxSteps limite les étapes de cette exécution (sans toucher à la config)', async () => {
+  const { dir, S } = mk({ chatId: 'conv-m', maxSteps: 2 });
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
+  const call = { calls: [{ callId: 'c', name: 'read_file', arguments: { path: 'a.txt' } }] };
+  const f = fakeFs([call, call, call, call, { text: 'fin' }]);
+  const before = cfg.maxSteps;
+  const r = await runNative(S, 'boucle', { ...io(), stream: f.stream });
+  assert.equal(f.st.reqs.length, 2);
+  assert.equal(r.hitLimit, true);
+  assert.equal(cfg.maxSteps, before);
+});

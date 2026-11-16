@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cfg, saveCfg, saveCfgKeys, upsertSession } from './config.js';
+import { fetchChat } from './api.js';
 import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject, requestJson, listFsProjects } from './api.js';
 import { fetchChatUsage, fetchUserUsage, contextPercent, describeChatUsage, describeUserUsage } from './account.js';
 import * as mem from './memory.js';
@@ -359,6 +360,74 @@ export async function extraCommand(cmd, arg, env) {
   const { S, AGENTS, modelName, resolveModel, withAbort, chatTurn, applySession, refreshPrompt, readAttachment } = env;
   const cwd = S.cwd;
   switch (cmd) {
+    case '/effort': {                                                  // effort de raisonnement : réglage du compte France Student (modèles GPT)
+      const LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+      const want = String(arg || '').trim().toLowerCase().replace(/^max$/, 'xhigh');
+      if (!want) {
+        const cur = (await requestJson('GET', '/user/instructions').catch(() => ({}))).data?.gptReasoning;
+        println(c.dim(`  effort de raisonnement (modèles GPT) : ${cur || 'inconnu'} · /effort ${LEVELS.join('|')}`));
+        println(c.dim('  c\'est un réglage de ton compte France Student : il s\'applique aussi sur le site. Les modèles Claude n\'ont pas ce réglage.'));
+        return true;
+      }
+      if (!LEVELS.includes(want)) { println(c.red(`  niveau inconnu : ${arg}`) + c.dim(`  (${LEVELS.join(', ')})`)); return true; }
+      const r = await requestJson('PATCH', '/user/instructions', { gptReasoning: want }).catch(() => ({ status: 0 }));
+      if (r.status < 200 || r.status >= 300) { println(c.red(`  France Student a refusé le réglage (HTTP ${r.status || 'réseau'})`)); return true; }
+      println(c.green('  ✓ ') + `effort de raisonnement des modèles GPT : ${want}` + c.dim(' (réglage du compte, aussi sur le site)'));
+      return true;
+    }
+    case '/export': {                                                  // conversation → Markdown ou page HTML (comme /export de Claude Code)
+      if (!S.chatId) { println(c.dim('  pas encore de conversation à exporter')); return true; }
+      const chat = await fetchChat(S.chatId).catch(() => null);
+      const msgs = chat ? env.transcriptOf(chat) : [];
+      if (!msgs.length) { println(c.red('  conversation introuvable ou vide')); return true; }
+      const title = String(S.title || chat.title || 'Conversation').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '');
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})(\d{4})$/, '$1-$2');
+      const slug = title.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'conversation';
+      let file = String(arg || '').trim() || `conversation-${slug}-${stamp}.md`;
+      if (!/\.(md|markdown|html?)$/i.test(file)) file += '.md';
+      file = path.resolve(cwd, file);
+      for (let k = 2; fs.existsSync(file) && k < 100; k++) file = file.replace(/(-\d+)?(\.[a-z]+)$/i, `-${k}$2`);   // jamais d'écrasement
+      const meta = `${modelName()} · ${new Date().toLocaleString('fr-FR')} · ${msgs.length} messages`;
+      const text = /\.html?$/i.test(file) ? exportHtml(title, meta, msgs) : exportMarkdown(title, meta, msgs);
+      fs.writeFileSync(file, text);
+      println(c.green('  ✓ ') + `conversation exportée : ${file}`);
+      return true;
+    }
+    case '/btw': {                                                     // question à côté : conversation séparée, réutilisée ; la conversation en cours n'est pas touchée
+      const q = String(arg || '').trim();
+      if (!q) { println(c.dim('  /btw <question> — répondue à côté, sans encombrer la conversation en cours')); return true; }
+      const ctx = String(S.lastResponse || '').trim();
+      const content = (ctx ? `Pour contexte, voici la fin de la réponse que je lis en ce moment :\n"""\n${ctx.slice(-1500)}\n"""\n\n` : '') + `Question rapide (réponds court) : ${q}`;
+      await withAbort(async signal => {
+        ui.spinner.start('question à côté…');
+        const send = chatId => streamChat({ agentId: S.agentId, chatId, content: chatId ? content : (cfg.tagChats !== false ? tag(S.sid || newSid(), 'btw') : '') + content, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: 'btw' },
+          onChat: id => { if (cfg.btwChat?.id !== id) saveCfgKeys({ btwChat: { id } }); } });
+        let r;
+        try { r = await send(cfg.btwChat?.id || null); }
+        catch (e) { if (!/Chat not found|not found with id/i.test(String(e?.message || e))) throw e; saveCfgKeys({ btwChat: null }); r = await send(null); }
+        finally { ui.spinner.stop(); }
+        println('\n' + c.dim('  ━━ à côté ') + c.dim(`(${modelName()}, hors de la conversation en cours)`));
+        const md = new ui.MdStream({ collapse: false });
+        md.push(String(r?.text || '(pas de réponse)')); md.finish();
+        println();
+      });
+      return true;
+    }
+    case '/webhook': {
+      const v = String(arg || '').trim();
+      if (!v) { println(c.dim(`  webhook : ${cfg.webhook || 'désactivé'} · /webhook <url> · /webhook off · /webhook test`)); return true; }
+      if (/^(off|non|aucun)$/i.test(v)) { saveCfgKeys({ webhook: '' }); println(c.green('  ✓ ') + 'webhook désactivé'); return true; }
+      if (/^test$/i.test(v)) {
+        if (!cfg.webhook) { println(c.dim('  aucun webhook réglé')); return true; }
+        const ok = await notifyWebhook({ event: 'test', message: 'test de FS-CLI' });
+        println(ok ? c.green('  ✓ ') + 'webhook appelé' : c.red('  le webhook n\'a pas répondu (ou a renvoyé une erreur)'));
+        return true;
+      }
+      if (!webhookAllowed(v)) { println(c.red('  adresse refusée : https:// obligatoire (http:// seulement pour localhost)')); return true; }
+      saveCfgKeys({ webhook: v });
+      println(c.green('  ✓ ') + `webhook : ${v}` + c.dim(' — appelé en POST JSON à la fin de chaque demande (/webhook test pour essayer)'));
+      return true;
+    }
     case '/context': {
       const dto = await fetchChatUsage(S.chatId);
       println();
@@ -762,4 +831,64 @@ export async function extraCommand(cmd, arg, env) {
     }
     default: return false;
   }
+}
+
+// ── /export : Markdown et page HTML autonome ───────────────────────────────────
+export function exportMarkdown(title, meta, msgs) {
+  const body = msgs.map(m => `## ${m.role === 'user' ? 'Toi' : 'Assistant'}\n\n${m.text}\n`).join('\n');
+  return `# ${title}\n\n_${meta}_\n\n${body}`;
+}
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/** Markdown simple → HTML (blocs de code, code en ligne, gras, titres, listes, paragraphes) */
+function mdToHtml(md) {
+  const out = [];
+  const parts = String(md).split(/```/);
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) {                                                 // bloc de code : 1re ligne = langage éventuel
+      const nl = part.indexOf('\n');
+      const code = nl >= 0 ? part.slice(nl + 1) : part;
+      out.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
+      return;
+    }
+    for (const block of part.split(/\n{2,}/)) {
+      const b = block.trim();
+      if (!b) continue;
+      const inline = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      const h = b.match(/^(#{1,4})\s+(.*)$/);
+      if (h && !b.includes('\n')) { out.push(`<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`); continue; }
+      if (b.split('\n').every(l => /^\s*([-*]|\d+\.)\s+/.test(l))) { out.push('<ul>' + b.split('\n').map(l => `<li>${inline(l.replace(/^\s*([-*]|\d+\.)\s+/, ''))}</li>`).join('') + '</ul>'); continue; }
+      out.push(`<p>${inline(b).replace(/\n/g, '<br>')}</p>`);
+    }
+  });
+  return out.join('\n');
+}
+export function exportHtml(title, meta, msgs) {
+  const items = msgs.map(m => `<section class="${m.role}"><div class="who">${m.role === 'user' ? 'Toi' : 'Assistant'}</div>${mdToHtml(m.text)}</section>`).join('\n');
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>
+<style>
+:root{--bg:#fff;--fg:#1c1c1c;--mute:#6b6b6b;--card:#f4f4f2;--code:#f0efe9;--line:#e3e1da}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1b1a;--fg:#e8e6e1;--mute:#9a978f;--card:#262624;--code:#2e2d2a;--line:#3a3935}}
+body{background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;max-width:760px;margin:0 auto;padding:32px 16px}
+h1{font-size:22px;margin:0 0 4px}.meta{color:var(--mute);font-size:13px;margin-bottom:28px}
+section{margin:0 0 22px}section.user{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.who{font-size:12px;font-weight:600;color:var(--mute);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font-size:13px}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}p code,li code{background:var(--code);padding:1px 4px;border-radius:4px}
+</style></head><body><h1>${esc(title)}</h1><div class="meta">${esc(meta)} · exporté depuis FS-CLI</div>
+${items}
+</body></html>
+`;
+}
+
+// ── webhook de fin de demande ──────────────────────────────────────────────────
+export function webhookAllowed(url) {
+  try { const u = new URL(url); return u.protocol === 'https:' || (u.protocol === 'http:' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)); } catch { return false; }
+}
+/** POST JSON vers cfg.webhook (5 s max). Jamais de jeton ni de contenu de fichier : résumé, fichiers touchés, chiffres. */
+export async function notifyWebhook(payload) {
+  if (!cfg.webhook || !webhookAllowed(cfg.webhook)) return false;
+  try {
+    const r = await fetch(cfg.webhook, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'fs-cli' }, body: JSON.stringify({ source: 'fs-cli', at: new Date().toISOString(), ...payload }), signal: AbortSignal.timeout(5000), redirect: 'error' });
+    return r.ok;
+  } catch { return false; }
 }

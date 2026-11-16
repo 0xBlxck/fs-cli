@@ -208,7 +208,8 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 | Thème | Commandes |
 |---|---|
 | Éditeur | `/vscode` (panneau de chat dans VS Code, Cursor, Windsurf, Antigravity) |
-| Conversation | `/usage` · `/changes` · `/messages` · `/plan <demande>` · `/rewind` · `/doctor` · `/new` · `/resume` · `/model` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
+| Conversation | `/usage` · `/changes` · `/messages` · `/plan <demande>` · `/rewind` · `/doctor` · `/new` · `/resume` · `/rename <titre>` · `/export [fichier.md\|.html]` · `/btw <question>` · `/model` · `/effort <niveau>` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
+| Automatisation | `fs-cli -p "<demande>" --max-turns N` · `/webhook <url>` (POST JSON à la fin de chaque demande) |
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |
 | Mémoire | `/remember` · `/forget` · `/memory` · `/preprompt` · `/profil` · `/skills` |

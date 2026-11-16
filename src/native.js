@@ -66,7 +66,8 @@ export async function runNative(S, userText, opts) {
   const t0 = Date.now();
   let results = null, resultFiles = [], nTools = 0, nReq = 0, tokensIn = 0, tokensOut = 0, steps = 0, hitLimit = false, visible = '';
 
-  for (; steps < (cfg.maxSteps || 40); steps++) {
+  const maxSteps = S.maxSteps || cfg.maxSteps || 40;                  // --max-turns : pour cette exécution seulement
+  for (; steps < maxSteps; steps++) {
     if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     const md = new ui.MdStream({ collapse: false });
     let thinkBuf = '';
@@ -132,7 +133,7 @@ export async function runNative(S, userText, opts) {
       try { resultFiles.push(await uploadFile(fs.readFileSync(img.file), path.basename(img.file), img.mime)); } catch {}
     }
     if (resultFiles.length) ui.toolNote(`📷 ${resultFiles.length} capture${resultFiles.length > 1 ? 's' : ''} transmise${resultFiles.length > 1 ? 's' : ''} au modèle`);
-    if (steps === (cfg.maxSteps || 40) - 1) hitLimit = true;
+    if (steps === maxSteps - 1) hitLimit = true;
   }
   if (visible) S.lastResponse = visible;
   if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; cfg.toolRefusals = r; saveCfg(); }
@@ -166,7 +167,7 @@ export async function runNative(S, userText, opts) {
   ui.println('\n' + c.dim(`  ✻ Terminé en ${bits.join(' · ')}`) + ctxBit);
   if (secs > 15 && process.stdout.isTTY) process.stdout.write('\x07');   // tâche longue finie : alerte (la barre des tâches clignote si la fenêtre n'est pas au premier plan)
   if (cfg.sound && secs > 3) process.stdout.write('\x07');
-  if (hitLimit) ui.println(c.yellow(`  ⚠ limite de ${cfg.maxSteps || 40} étapes atteinte — tape /continue pour poursuivre`));
+  if (hitLimit) ui.println(c.yellow(`  ⚠ limite de ${maxSteps} étapes atteinte — tape /continue pour poursuivre`));
   if (recover && stage === 0) {
     ui.println(c.dim('  ↻ le modèle a cru ne pas avoir le droit d\'utiliser les outils : FS-CLI lui précise que ce sont les outils officiels de France Student'));
     return runNative(S, CLARIFY, { ...opts, _recover: 1, _orig: userText });
