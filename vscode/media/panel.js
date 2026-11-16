@@ -40,7 +40,7 @@
   const btnMcp = h('button', 'icon-btn'); btnMcp.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0zM8 11v3"/></svg>'; btnMcp.title = 'Serveurs MCP';
   btnMcp.onclick = () => { if (!S.busy) post({ type: 'command', text: '/mcp' }); };
   const btnUse = h('button', 'icon-btn'); btnUse.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 13.5h11M4.5 11V8M8 11V4.5M11.5 11V6.5"/></svg>'; btnUse.title = 'Compte & consommation';
-  btnUse.onclick = () => { if (!S.busy) post({ type: 'command', text: '/usage' }); };
+  btnUse.onclick = () => post({ type: 'command', text: '/usage' });     // même pendant une réponse : s'ouvre dans une fenêtre
   const btnAgents = h('button', 'icon-btn'); btnAgents.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="6" width="4" height="4" rx="1"/><rect x="10.5" y="1.5" width="4" height="3.5" rx="1"/><rect x="10.5" y="6.25" width="4" height="3.5" rx="1"/><rect x="10.5" y="11" width="4" height="3.5" rx="1"/><path d="M5.5 8h2.5M8 3.25v9.5M8 3.25h2.5M8 8h2.5M8 12.75h2.5"/></svg>'; btnAgents.title = 'Agents de l\'équipe';
   btnAgents.hidden = true; btnAgents.onclick = () => agOpen(null);
   head.append(title, btnAgents, btnUse, btnMcp, btnHist, btnNew);
@@ -519,7 +519,7 @@
   function send() {
     const text = ta.value;
     if (!text.trim()) return;
-    if (/^\s*\/(usage|mcp|resume|sessions|history|skills|commands)\s*$/i.test(text) && !S.busy) {   // ces commandes ouvrent une fenêtre : rien dans le fil
+    if (/^\s*\/(usage|mcp|resume|sessions|history|skills|commands)\s*$/i.test(text) && (!S.busy || /^\s*\/usage\s*$/i.test(text))) {   // ces commandes ouvrent une fenêtre : rien dans le fil
       ta.value = ''; autosize(); closeMenu();
       if (/resume|sessions|history/i.test(text)) return histOpen();
       if (/skills|commands/i.test(text)) return skOpen();

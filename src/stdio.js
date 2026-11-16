@@ -11,7 +11,7 @@ export function send(type, data = {}) {
 export class StdioInput {
   constructor() {
     this.kind = 'stdio';
-    this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [], setMode: [], setModel: [], diffBefore: [], undoFile: [], mcpAction: [], historyOpen: [], resumeChat: [], skillsOpen: [], skillToggle: [] };
+    this.handlers = { instant: [], submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [], setMode: [], setModel: [], diffBefore: [], undoFile: [], mcpAction: [], historyOpen: [], resumeChat: [], skillsOpen: [], skillToggle: [] };
     this.queue = []; this.busy = false; this.pending = new Map(); this.seq = 0;
     this.rl = readline.createInterface({ input: process.stdin, terminal: false });
     this.rl.on('line', line => this.onLine(line));
@@ -27,6 +27,7 @@ export class StdioInput {
       case 'submit': {
         const text = String(m.text ?? '').slice(0, 200_000);
         if (!text.trim()) return;
+        if (this.busy && /^\s*\/usage\s*$/i.test(text)) { this.emit('instant', text.trim()); return; }   // s'affiche dans une fenêtre : tout de suite, même pendant une réponse
         if (this.busy) { this.queue.push(text); send('queued', { text }); return; }
         this.emit('submit', text); return;
       }

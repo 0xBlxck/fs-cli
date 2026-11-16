@@ -1065,6 +1065,7 @@ function cycleMode() {
 
 // ── Entrées (interface plein écran ou readline) ───────────────────────────────
 input.on('submit', t => { runInput(t); });
+input.on('instant', t => { command(t).catch(e => println(c.red('  ' + (e?.message || e)))); });   // panneau : /usage pendant une réponse (fenêtre, rien dans le fil)
 input.on('interrupt', () => { turnAbort?.abort(); });
 input.on('cycleMode', cycleMode);
 ui.tasks.on(list => input.setTasks?.(list));                          // liste de tâches du modèle → panneau épinglé

@@ -104,3 +104,21 @@ test('panneau ↔ extension ↔ CLI : aucun message perdu en route', async () =>
   const cliKnows = new Set([...stdio.matchAll(/case '([\w]+)':/g)].map(m => m[1]));
   for (const t of toCli) assert.ok(cliKnows.has(t) || t === 'quit', `l'extension envoie « ${t} » au CLI mais il ne le comprend pas`);
 });
+
+test('panneau : /usage pendant une réponse s\'ouvre tout de suite (pas de file d\'attente), le reste attend', async () => {
+  const { StdioInput } = await import('../src/stdio.js');
+  const writes = [], orig = process.stdout.write;
+  process.stdout.write = s => { writes.push(String(s)); return true; };
+  let inp;
+  try {
+    inp = new StdioInput();
+    const instant = [], submitted = [];
+    inp.on('instant', t => instant.push(t)); inp.on('submit', t => submitted.push(t));
+    inp.setBusy(true);
+    inp.onLine(JSON.stringify({ type: 'submit', text: ' /usage ' }));
+    inp.onLine(JSON.stringify({ type: 'submit', text: 'fais autre chose' }));
+    assert.deepEqual(instant, ['/usage']);
+    assert.deepEqual(submitted, []);
+    assert.equal(inp.takeQueued(), 'fais autre chose');
+  } finally { process.stdout.write = orig; inp?.stop(); }
+});
