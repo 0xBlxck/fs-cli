@@ -299,3 +299,10 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .sktog { flex: none; width: 44px; border: 1px solid var(--border); border-radius: 7px; font-size: 11.5px; color: var(--dim); background: var(--box); }
 .sktog.on { color: var(--fg); border-color: var(--brand); }
 .sktog:hover { border-color: var(--focus); }
+
+/* sélecteur de modèle : groupes par fournisseur */
+.menu .sec { display: flex; align-items: center; gap: 6px; text-transform: none; font-weight: 600; padding-top: 8px; }
+.menu .mic { display: inline-flex; width: 14px; justify-content: center; color: var(--dim); flex: none; }
+.menu .mi { align-items: center; }
+.menu .mi .d { margin-left: auto; font-size: 11px; }
+.menu .mi.cur::after { margin-left: 10px; }

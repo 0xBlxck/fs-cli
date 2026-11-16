@@ -49,6 +49,13 @@ const steps = [
   () => E({ type: 'busy', busy: false }),
 ];
 if (location.hash === "#accueil") steps.length = 3;
+if (location.hash === "#modeles") { steps.length = 3; steps.push(
+  () => E({ type: 'models', models: [
+    { id: '-1001', name: 'GPT 6 Sol', provider: 'openai', contextWindow: 272000 }, { id: '-1002', name: 'GPT 6 Luna', provider: 'openai', contextWindow: 272000 },
+    { id: '-1004', name: 'GPT-6 Astra', provider: 'openai', contextWindow: 272000 }, { id: '-1005', name: 'GPT-6.1 Terra', provider: 'openai', contextWindow: 272000 },
+    { id: '-2001', name: 'Claude Opus 5.5', provider: 'anthropic', contextWindow: 1000000 }, { id: '-2002', name: 'Claude Haiku 5.5', provider: 'anthropic', contextWindow: 100000 },
+    { id: '-2003', name: 'Claude Sonnet 5.5', provider: 'anthropic', contextWindow: 1000000 }, { id: '-2005', name: 'Claude Fable 5.2', provider: 'anthropic', contextWindow: 1000000 }] }),
+  () => document.querySelector('.pill.model').click()); }
 if (location.hash === "#skills") { steps.length = 2; steps.push(() => E({ type: 'skills',
   skills: [
     { name: 'api-designer', source: 'Claude Code', tokens: 2300, enabled: true, description: 'Concevoir des API REST' },

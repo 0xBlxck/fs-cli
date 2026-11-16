@@ -446,8 +446,8 @@
     const el = h('div', 'menu');
     let sel = Math.max(0, items.findIndex(x => x.cur));
     const rows = items.map((it, i) => {
-      if (it.section) { const s = h('div', 'sec', it.section); el.append(s); return null; }
-      const r = h('div', 'mi' + (it.cur ? ' cur' : '')); r.append(h('span', null, it.label)); if (it.desc) r.append(h('span', 'd', it.desc));
+      if (it.section) { const s = h('div', 'sec'); if (it.icon) { const ic = h('span', 'mic'); ic.innerHTML = it.icon; s.append(ic); } s.append(it.section); el.append(s); return null; }
+      const r = h('div', 'mi' + (it.cur ? ' cur' : '')); if (it.icon) { const ic = h('span', 'mic'); ic.innerHTML = it.icon; r.append(ic); } r.append(h('span', null, it.label)); if (it.desc) r.append(h('span', 'd', it.desc));
       r.onmousedown = e => { e.preventDefault(); closeMenu(); onPick(it); };
       el.append(r); return r;
     });
@@ -475,9 +475,27 @@
     if (!list.length) return closeMenu();
     openMenu(list.slice(0, 40).map(c => ({ label: c, desc: CMD_DESC[c] || '' })), it => { ta.value = it.label + ' '; autosize(); ta.focus(); }, { filter: true });
   }
+  // icônes des fournisseurs (dessins simples, couleur du thème)
+  const PROVIDERS = [
+    { key: 'anthropic', name: 'Anthropic', test: m => /anthropic|claude/i.test(m.provider + ' ' + m.name),
+      icon: '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M9.6 2.5h2.3L16 13.5h-2.3zM4.1 2.5h2.4l4.1 11h-2.3l-.9-2.4H3.1l-.9 2.4H0zm-.3 6.6h2.9L5.2 5.2z"/></svg>' },
+    { key: 'openai', name: 'OpenAI', test: m => /openai|gpt|o\d/i.test(m.provider + ' ' + m.name),
+      icon: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6a3 3 0 0 1 2.9 2.2M13.5 5.2a3 3 0 0 1 0 3.6M12.9 11.2a3 3 0 0 1-3.4 1.6M8 14.4a3 3 0 0 1-2.9-2.2M2.5 10.8a3 3 0 0 1 0-3.6M3.1 4.8a3 3 0 0 1 3.4-1.6"/></svg>' },
+    { key: 'google', name: 'Google', test: m => /google|gemini/i.test(m.provider + ' ' + m.name),
+      icon: '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M8 1c.5 3.6 3.4 6.5 7 7-3.6.5-6.5 3.4-7 7-.5-3.6-3.4-6.5-7-7 3.6-.5 6.5-3.4 7-7z"/></svg>' },
+  ];
+  const ctxLabel = n => (!n ? '' : n >= 1e6 ? `${n / 1e6} M` : `${Math.round(n / 1000)} k`);
   function modelMenu() {
     if (S.menu && !S.menu.filter) return closeMenu();
-    openMenu(S.models.map(m => ({ label: m.name, id: m.id, cur: String(m.id) === String(S.status.modelId) })), it => post({ type: 'setModel', id: it.id }));
+    const items = [], used = new Set();
+    for (const p of [...PROVIDERS, { key: 'autres', name: 'Autres', test: () => true, icon: '' }]) {
+      const group = S.models.filter(m => !used.has(m.id) && p.test(m));
+      if (!group.length) continue;
+      group.forEach(m => used.add(m.id));
+      items.push({ section: p.name, icon: p.icon });
+      for (const m of group) items.push({ label: m.name, id: m.id, desc: m.contextWindow ? `contexte ${ctxLabel(m.contextWindow)}` : '', cur: String(m.id) === String(S.status.modelId) });
+    }
+    openMenu(items, it => post({ type: 'setModel', id: it.id }));
   }
   function modeMenu() {
     if (S.menu && !S.menu.filter) return closeMenu();
@@ -874,6 +892,7 @@
       }
       case 'select': mcpClose(); selectCard(ev); break;
       case 'mcpPanel': mcpPanel(ev); break;
+      case 'models': if (Array.isArray(ev.models) && ev.models.length) S.models = ev.models; break;
       case 'card': card(ev); break;
       case 'skills': skShow(ev); break;
       case 'history': histShow(ev); break;
