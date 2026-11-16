@@ -284,3 +284,30 @@ test('IDE avec formulaires (elicitation) : choix de la conversation et du projet
   const { setProjectOverride } = await import('../src/api.js');
   setProjectOverride(undefined);
 });
+
+test('fs_agent : dossier non approuvé → l\'IDE demande à l\'utilisateur (Oui / Non), jamais pour le dossier personnel', async () => {
+  const { isFolderTrusted } = await import('../src/trust.js');
+  cfg.mcpAskWhere = false;
+  const asked = [];
+  let answer = 'no', s;
+  const notify = m => { if (m.method === 'elicitation/create') { asked.push(m.params.message); setImmediate(() => s.handle({ jsonrpc: '2.0', id: m.id, result: { action: 'accept', content: { trust: answer } } })); } };
+  s = srv.createMcpServer({ hasToken: () => true, notify, fetchAgents: async () => null, runNative: async S => { S.lastResponse = 'fait'; } });
+  await s.handle({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: { elicitation: {} } } });
+  const run = async folder => (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_agent', arguments: { task: 't', folder } } })).result;
+  const dir = fs.mkdtempSync(path.join(tmp, 'pas-approuve-'));
+  const r1 = await run(dir);
+  assert.equal(r1.isError, true); assert.match(r1.content[0].text, /non approuvé/);
+  assert.equal(asked.length, 1); assert.ok(asked[0].includes(dir));
+  assert.equal(isFolderTrusted(dir), false);
+  answer = 'always';
+  const r2 = await run(dir);
+  assert.notEqual(r2.isError, true, JSON.stringify(r2));
+  assert.equal(isFolderTrusted(dir), true, 'approuvé par l\'utilisateur');
+  asked.length = 0;
+  await run(dir);
+  assert.equal(asked.length, 0, 'plus de question ensuite');
+  const r3 = await run(os.homedir());
+  assert.equal(r3.isError, true);
+  assert.equal(asked.length, 0, 'jamais proposé pour le dossier personnel');
+  cfg.mcpAskWhere = true;
+});

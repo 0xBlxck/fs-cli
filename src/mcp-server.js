@@ -10,7 +10,7 @@ import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys, FILES, ROOT } from './config.js';
 import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects } from './api.js';
 import { newSid, tag } from './chats.js';
-import { isFolderTrusted } from './trust.js';
+import { isFolderTrusted, isBroadFolder, trustFolder } from './trust.js';
 import { summarizeChanges } from './changes.js';
 import * as ui from './ui.js';
 
@@ -205,6 +205,22 @@ export function createMcpServer(deps = {}) {
     if (v.remember === true) saveCfgKeys({ mcpAskWhere: false });
     return null;
   }
+  /** dossier pas encore approuvé : l'IDE le demande à l'utilisateur (c'est lui qui clique, jamais l'agent). Jamais pour un disque entier ou le dossier personnel. */
+  async function askTrust(dir, signal) {
+    if (!clientCanAsk || isBroadFolder(dir)) return false;
+    let r;
+    try {
+      r = await request('elicitation/create', {
+        message: `Faire confiance à ce dossier ?\n${dir}\n\nL'agent FS-CLI (modèle France Student) pourra y lire, créer et modifier des fichiers. Les commandes et actions sensibles restent refusées automatiquement.`,
+        requestedSchema: { type: 'object', properties: { trust: { type: 'string', title: 'Ta réponse', enum: ['always', 'session', 'no'], enumNames: ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Non'], default: 'always' } }, required: ['trust'] },
+      }, signal);
+    } catch (e) { if (e?.name === 'AbortError') throw e; return false; }
+    const v = r?.action === 'accept' ? r.content?.trust : 'no';
+    if (v === 'always') trustFolder(dir);
+    else if (v === 'session') trustFolder(dir, { remember: false });
+    else return false;
+    return true;
+  }
   const CANCELLED = () => textResult('L\'utilisateur a fermé la fenêtre de choix de la conversation : rien n\'a été envoyé à France Student. Demande-lui avant de réessayer.', true);
   const gone = e => /Chat not found|not found with id/i.test(String(e?.message || e));
   const folders = new Map();                                           // dossier normalisé → état de session de l'agent
@@ -283,7 +299,7 @@ export function createMcpServer(deps = {}) {
     if (!st?.isDirectory()) return textResult(`Dossier introuvable : ${folder}`, true);
     const dir = path.resolve(folder);
     // sécurité : seul l'utilisateur peut approuver un dossier, dans fs-cli (jamais l'agent qui appelle ce serveur)
-    if (!isFolderTrusted(dir)) {
+    if (!isFolderTrusted(dir) && !(await askTrust(dir, signal))) {
       return textResult(`Dossier non approuvé : ${dir}\nPar sécurité, fs_agent ne travaille que dans un dossier que l'utilisateur a déjà approuvé. ` +
         `Demande à l'utilisateur d'ouvrir ce dossier une fois avec fs-cli (cd dans le dossier puis « fs-cli ») et de répondre « Oui, je fais confiance à ce dossier », puis réessaie.`, true);
     }
