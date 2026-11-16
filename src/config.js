@@ -47,7 +47,8 @@ const DEFAULTS = {
   engineExplicit: false, // true dès que tu choisis avec /engine (sinon un ancien réglage « chat » est remplacé par « native »)
   autoCompact: true,  // compacte la conversation (résumé → nouvelle conversation) quand le contexte atteint le seuil
   compactThreshold: 80,
-  compactTokens: 80000,    // résumé aussi quand un message envoie plus que ça (l'historique entier repart à chaque message)
+  compactTokensUser: false, // true = seuil choisi par toi avec /autocompact <n>k
+  compactTokens: 0,        // 0 = automatique selon le modèle (30 % de sa fenêtre, entre 60k et 200k : Claude 1M → 200k, GPT 272k → ~80k) ; sinon ton seuil (/autocompact 150k)    // résumé aussi quand un message envoie plus que ça (l'historique entier repart à chaque message)
   sound: false,       // bip à la fin d'une réponse longue (> 3 s)
   eco: false,         // consignes de concision ajoutées aux demandes de création
   skills: [],         // ids des compétences actives (skills.json)
@@ -73,6 +74,7 @@ try {
   for (const k of Object.keys(DEFAULTS)) if (saved[k] !== undefined) cfg[k] = saved[k];
 } catch {}
 if (!['auto', 'edits', 'ask', 'plan'].includes(cfg.mode)) cfg.mode = 'auto';
+if (cfg.compactTokens === 80000 && !cfg.compactTokensUser) cfg.compactTokens = 0;   // ancienne valeur par défaut enregistrée → seuil automatique selon le modèle
 if (!['native', 'chat'].includes(cfg.engine)) cfg.engine = 'native';
 if (!cfg.engineExplicit && cfg.engine === 'chat') cfg.engine = 'native';      // migration : le mode natif est désormais disponible
 

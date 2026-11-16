@@ -251,3 +251,18 @@ test('images générées par France Student : repérées dans la réponse ; skil
   const { workPreferences } = await import('../src/pseudo.js');
   assert.ok(!workPreferences().text.startsWith('['));                    // un bloc entre crochets s'affichait en formule sur le site
 });
+
+test('résumé automatique : seuil adapté à la fenêtre de contexte du modèle, sauf seuil choisi', async () => {
+  const { compactLimit } = await import('../src/extra-commands.js');
+  const { cfg } = await import('../src/config.js');
+  const prev = cfg.compactTokens;
+  try {
+    cfg.compactTokens = 0;
+    const S = w => ({ agentId: 7, ctxWindows: { 7: w } });
+    assert.equal(compactLimit(S(1000000)), 200000);
+    assert.equal(compactLimit(S(100000)), 60000);
+    assert.equal(compactLimit({ agentId: 7 }), 80000);
+    cfg.compactTokens = 150000;
+    assert.equal(compactLimit(S(1000000)), 150000);
+  } finally { cfg.compactTokens = prev; }
+});

@@ -49,10 +49,17 @@ export async function compactSession(S, { instruction = '', signal } = {}) {
 }
 
 /** Avant un envoi : compacte si le contexte atteint le seuil (jamais pendant une boucle) */
+/** seuil de résumé automatique (tokens envoyés par message) : le tien s'il est fixé, sinon adapté à la fenêtre de contexte du modèle */
+export function compactLimit(S) {
+  if (cfg.compactTokens > 0) return cfg.compactTokens;
+  const win = Number(S.ctxWindows?.[String(S.agentId)]) || 0;
+  return win ? Math.max(60000, Math.min(200000, Math.round(win * 0.3))) : 80000;
+}
+
 export async function maybeAutoCompact(S, signal) {
   if (!cfg.autoCompact || !S.chatId) return;
   const full = typeof S.ctxPercent === 'number' && S.ctxPercent >= cfg.compactThreshold;
-  const heavy = (S.lastPromptTokens || 0) >= (cfg.compactTokens || 80000);   // chaque message renvoie tout l'historique : au-delà, il coûte trop
+  const heavy = (S.lastPromptTokens || 0) >= compactLimit(S);   // chaque message renvoie tout l'historique : au-delà, il coûte trop
   if (!full && !heavy) return;
   if ((cfg.dailyLimitHitAt || 0) >= lastReset()) return;                     // limite atteinte : pas de nouvelle conversation possible, on n'essaie pas
   println(c.yellow(full ? `  ⚠ contexte à ${Math.round(S.ctxPercent)} % — résumé automatique de la conversation` : `  ⚠ conversation lourde (≈${Math.round(S.lastPromptTokens / 1000)}k tokens envoyés à chaque message) — résumé automatique pour l'alléger`) + c.dim('  (/autocompact off pour désactiver)'));
@@ -354,12 +361,12 @@ export async function extraCommand(cmd, arg, env) {
       const session = [
         { label: 'Durée', value: mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min` },
         { label: 'Échanges', value: `${st.turns} demande${st.turns > 1 ? 's' : ''} · ${st.requests} requête${st.requests > 1 ? 's' : ''} · ${st.tools} outil${st.tools > 1 ? 's' : ''}` },
-        ...(S.lastPromptTokens ? [{ label: 'Envoyé par message', pct: Math.min(100, S.lastPromptTokens / (cfg.compactTokens || 80000) * 100), value: `≈ ${k(S.lastPromptTokens)} tokens`, note: `tout l'historique repart à chaque message · résumé automatique à ${Math.round((cfg.compactTokens || 80000) / 1000)}k` }] : []),
+        ...(S.lastPromptTokens ? [{ label: 'Envoyé par message', pct: Math.min(100, S.lastPromptTokens / compactLimit(S) * 100), value: `≈ ${k(S.lastPromptTokens)} tokens`, note: `tout l'historique repart à chaque message · résumé automatique à ${Math.round(compactLimit(S) / 1000)}k` }] : []),
         { label: 'Tokens', value: `${k(S.tokens?.in)} envoyés · ${k(S.tokens?.out)} reçus` },
       ];
       if (S.chatId) {
         const pctCtx = Number(chatU?.contextUsagePercent);
-        session.push(Number.isFinite(pctCtx) ? { label: 'Contexte', pct: pctCtx, value: 'utilisé', note: cfg.autoCompact ? `résumé automatique dès ${Math.round((cfg.compactTokens || 80000) / 1000)}k tokens par message ou ${cfg.compactThreshold} %` : 'résumé automatique désactivé' } : { label: 'Contexte', value: 'indisponible' });
+        session.push(Number.isFinite(pctCtx) ? { label: 'Contexte', pct: pctCtx, value: 'utilisé', note: cfg.autoCompact ? `résumé automatique dès ${Math.round(compactLimit(S) / 1000)}k tokens par message ou ${cfg.compactThreshold} %` : 'résumé automatique désactivé' } : { label: 'Contexte', value: 'indisponible' });
         if (chatU?.tokenUsage?.totalTokenCount) session.push({ label: 'Tokens de la conversation', value: `${k(chatU.tokenUsage.totalTokenCount)} au total` });
       } else session.push({ label: 'Conversation', value: 'pas encore commencée' });
       const card = { title: 'Consommation', sections: [{ title: 'Compte France Student', rows: account }, { title: 'Cette session', rows: session }],
@@ -401,10 +408,11 @@ export async function extraCommand(cmd, arg, env) {
     }
     case '/autocompact': {
       const kt = String(arg || '').match(/^(\d+)\s*k?$/i);                    // « /autocompact 60k » : seuil en tokens par message
-      if (kt) { cfg.compactTokens = Math.max(20000, parseInt(kt[1], 10) * (parseInt(kt[1], 10) < 1000 ? 1000 : 1)); cfg.autoCompact = true; saveCfg(); }
+      if (/^auto$/i.test(arg || '')) { cfg.compactTokens = 0; cfg.compactTokensUser = false; cfg.autoCompact = true; }   // seuil adapté au modèle
+      else if (kt) { cfg.compactTokens = Math.max(20000, parseInt(kt[1], 10) * (parseInt(kt[1], 10) < 1000 ? 1000 : 1)); cfg.autoCompact = true; cfg.compactTokensUser = true; saveCfg(); }
       else cfg.autoCompact = arg ? /^(on|1|oui|true)$/i.test(arg) : !cfg.autoCompact;
       saveCfg();
-      println(c.dim(`  → résumé automatique ${cfg.autoCompact ? `ON : dès ${Math.round((cfg.compactTokens || 80000) / 1000)}k tokens par message ou ${cfg.compactThreshold} % du contexte` : 'OFF'}`)); return true;
+      println(c.dim(`  → résumé automatique ${cfg.autoCompact ? `ON : dès ${Math.round(compactLimit(S) / 1000)}k tokens par message ou ${cfg.compactThreshold} % du contexte` : 'OFF'}`)); return true;
     }
     case '/threshold': {
       const n = parseInt(arg);

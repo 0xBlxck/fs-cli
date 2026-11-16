@@ -1189,8 +1189,10 @@ if (interactive) {
 }
 refreshPrompt();
 banner();
-if (opts.stdio) requestJson('GET', '/chats/agents').then(r => {      // fournisseur + taille de contexte, pour le sélecteur de modèle du panneau
+requestJson('GET', '/chats/agents').then(r => {                      // fournisseur + taille de contexte : seuil de résumé adapté au modèle, sélecteur du panneau
   if (!Array.isArray(r?.data)) return;
+  S.ctxWindows = Object.fromEntries(r.data.map(a => [String(a.id), Number(a.contextWindow) || 0]));
+  if (!opts.stdio) return;
   stdioSend('models', { models: r.data.filter(a => a && a.isActive !== false).map(a => ({ id: String(a.id), name: a.name, provider: String(a.modelProvider || ''), contextWindow: Number(a.contextWindow) || null })) });
 }).catch(() => {});
 if (opts.stdio) input.setBusy(true);                                 // panneau : rien ne part au modèle tant que la confiance n'est pas décidée
