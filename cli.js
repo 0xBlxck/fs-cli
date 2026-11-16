@@ -11,7 +11,7 @@ import { execSync, spawnSync } from 'node:child_process';
 
 import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
-import { fetchAgents, listFsProjects, fetchChatsList, requestJson } from './src/api.js';
+import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
@@ -33,7 +33,7 @@ import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX
 import { uploadFile } from './src/api.js';
 import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
-import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
+import { newSid, createdToday, DAILY_LIMIT, niceTitle } from './src/chats.js';
 import { extraCommand, maybeAutoCompact } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
@@ -150,7 +150,7 @@ function resolveModel(arg) {
 
 function saveSession() {
   if (!S.chatId) return;
-  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, targetDir: S.targetDir, toolsHintSig: S.toolsHintSig || '' });
+  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', fsTitled: !!S.fsTitled, ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, targetDir: S.targetDir, toolsHintSig: S.toolsHintSig || '' });
 }
 
 // ── Démarrage ─────────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ if (opts.cont) {
   else console.log(c.dim('  aucune session à reprendre'));
 }
 function applySession(s) {
-  S.chatId = s.chatId; S.agentId = s.agentId || S.agentId; S.title = s.title || '';
+  S.chatId = s.chatId; S.agentId = s.agentId || S.agentId; S.title = s.title || ''; S.fsTitled = !!s.fsTitled;
   S.ctxSent = s.ctxSent !== false; S.ctxPercent = null; S.blocks = []; S.pendingResults = [];
   S.sid = s.sid || newSid(); S.slots = s.slots || {}; S.targetDir = s.targetDir && fs.existsSync(s.targetDir) ? s.targetDir : null;
   if (s.cwd && fs.existsSync(s.cwd)) S.cwd = s.cwd;
@@ -475,9 +475,9 @@ async function liveSessions(limit = 50, onQuick) {
     return [...local, ...remote.filter(r => !ids.has(r.chatId))].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
   };
   try { onQuick?.(merge(list, remoteCache)); } catch {}
-  const clean = t => String(t || '(sans titre)').replace(/^[[0-9a-f]{4}(?:·[^]]*)?]s*/i, '');
+  const clean = t => String(t || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '');
   const seen = new Set(), remote = [];
-  const add = (arr, project) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); remote.push({ chatId: x.id, title: clean(x.title), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: project || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); } };
+  const add = (arr, project) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); remote.push({ chatId: x.id, raw: String(x.title || ''), title: clean(x.title), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: project || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); } };
   const chatsOf = j => (Array.isArray(j) ? j : j?.chats);
   const [mine, projects] = await Promise.all([within(fetchChatsList(50), 6000, null), within(listFsProjects(), 6000, null)]);
   add(mine);
@@ -492,9 +492,39 @@ async function liveSessions(limit = 50, onQuick) {
   const gone = new Set(answered ? toCheck.filter((s, i) => res[i] === false && !seen.has(s.chatId)).map(s => s.chatId) : []);   // seulement un « n'existe pas » net
   if (gone.size) markSessionsGone([...gone]);
   const local = list.filter(s => !gone.has(s.chatId)).map(s => { const r = remote.find(x => x.chatId === s.chatId); return r?.project && !s.project ? { ...s, project: r.project } : s; });
+  // titres : celui gardé sur ce PC (complet) plutôt que « (sans titre) » ; les anciens titres tronqués du site sont corrigés en arrière-plan
+  const fix = [];
+  for (const s of local) {
+    const r = remote.find(x => x.chatId === s.chatId);
+    if (!r) continue;
+    if ((!s.title || s.title === '(sans titre)') && r.title && r.title !== '(sans titre)') s.title = r.title;
+    else if (s.title && s.title !== '(sans titre)' && /^\[[0-9a-f]{4}/i.test(r.raw || '') && cfg.renameChats !== false) fix.push([s.chatId, niceTitle(s.title) || s.title]);
+  }
+  for (const [id, t] of fix.slice(0, 8)) renameChat(id, t).then(ok => { if (ok) { const cur = loadSessions().find(x => x.chatId === id); if (cur) upsertSession({ ...cur, fsTitled: true }, { touch: false }); } }).catch(() => {});
+  // titres coupés par le site (« ajoute un... ») : 1er message lu une seule fois (gardé dans titles.json) ; conversation de FS-CLI → titre corrigé sur le site aussi
+  const tc = loadTitleCache();
+  const ours = r => /^\[[0-9a-f]{4}/i.test(r.raw || '');
+  const cut = r => ours(r) || /(\.\.\.|…)\s*$/.test(r.raw || '');
+  const need = remote.filter(r => !tc[r.chatId] && cut(r)).slice(0, 10);
+  if (need.length) {
+    const got = await Promise.all(need.map(r => within(fetchChat(r.chatId).then(ch => niceTitle(transcriptOf(ch).find(m => m.role === 'user')?.text || '')), 3000, '')));
+    need.forEach((r, i) => {
+      const t = got[i];
+      if (!t) return;
+      tc[r.chatId] = t;
+      if (ours(r) && cfg.renameChats !== false) renameChat(r.chatId, /^\[[0-9a-f]{4}·mcp\]/i.test(r.raw) ? `MCP · ${t}` : t).catch(() => {});
+    });
+    saveTitleCache(tc);
+  }
+  for (const r of remote) if (tc[r.chatId]) r.title = tc[r.chatId];
+  for (const s of local) if (tc[s.chatId] && (!s.title || /(\.\.\.|…)\s*$|^\(sans titre\)$/.test(s.title))) s.title = tc[s.chatId];   // titre local repris du site tronqué
   if (mine !== null) remoteCache = remote.filter(r => !list.some(s => s.chatId === r.chatId));
   return merge(local, remote.filter(r => !local.some(s => s.chatId === r.chatId)));
 }
+
+const TITLES_FILE = () => path.join(HOME_DIR, 'titles.json');
+function loadTitleCache() { try { const j = JSON.parse(fs.readFileSync(TITLES_FILE(), 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; } }
+function saveTitleCache(tc) { try { const keys = Object.keys(tc).slice(-300); fs.writeFileSync(TITLES_FILE(), JSON.stringify(Object.fromEntries(keys.map(k => [k, tc[k]]))), { mode: 0o600 }); } catch {} }
 
 /** messages d'une conversation, sans les ajouts internes de FS-CLI (étiquette, notes, consignes jointes) */
 function transcriptOf(chat) {
@@ -533,7 +563,7 @@ async function command(line) {
     case '/id': return println(c.dim('  ' + (S.chatId || 'aucune conversation')));
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
-      S.chatId = null; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      S.chatId = null; S.fsTitled = false; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
@@ -934,10 +964,14 @@ async function chatTurn(text, { keepLast = false } = {}) {
     }
     if (!keepLast) S.lastUserText = text;
     mem.observe(text, S.cwd);
-    if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);
+    if (!S.title || S.title === '(sans titre)') S.title = niceTitle(text) || text.replace(/\s+/g, ' ').slice(0, 60);
     try {
       const agentBefore = S.agentId;
       await runAgent(S, message, { signal: turnAbort.signal, ask });
+      if (S.chatId && !S.fsTitled && S.title && cfg.renameChats !== false) {   // titre lisible sur le site et dans l'historique (au lieu de « [7f3a] écris-moi… »)
+        S.fsTitled = true; saveSession();
+        renameChat(S.chatId, S.title).catch(() => {});
+      }
       if (S.agentId !== agentBefore) { saveSession(); refreshPrompt(); }   // refus d'outils : la demande est repartie avec Sonnet → modèle affiché à jour
       if (S.chatId && S.pendingSummary) { S.pendingSummary = null; S.compactedFrom = null; }   // nouvelle conversation ouverte avec le résumé
       if (!cfg.showThinking && ui.thinkingLength() > 40) println(c.dim('  ✻ le modèle a réfléchi avant de répondre (ctrl+o pour voir)'));
@@ -1110,7 +1144,7 @@ if (opts.stdio) {                                                    // commande
   input.on('historyOpen', async () => {
     const here = path.resolve(S.cwd).toLowerCase();
     const send = (list, partial) => stdioSend('history', { partial, sessions: list.map(s => ({
-      chatId: s.chatId, title: String(s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
+      chatId: s.chatId, title: String(niceTitle(s.title, 90) || s.title || '(sans titre)').slice(0, 120), model: modelName(s.agentId), cwd: s.cwd || (s.remote ? (s.project ? `projet « ${s.project} »` : 'compte France Student') : ''), remote: !!s.remote,
       here: !!s.cwd && path.resolve(s.cwd).toLowerCase() === here, updatedAt: s.updatedAt || 0, current: s.chatId === S.chatId,
     })) });
     // liste immédiate (panneau récent seulement : un ancien panneau rouvrirait sa fenêtre à la 2e liste), puis la liste vérifiée

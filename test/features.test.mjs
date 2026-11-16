@@ -269,3 +269,15 @@ test('résumé automatique : seuil adapté à la fenêtre de contexte du modèle
     assert.equal(compactLimit(S(1000000)), 150000);
   } finally { cfg.compactTokens = prev; }
 });
+
+test('titres de conversation lisibles (comme les sessions de Claude Code) : sans étiquette, chemins réduits, coupés sur un mot', async () => {
+  const { niceTitle } = await import('../src/chats.js');
+  assert.equal(niceTitle('[bbea] ajoute un paragraphe Bienvenue sous le titre dans index.html'), 'Ajoute un paragraphe Bienvenue sous le titre dans index.html');
+  assert.equal(niceTitle('[2c5e·mcp] génère une image'), 'Génère une image');
+  assert.equal(niceTitle('D:\\projets\\moi\\FRSCLI\\HTML SITE team vasy ameliore le design'), 'HTML SITE team vasy ameliore le design');
+  assert.equal(niceTitle('corrige /home/moi/site/src/app.js stp'), 'Corrige app.js stp');
+  assert.equal(niceTitle('  « corrige le bug »  '), 'Corrige le bug');
+  const long = niceTitle('fais-moi un beau site avec trois fichiers séparés index html style css et script js pour un café');
+  assert.ok(long.length <= 60 && long.endsWith('…') && !/\s…$/.test(long), long);
+  assert.equal(niceTitle(''), '');
+});

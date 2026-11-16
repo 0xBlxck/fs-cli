@@ -371,3 +371,15 @@ test('nouveaux outils : fs_image (GPT choisi), fs_web (recherche web), fs_files 
   assert.match(usage, /Nouvelles conversations aujourd'hui : \d+ \/ 50/);
   cfg.mcpAskWhere = true; cfg.mcpChat = null;
 });
+
+test('MCP : une nouvelle conversation reçoit un titre lisible sur le site (« MCP · … »), une conversation existante n\'est pas renommée', async () => {
+  cfg.mcpChat = null; cfg.mcpAskWhere = false;
+  const renamed = [];
+  const stream = async o => { if (!o.chatId) o.onChat?.('mcp-titre-1'); return { text: 'ok' }; };
+  const s = srv.createMcpServer({ hasToken: () => true, stream, fetchAgents: async () => ({ '-2003': 'Claude Sonnet 5.5' }), rename: async (id, t) => { renamed.push([id, t]); return true; } });
+  const ask = async a => (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_ask', arguments: a } })).result;
+  await ask({ prompt: '[ab12] explique-moi les promesses JavaScript' });
+  await ask({ prompt: 'et async/await ?' });
+  assert.deepEqual(renamed, [['mcp-titre-1', 'MCP · Explique-moi les promesses JavaScript']]);
+  cfg.mcpAskWhere = true; cfg.mcpChat = null;
+});

@@ -229,6 +229,13 @@ export async function findOrCreateFsProject(name) {
   if (!r.data?.id) throw new Error(`création du projet refusée (HTTP ${r.status})`);
   return { project: r.data, created: true };
 }
+/** Renomme une conversation sur France Student (PATCH /chats/{id}, comme le site). */
+export async function renameChat(chatId, title) {
+  const t = String(title || '').trim().slice(0, 120);
+  if (!chatId || !t) return false;
+  const r = await requestJson('PATCH', `/chats/${encodeURIComponent(chatId)}`, { title: t });
+  return r.status >= 200 && r.status < 300;
+}
 /** Range une conversation dans un projet (PUT /projects/{p}/chats/{c}). */
 export async function attachChatToProject(projectId, chatId) {
   const r = await requestJson('PUT', `/projects/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`);

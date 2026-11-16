@@ -39,6 +39,7 @@ const DEFAULTS = {
   agentId: -1002,
   mcpAskImported: false,
   toolRefusals: {},
+  renameChats: true,       // titre lisible posé sur le site après le 1er échange (comme les sessions de Claude Code)
   refusalRecover: true,    // un modèle croit ne pas avoir le droit d'utiliser les outils : 1 précision factuelle, puis la demande repart avec Sonnet (affiché)
   mcpChat: null,           // conversation France Student utilisée par le serveur MCP { id, title } : réutilisée même après un redémarrage
   mcpAskWhere: true,       // serveur MCP : au premier appel de chaque session, l'IDE (Claude Code…) affiche un choix de conversation (boutons)
@@ -126,8 +127,10 @@ export function markSessionsGone(ids) {
   try { fs.writeFileSync(FILES.sessions, JSON.stringify(list, null, 1), { mode: 0o600 }); } catch {}
 }
 
-export function upsertSession(s) {
-  const list = loadSessions().filter(x => x.chatId !== s.chatId);
-  list.unshift({ ...s, updatedAt: Date.now() });
+export function upsertSession(s, { touch = true } = {}) {
+  let list = loadSessions();
+  const i = list.findIndex(x => x.chatId === s.chatId);
+  if (!touch && i >= 0) list[i] = { ...list[i], ...s };               // simple mise à jour (ex. titre renommé) : ni date ni place changées
+  else { list = list.filter(x => x.chatId !== s.chatId); list.unshift({ ...s, updatedAt: Date.now() }); }
   try { fs.writeFileSync(FILES.sessions, JSON.stringify(list.slice(0, 50), null, 1), { mode: 0o600 }); } catch {}
 }

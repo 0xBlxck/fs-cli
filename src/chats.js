@@ -24,6 +24,17 @@ export const newSid = () => crypto.randomBytes(2).toString('hex');
 /** étiquette en tête du 1er message → titre FS « [7f3a] écris-moi… » ou « [7f3a·css] Tu es l'agent… » (≤ 20 caractères avant troncature) */
 export const tag = (sid, role = '') => `[${sid}${role ? '·' + role : ''}] `;
 
+/** Titre lisible d'une conversation (comme les sessions de Claude Code) tiré de la 1re demande : sans étiquette,
+ *  chemins réduits à leur dernier dossier/fichier, coupé proprement sur un mot. */
+export function niceTitle(text, max = 60) {
+  let s = String(text || '').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '').replace(/\s+/g, ' ').trim();
+  s = s.replace(/(?:[A-Za-z]:)?[\\/](?:[^\\/\s]+[\\/])+/g, '');      // C:\Users\moi\site\index.html → index.html
+  s = s.replace(/^["'«\s]+|["'»\s]+$/g, '');
+  if (!s) return '';
+  if (s.length > max) { const cut = s.slice(0, max - 1); const sp = cut.lastIndexOf(' '); s = (sp > max * 0.5 ? cut.slice(0, sp) : cut).replace(/[\s,;:.–-]+$/, '') + '…'; }
+  return s[0].toUpperCase() + s.slice(1);
+}
+
 /** dernier instant de remise à zéro de la limite quotidienne (04:00:00 UTC, le jour même ou la veille) */
 export function lastReset(now = Date.now()) {
   const d = new Date(now);
