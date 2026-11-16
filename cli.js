@@ -496,6 +496,7 @@ async function command(line) {
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
       S.chatId = null; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
       println(); Object.entries(AGENTS).forEach(([id, n], i) =>
@@ -1184,10 +1185,10 @@ if (!opts.stdio && !cfg.vscodeTip) {                                 // une seul
 // où ranger les conversations sur le site ? demandé une seule fois (avant : projet « FS-CLI » imposé)
 if (interactive && input.select && !cfg.fsProjectChosen) {
   const idx = await input.select({ title: 'Où ranger tes conversations FS-CLI sur le site France Student ?', detail: 'Tu pourras changer plus tard avec /projet.',
-    options: ['Dans mes conversations normales (visibles dans la liste du site)', 'Dans un projet « FS-CLI » à part', 'Dans un de mes projets…'], defaultIndex: 0 });
+    options: ['Dans mes conversations normales (visibles dans la liste du site)', 'Dans un de mes projets existants…', '＋ Créer un nouveau projet…'], defaultIndex: 0 });
   cfg.fsProjectChosen = true;
-  if (idx === 1) cfg.fsProject = { name: 'FS-CLI' };
-  else if (idx === 2) { saveCfg(); await extraCommand('/projet', '', extraEnv()); }
+  if (idx === 1) { saveCfg(); await extraCommand('/projet', '', extraEnv()); }
+  else if (idx === 2) { saveCfg(); await extraCommand('/projet', 'nouveau', extraEnv()); }
   else cfg.fsProject = false;
   saveCfg();
 }

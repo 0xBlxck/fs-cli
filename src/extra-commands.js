@@ -452,6 +452,14 @@ export async function extraCommand(cmd, arg, env) {
         env.refreshPrompt?.();
         println(c.green('  ✓ ') + `projet « ${cfg.fsProject.name} »${created ? ' créé' : ''}` + c.dim(` — conversations rangées dans ce projet du site${instr ? ' · ses instructions sont suivies' : ' · ce projet n\'a pas d\'instructions (ajoute-en sur le site)'}`));
       };
+      const createNew = async () => {                                  // nom demandé, puis projet créé sur le site
+        const name = String((await env.ask?.('Nom du nouveau projet France Student :')) || '').trim();
+        if (!name) { println(c.dim('  aucun projet créé')); return; }
+        ui.spinner.start('création du projet…');
+        try { const { project, created } = await findOrCreateFsProject(name); ui.spinner.stop(); use(project, created); }
+        catch (e) { ui.spinner.stop(); println(c.red('  ✗ ' + e.message)); }
+      };
+      if (/^(nouveau|new|cr[ée]er|\+)$/i.test(arg)) { await createNew(); return true; }
       if (/^(off|non|aucun|none)$/i.test(arg)) { cfg.fsProject = false; saveCfg(); S.fsProjInstr = null; env.refreshPrompt?.(); println(c.dim('  → plus de projet : les conversations ne sont plus rangées, aucune instruction de projet')); return true; }
       try {
         ui.spinner.start('projets France Student…');
@@ -459,13 +467,14 @@ export async function extraCommand(cmd, arg, env) {
         ui.spinner.stop();
         if (!arg) {                                                    // liste des projets du compte : on choisit
           const cur = cfg.fsProject === false ? null : cfg.fsProject?.id;
-          if (!list.length) { println(c.dim('  aucun projet sur ton compte — /projet <nom> pour en créer un')); return true; }
+          if (!list.length) { if (env.ask) { await createNew(); return true; } println(c.dim('  aucun projet sur ton compte — /projet <nom> pour en créer un')); return true; }
           const label = p => `${p.name || '(sans nom)'}${p.id === cur ? '  ✓ actuel' : ''}${String(p.customInstructions || '').trim() ? '  · avec instructions' : ''}`;
           if (env.select) {
             const shown = list.slice(0, 20);
-            const idx = await env.select({ title: 'Travailler dans quel projet France Student ?', detail: 'Les conversations y sont rangées et le modèle suit les instructions personnalisées du projet.', options: [...shown.map(label), 'Aucun projet', 'Annuler'], defaultIndex: Math.max(0, shown.findIndex(p => p.id === cur)) });
-            if (idx == null || idx > shown.length) return true;
-            if (idx === shown.length) { cfg.fsProject = false; saveCfg(); S.fsProjInstr = null; env.refreshPrompt?.(); println(c.dim('  → plus de projet')); return true; }
+            const idx = await env.select({ title: 'Travailler dans quel projet France Student ?', detail: 'Les conversations y sont rangées et le modèle suit les instructions personnalisées du projet.', options: [...shown.map(label), '＋ Créer un nouveau projet…', 'Aucun projet (conversations normales)', 'Annuler'], defaultIndex: Math.max(0, shown.findIndex(p => p.id === cur)) });
+            if (idx == null || idx > shown.length + 1) return true;
+            if (idx === shown.length) { await createNew(); return true; }
+            if (idx === shown.length + 1) { cfg.fsProject = false; saveCfg(); S.fsProjInstr = null; env.refreshPrompt?.(); println(c.dim('  → plus de projet')); return true; }
             use(shown[idx]); return true;
           }
           println(); list.forEach(p => println(`  ${p.id === cur ? c.green('●') : c.dim('○')} ${label(p)}`)); println(c.dim('\n  /projet <nom> pour choisir · /projet off\n')); return true;
