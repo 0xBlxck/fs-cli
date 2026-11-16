@@ -84,7 +84,7 @@ export async function confirm(ask, { title, detail, danger, allowAlways = false,
   if (selectHandler) {
     // modification de fichier vue dans le diff de l'éditeur (panneau VS Code) : « Accepter / Refuser » comme Claude Code ; terminal : inchangé
     const diffy = !!(proposal && selectProposals);
-    const YES = diffy ? 'Accepter' : 'Oui', NO = diffy ? 'Refuser' : 'Non';
+    const YES = diffy ? 'Accepter' : 'Oui', NO = diffy ? 'Refuser' : 'Non, et dire quoi faire à la place';   // comme Claude Code : « No, and tell Claude what to do differently »
     const alwaysOk = !noAlways && (!danger || allowAlways);
     const options = [yesLabel || YES];
     let trustIdx = -1, alwaysIdx = -1;

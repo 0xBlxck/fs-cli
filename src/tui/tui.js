@@ -35,7 +35,7 @@ export class Tui {
       : new Screen({ out: stdout, compose: () => this.compose(), getCols: () => stdout.columns || 100 });
   }
 
-  on(ev, fn) { this.handlers[ev].push(fn); return this; }
+  on(ev, fn) { (this.handlers[ev] ||= []).push(fn); return this; }   // événement inconnu de cette interface (ex. « instant », propre au panneau) : accepté sans planter
   emit(ev, ...a) { for (const fn of this.handlers[ev] || []) fn(...a); }
 
   // ── cycle de vie ────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ class ReadlineInput {
     this.rl.on('SIGINT', () => this.onSigint());
     this.rl.on('close', () => this.emit('quit'));
   }
-  on(ev, fn) { this.handlers[ev].push(fn); return this; }
+  on(ev, fn) { (this.handlers[ev] ||= []).push(fn); return this; }   // événement inconnu de cette interface (ex. « instant », propre au panneau) : accepté sans planter
   emit(ev, ...a) { for (const fn of this.handlers[ev]) fn(...a); }
   start() {}
   stop() { try { this.rl.close(); } catch {} }

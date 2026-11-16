@@ -226,3 +226,13 @@ test('largeur étroite : le footer ne déborde pas', async () => {
   assert.equal(sim.count(/> un texte/g), 1);
   tui.stop();
 });
+
+test('toutes les interfaces acceptent un événement qu\'elles ne connaissent pas (ex. « instant » du panneau) sans planter au démarrage', async () => {
+  const { createInput } = await import('../src/input.js');
+  const f = fakeStreams(80, 20);
+  const tui = new Tui({ stdin: f.stdin, stdout: f.stdout, history: [] });
+  assert.doesNotThrow(() => tui.on('instant', () => {}));
+  const classic = createInput({ interactive: false, history: [], onHistory() {}, suggester() { return []; }, completer() { return [[], '']; }, promptStr: () => '> ' });
+  assert.doesNotThrow(() => classic.on('instant', () => {}));
+  classic.stop?.();
+});

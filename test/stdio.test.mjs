@@ -25,7 +25,7 @@ test('affichage branché sur des événements : texte brut, actions, diff, notes
     assert.deepEqual(types.filter(t => t !== 'print'), ['text', 'textEnd', 'tool', 'toolDone', 'tool', 'toolLive', 'toolLive', 'toolDone', 'toolOutput', 'note', 'diff', 'spinner', 'spinner']);
     const text = ev.find(e => e[0] === 'text')[1].delta;
     assert.equal(text, '# Titre\n**gras** ok');                                // markdown brut, séquences de contrôle retirées
-    assert.deepEqual(ev.find(e => e[0] === 'tool')[1], { name: 'read_file', tag: '◇', label: 'Lire', detail: 'a.js', raw: 'a.js', explore: true });
+    assert.deepEqual(ev.find(e => e[0] === 'tool')[1], { name: 'read_file', tag: '', label: 'Read', detail: 'a.js', raw: 'a.js', explore: true });
     assert.equal(ev.find(e => e[0] === 'note')[1].text, 'vert');
     const d = ev.find(e => e[0] === 'diff')[1];
     assert.deepEqual([d.added, d.removed], [1, 1]);

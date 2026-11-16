@@ -289,10 +289,11 @@ export class MdStream {
 }
 
 // ── Blocs d'outils ────────────────────────────────────────────────────────────
-// Présentation des actions (façon Claude Code) : ● puce verte · type · libellé · détails en gris
+// Présentation des actions comme Claude Code : « ● Read(index.html) », « ● Update(style.css) », « ● PowerShell(npm test) » (mêmes noms que le panneau)
+const SHELL_NAME = process.platform === 'win32' ? 'PowerShell' : 'Bash';
 const ACTIONS = {
-  shell: ['>_', 'Commande'], python: ['py', 'Python'], read_file: ['◇', 'Lire'], write_file: ['✎', 'Écrire'], edit_file: ['✎', 'Modifier'],
-  list_dir: ['▤', 'Lister'], grep: ['⌕', 'Chercher'], glob: ['⌕', 'Trouver'], fetch_url: ['⇣', 'Web'], web_search: ['⌕', 'Recherche web'],
+  shell: ['', SHELL_NAME], python: ['', 'Python'], read_file: ['', 'Read'], write_file: ['', 'Write'], edit_file: ['', 'Update'],
+  list_dir: ['', 'List'], grep: ['', 'Search'], glob: ['', 'Search'], fetch_url: ['', 'Fetch'], web_search: ['', 'Web Search'],
 };
 /** Décode une commande fs-mcp (node "…mcp-cli.js" call srv outil args) pour l'afficher lisiblement. */
 export function describeAction(name, summary = '') {
@@ -341,26 +342,32 @@ export function showExpanded() {
 // puis écrite dans l'historique UNE FOIS TERMINÉE, puce verte (réussie) ou rouge (échec).
 // Les lectures / recherches successives sont regroupées en un seul bloc « Exploré ».
 let cell = null, committing = false, lastExplore = false;
-function headLine(bullet, tag, label, detail) {
-  const head = `${tag ? c.accent(c.bold(tag)) + ' ' : ''}${c.bold(label)}`;
-  return `  ${bullet} ${head}${detail ? '  ' + c.dim(clip(detail, Math.max(10, cols() - stripLen(head) - 8))) : ''}`;
+function headLine(bullet, tag, label, detail) {                      // « ● Read(index.html) » ; MCP : « ● serveur · outil (MCP)(args) »
+  const head = c.bold(label) + (tag === 'MCP' ? c.dim(' (MCP)') : '');
+  return `  ${bullet} ${head}${detail ? '(' + clip(detail, Math.max(10, cols() - stripLen(head) - 8)) + ')' : ''}`;
 }
-function exploreLines(items) {                                       // « Lire a.js, b.js » : actions identiques successives fusionnées
-  const rows = [];
-  for (const it of items) {
-    const last = rows[rows.length - 1];
-    if (last && last.label === it.label && it.detail && rows.length) last.details.push(it.detail);
-    else rows.push({ label: it.label, details: it.detail ? [it.detail] : [], err: it.err });
-    if (it.err) rows[rows.length - 1].err = true;
-  }
-  return rows.map((r, i) => `  ${i === 0 ? c.dim('  └') : '   '} ${(r.err ? c.red : c.bold)(r.label)} ${c.dim(clip(r.details.join(', '), cols() - 16))}`);
+/** « Lu 2 fichiers, cherché 1 motif » : résumé d'une suite de lectures / recherches (comme Claude Code) */
+function exploreSummary(items, done) {
+  const n = k => items.filter(i => i.kind === k).length;
+  const pl = (x, a, b) => `${x} ${x > 1 ? b : a}`;
+  const parts = [];
+  if (n('read')) parts.push(`${done ? 'lu' : 'lecture de'} ${pl(n('read'), 'fichier', 'fichiers')}`);
+  if (n('search')) parts.push(`${done ? 'cherché' : 'recherche de'} ${pl(n('search'), 'motif', 'motifs')}`);
+  if (n('list')) parts.push(`${done ? 'listé' : 'liste de'} ${pl(n('list'), 'dossier', 'dossiers')}`);
+  const t = parts.join(', ') || (done ? 'exploré' : 'exploration');
+  return t[0].toUpperCase() + t.slice(1);
 }
+const exploreKind = name => (name === 'read_file' ? 'read' : name === 'list_dir' ? 'list' : 'search');
 function cellLines(final) {
   if (!cell) return [];
-  if (cell.kind === 'explore') {
-    const err = cell.items.some(i => i.err);
-    const bullet = final ? (err ? c.red('●') : c.green('●')) : c.dim('◦');
-    return [`  ${bullet} ${c.bold(final ? 'Exploré' : 'Exploration…')}`, ...exploreLines(cell.items)];
+  if (cell.kind === 'explore') {                                      // une ligne, comme Claude Code ; le détail reste dispo avec ctrl+o
+    const errs = cell.items.filter(i => i.err);
+    const bullet = final ? (errs.length ? c.red('●') : c.green('●')) : c.dim('◦');
+    const last = cell.items[cell.items.length - 1];
+    if (!final) return [`  ${bullet} ${c.bold(exploreSummary(cell.items, false) + '…')}${last?.detail ? '  ' + c.dim(clip(last.detail, cols() - 40)) : ''}`];
+    remember('exploration', cell.items.map(i => `${i.label}(${i.detail || ''})${i.err ? '  ✗ échec' : ''}`));
+    const failed = errs.length ? c.red(` · ${errs.length} échec${errs.length > 1 ? 's' : ''} : ${clip(errs.map(i => i.detail).join(', '), 40)}`) : '';
+    return [`  ${bullet} ${c.bold(exploreSummary(cell.items, true))}${failed} ${c.dim('(ctrl+o pour voir)')}`];
   }
   const bullet = final ? (cell.ok === false ? c.red('●') : c.green('●')) : c.dim('◦');
   const out = [headLine(bullet, cell.tag, cell.label, cell.detail)];
@@ -388,9 +395,9 @@ export function toolHeader(name, summary = '') {
   if (sink?.event) { lastExplore = EXPLORE.has(name); sink.event('tool', { name, tag, label, detail: sanitize(detail), raw: sanitize(String(summary || '')).slice(0, 8000), explore: lastExplore }); return; }
   if (!sink) { println(); println(headLine(c.green('●'), tag, label, detail)); return; }     // sans interface plein écran : direct
   const explore = EXPLORE.has(name);
-  if (explore && cell?.kind === 'explore') { cell.items.push({ label, detail }); showActive(); return; }
+  if (explore && cell?.kind === 'explore') { cell.items.push({ kind: exploreKind(name), label, detail }); showActive(); return; }
   commitAction();
-  cell = explore ? { kind: 'explore', items: [{ label, detail }] } : { kind: 'action', tag, label, detail, live: [], ok: undefined };
+  cell = explore ? { kind: 'explore', items: [{ kind: exploreKind(name), label, detail }] } : { kind: 'action', tag, label, detail, live: [], ok: undefined };
   showActive();
 }
 
@@ -543,7 +550,7 @@ function diffEvent(ops, context) {
 export function box(rows, { title = '', width } = {}) {
   const W = Math.min(width || cols() - 2, 84);
   const inner = W - 4;
-  const top = `╭─ ${title} ${'─'.repeat(Math.max(0, W - 5 - stripAnsi(title).length))}╮`;
+  const top = title ? `╭─ ${title} ${'─'.repeat(Math.max(0, W - 5 - stripAnsi(title).length))}╮` : `╭${'─'.repeat(W - 2)}╮`;
   println(c.accent(top));
   for (const r of rows) {
     const vis = stripAnsi(r).length;

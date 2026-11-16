@@ -363,7 +363,7 @@
       if (S.ask !== card) return;
       S.ask = null;
       if (!fromEditor) post({ type: 'select', id: ev.id, index: i == null ? -1 : i });
-      el.className = 'tl answered'; el.textContent = i == null || !ev.options[i] ? '✗ refusé' : `${ev.options[i] === 'Refuser' ? '✗' : '✓'} ${ev.options[i]}`;
+      el.className = 'tl answered'; el.textContent = i == null || !ev.options[i] ? '✗ refusé' : `${/^(Refuser|Non)\b/.test(ev.options[i]) ? '✗' : '✓'} ${ev.options[i]}`;   // « Non, et dire quoi faire… » = refus
       ta.focus();
     };
     const card = { el, id: ev.id, answer, key: e => {
@@ -435,6 +435,7 @@
   function setBusy(b) {
     S.busy = b;
     bSend.innerHTML = b ? ICON.stop : ICON.send; bSend.title = b ? 'Interrompre (Échap)' : 'Envoyer (Entrée)';
+    ta.placeholder = b ? 'Ajouter un message à la file…  (/usage s\'ouvre tout de suite)' : 'Demande quelque chose à FS-CLI…  (/ pour les commandes)';   // comme Claude Code : « Queue another message… »
     if (b) { S.spinT0 = Date.now(); const q = log.querySelector('.msg-user.queued'); if (q) q.classList.remove('queued'); }
     else { spinner(null); aiEnd(); thinkEnd(); S.tool = null; }
   }

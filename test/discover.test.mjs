@@ -94,7 +94,7 @@ test('accord donné dans FS-CLI → fs-mcp appelle vraiment l\'outil (arguments 
   const ok = await approveServer(S, 'faux', loadMcpConfig(proj).mcpServers.faux, { ask: async () => '' });
   assert.equal(ok, true);
   assert.match(asked[0].title, /« faux » \(configuré dans Claude Code\)/);
-  assert.deepEqual(asked[0].options, ['Oui, autoriser ce serveur', 'Non']);
+  assert.deepEqual(asked[0].options, ['Oui, autoriser ce serveur', 'Non, et dire quoi faire à la place']);
   const t = fsmcp('tools', 'faux');
   assert.equal(t.status, 0, t.stderr); assert.match(t.stdout, /echo text\*=string upper=boolean/);
   const c = fsmcp('call', 'faux', 'echo', 'text=salut', 'upper=true');

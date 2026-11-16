@@ -350,15 +350,16 @@ function banner() {
     } catch {}
   }
   if (opts.stdio) return stdioSend('ready', { version: VERSION, shell: sysEnv.shellName, models: Object.entries(AGENTS).map(([id, name]) => ({ id, name })), modes: MODES.map(m => ({ id: m, name: MODE_NAME[m], desc: MODE_DESC[m] })), commands: SLASH.map(x => x.trim()), cwd: S.cwd, chatId: S.chatId || null, title: S.title || '' });
-  const sess = S.chatId ? c.dim(S.chatId.slice(0, 8)) : c.dim('nouvelle');
+  // accueil sobre, comme Claude Code : le détail technique (moteur, shell, web…) est dans /status
   ui.box([
-    `${c.bold(c.accent('FS-CLI'))} ${c.dim('v' + VERSION + ' · France Student AI')}`,
-    `${c.dim('modèle  ')} ${c.white(modelName())}`,
-    `${c.dim('dossier ')} ${ui.shortPath(S.cwd, 58)}`,
-    `${c.dim('mode    ')} ${cfg.engine === 'native' ? c.green('agent natif (outils FS)') : cfg.engine === 'chat' ? (cfg.autoRun ? c.green('chat + exécution auto') : c.white('chat + /run')) : c.white('tools')} ${c.dim('·')} ${cfg.mode === 'auto' ? c.green('auto') : c.yellow('ask')}  ${c.dim('· web')} ${cfg.webSearch ? c.green('on') : c.dim('off')}  ${c.dim('· ' + sysEnv.shellName + (sysEnv.pythonVersion ? ' · py ' + sysEnv.pythonVersion : ''))}`,
-    `${c.dim('session ')} ${sess}`,
-  ], { title: '◆' });
-  println(c.dim('  /help · @fichier pour joindre · !cmd pour un shell direct · Ctrl+C annule\n'));
+    `${c.accent('✻')} Bienvenue dans ${c.bold('FS-CLI')} ! ${c.dim('v' + VERSION)}`,
+    '',
+    c.dim('  /help pour l\'aide · /status pour ta configuration'),
+    '',
+    `  ${c.dim('modèle :')} ${modelName()}${S.chatId ? c.dim(' · conversation reprise') : ''}`,
+    `  ${c.dim('dossier :')} ${ui.shortPath(S.cwd, 48)}`,
+  ], { width: 64 });
+  println();
 }
 
 const HELP_ROWS = [
@@ -398,13 +399,20 @@ const HELP_ROWS = [
 ];
 
 // commandes proposées dans la liste de suggestions (tirées de l'aide)
+// commandes de l'ancien moteur « chat » (blocs de code dans la réponse) : sans objet avec les outils officiels → hors du menu et de l'aide (toujours utilisables)
+const LEGACY = new Set(['/run', '/code', '/hint', '/auto', '/engine', '/feedback']);
+const legacyHidden = name => cfg.engine === 'native' && LEGACY.has(name);
 const COMMANDS = (() => {
   const seen = new Map();
-  for (const [k, desc] of HELP_ROWS) for (const part of k.split(/\s*·\s*/)) {
-    const usage = part.trim();
-    if (!usage.startsWith('/')) continue;
-    const name = usage.split(/\s+/)[0];
-    if (!seen.has(name)) seen.set(name, { name, usage, desc });
+  for (const [k, desc] of HELP_ROWS) {
+    const parts = k.split(/\s*·\s*/), descs = desc.split(' · ');
+    parts.forEach((part, i) => {                                       // « /chats · /clean » : chacune sa propre description
+      const usage = part.trim();
+      if (!usage.startsWith('/')) return;
+      const name = usage.split(/\s+/)[0];
+      if (legacyHidden(name)) return;
+      if (!seen.has(name)) seen.set(name, { name, usage, desc: descs.length === parts.length ? descs[i] : desc });
+    });
   }
   for (const [name, desc] of [['/exit', 'quitter'], ['/id', 'identifiant de la conversation'], ['/save', 'sauvegarder la session'], ['/clear', 'effacer l\'écran']])
     if (!seen.has(name)) seen.set(name, { name, usage: name, desc });
@@ -412,7 +420,7 @@ const COMMANDS = (() => {
 })();
 
 function help() {
-  println(); for (const [k, v] of HELP_ROWS) println(`  ${c.accent(k.padEnd(20))} ${c.dim(v)}`); println();
+  println(); for (const [k, v] of HELP_ROWS) if (!legacyHidden(k.split(/\s+/)[0])) println(`  ${c.accent(k.padEnd(20))} ${c.dim(v)}`); println();
 }
 
 function status() {

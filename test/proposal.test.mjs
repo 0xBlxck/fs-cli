@@ -88,7 +88,7 @@ test('terminal (sans proposals) : questions inchangées « Oui / Non », pas de 
   const f = fresh();
   await execCall(session(), { name: 'write_file', args: { path: f, content: 'x' } }, io());
   assert.equal(asked[0].options[0], 'Oui');
-  assert.equal(asked[0].options.at(-1), 'Non');
+  assert.equal(asked[0].options.at(-1), 'Non, et dire quoi faire à la place');
   assert.equal(asked[0].proposal, undefined);
 });
 
