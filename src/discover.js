@@ -186,7 +186,15 @@ const GENERIC = new Set(['code', 'fichier', 'fichiers', 'dossier', 'dossiers', '
  * Skills à joindre AUTOMATIQUEMENT à une demande : seulement en cas de correspondance nette
  * (au moins 2 mots qui correspondent et un score suffisant), 2 au maximum.
  */
+// skills d'audit / de revue : ils font produire une liste de remarques au lieu d'agir → seulement si l'utilisateur demande un audit
+const AUDIT_SKILL = /^\s*(review|audit|check|analy[sz]e|inspect|evaluate|assess)\b/i;
+const AUDIT_ASK = /\b(audit|revue|review|relis|relecture|v[ée]rifie|contr[ôo]le|analyse|inspecte|[ée]value|check|accessibilit[ée]|conformit[ée]|bonnes pratiques)/i;
+
 export function autoSkills(list, query, max = 2) {
+  // les chemins de fichiers ne disent rien de la demande (« …\\HTML SITE team ») : on les retire avant d'analyser
+  query = String(query || '').replace(/(?:[A-Za-z]:[\\/]|~\/|\/)[^\s"'`]*(?:\s+[A-Z][^\s\\/]*)*(?:[\\/][^\s"'`]*)*/g, ' ');
+  const wantsAudit = AUDIT_ASK.test(query);
+  list = list.filter(s => wantsAudit || !AUDIT_SKILL.test(s.description || ''));
   // mots de la demande (un mot et son pluriel = un seul mot), chacun avec ses équivalents anglais
   const stem = w => (w.length > 3 ? w.replace(/(s|x)$/, '') : w);
   const raw = norm(query).split(/[^a-z0-9]+/).filter(w => (w.length > 2 || FR_EN[w]) && !STOP.has(w) && !GENERIC.has(w) && !TECH.has(w));

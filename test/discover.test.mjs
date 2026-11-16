@@ -121,3 +121,14 @@ test('bloc d\'info envoyé au modèle : commande réelle, guides proches, aucune
   assert.deepEqual(mentionedServers(proj, 'fais-le avec le mcp faux'), ['faux']);
   assert.deepEqual(mentionedServers(proj, 'un truc faux'), [], 'nom court sans « mcp » : ignoré');
 });
+
+test('skills automatiques : chemins ignorés, skill d\'audit seulement si on demande un audit', async () => {
+  const { autoSkills } = await import('../src/discover.js');
+  const list = [
+    { name: 'web-design-guidelines', description: 'Review UI code for Web Interface Guidelines compliance. Use when asked to check my site against best practices.' },
+    { name: 'frontend-design', description: 'Create distinctive, production-grade frontend interfaces and web pages with high design quality.' },
+  ];
+  const names = q => autoSkills(list, q).map(s => s.name);
+  assert.ok(!names('C:\Users\moi\Downloads\HTML SITE team ameliore un peu mon site').includes('web-design-guidelines'));
+  assert.ok(names('audit l\'accessibilité de mon site web').includes('web-design-guidelines'));
+});

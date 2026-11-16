@@ -875,7 +875,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
         body = body.length > Math.min(12000, budget) ? body.slice(0, Math.min(12000, budget)) + '\n[… guide tronqué ; la suite est dans ' + sk.file + ']' : body;
         if (budget <= 1000) break;
         budget -= body.length;
-        message += `\n\n[Guide « ${sk.name} » de l'utilisateur, à appliquer s'il est pertinent (sans le recopier) ; ses autres fichiers sont dans ${sk.dir}.\n${body}]`;
+        message += `\n\n[Guide « ${sk.name} » de l'utilisateur, à appliquer s'il est pertinent (sans le recopier) ; ses autres fichiers sont dans ${sk.dir}. Il complète la demande sans la remplacer : fais ce que l'utilisateur demande avec tes outils, et ignore les étapes du guide qui citent des outils que tu n'as pas.\n${body}]`;
         S.skillsSent.add(sk.name);
         println(c.dim(`  ＋ skill : ${sk.name}`));
       }
