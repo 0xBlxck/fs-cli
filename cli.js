@@ -456,6 +456,7 @@ const extraEnv = () => ({
   S, AGENTS, modelName, resolveModel, withAbort, ask, readAttachment, buildMessage, applySession, refreshPrompt,
   select: input.select ? o => input.select(o) : null,
   transcriptOf,
+  printTurnChanges,
   chatTurn: (t, o) => chatTurn(t, o),
   ...(opts.stdio && panelAtLeast('0.4.0') ? { mcpPanel: () => openMcpPanel() } : {}),
   ...(opts.stdio && panelAtLeast('0.5.0') ? { card: data => stdioSend('card', data) } : {}),

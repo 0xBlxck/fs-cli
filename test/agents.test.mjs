@@ -1,5 +1,5 @@
 // Vue « Agents » du panneau : /team émet des événements structurés (teamStart, agentStart, agentUpdate, agentDone, teamDone)
-// avec un FAUX serveur de chat — aucun appel à France Student.
+// avec un FAUX France Student qui répond par des appels d'outils officiels — aucun appel réel.
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,29 +13,45 @@ const { runTeam, tokensOf, OUTPUT_CAP } = await import('../src/team.js');
 const { detectEnv } = await import('../src/tools.js');
 const { cfg } = await import('../src/config.js');
 await detectEnv();
+cfg.mode = 'auto';
 
 const TASK = 'un site avec index.html, style.css et script.js';
 const AGENT_EV = new Set(['teamStart', 'agentStart', 'agentUpdate', 'agentDone', 'teamDone']);
 
-/** faux serveur : répond avec le fichier demandé dans le prompt ; `big` = réponse énorme pour vérifier le plafond de sortie */
-function fakeStream({ delay = 25, big = '', fail = '' } = {}) {
-  let seq = 0;
-  return async (o) => {
-    let chatId = o.chatId;
-    if (!chatId) { chatId = `chat-${++seq}`; o.onChat?.(chatId); }
-    await new Promise(r => setTimeout(r, delay));
-    const m = /Écris uniquement tes fichiers : ([^\s,]+\.\w+)/.exec(o.content);
-    if (fail && m && m[1] === fail) throw new Error('erreur 500 du serveur');
-    const text = m ? '```text ' + m[1] + '\ncontenu de ' + m[1] + '\n```' + (m[1] === 'index.html' ? big : '') : 'ok';
-    o.onText?.(text);
-    return { text, usage: { totalTokenCount: 1000 + text.length }, stopped: false };
+/** faux France Student pour /team : outils officiels. 1re requête d'une part → appel write_file pour chaque fichier demandé ;
+ *  résultats d'outils → texte final ; relecture → « Tout est cohérent. ». Mesure la concurrence et les créations. */
+function fakeServer({ delay = 25, big = '', fail = '' } = {}) {
+  const st = { calls: [], created: [], active: 0, maxActive: 0, seq: 0 };
+  const lastFiles = new Map();
+  const stream = async (o) => {
+    st.active++; st.maxActive = Math.max(st.maxActive, st.active);
+    try {
+      let chatId = o.chatId;
+      if (!chatId) { chatId = `chat-${++st.seq}`; st.created.push(chatId); o.onChat?.(chatId); }
+      st.calls.push({ chatId, agentId: o.agentId, content: o.content, results: !!o.toolResults, fresh: !o.chatId, tools: o.clientTools });
+      await new Promise(r => setTimeout(r, delay));
+      const usage = { promptTokenCount: 600, candidatesTokenCount: 500 };
+      if (o.toolResults) {
+        const files = lastFiles.get(chatId) || [];
+        const text = `contenu de ${files.join(', ')} écrit` + (files.includes('index.html') ? big : '');
+        o.onText?.(text);
+        return { text, usage, toolCalls: [] };
+      }
+      if (/^(?:\[[^\]]+\]\s*)?Relis /.test(o.content || '')) { o.onText?.('Tout est cohérent.'); return { text: 'Tout est cohérent.', usage, toolCalls: [] }; }
+      const m = /Crée ou modifie uniquement : ([^\n]+?)\. Écris/.exec(o.content || '');
+      const files = m ? m[1].split(/,\s*/) : [];
+      if (fail && files.includes(fail)) throw new Error('erreur 500 du serveur');
+      lastFiles.set(chatId, files);
+      return { text: '', usage, toolCalls: files.map((f, i) => ({ callId: `c${st.calls.length}-${i}`, name: 'write_file', arguments: { path: f, content: `contenu de ${f}\n` } })) };
+    } finally { st.active--; }
   };
+  return { st, stream };
 }
 
 async function run(mode, { agentMap = false, sink = true, ...fake } = {}) {
   const dir = fs.mkdtempSync(path.join(tmp, 'w-'));
-  const S = { chatId: 'main-1', slots: {}, sid: 'abcd', agentId: -2003, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: [] };
-  const env = { S, modelName: () => 'Modèle test', ask: async () => 'o', withAbort: fn => fn(new AbortController().signal), stream: fakeStream(fake), fetchChat: async () => null, contextPercent: async () => null, agentMap };
+  const S = { chatId: 'main-1', slots: {}, sid: 'abcd', agentId: -2003, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: [], tokens: { in: 0, out: 0 } };
+  const env = { S, modelName: () => 'Modèle test', ask: async () => 'o', withAbort: fn => fn(new AbortController().signal), stream: fakeServer(fake).stream, fetchChat: async () => null, contextPercent: async () => null, agentMap };
   const events = [], prints = [];
   if (sink) ui.attachSink({ print: t => prints.push(String(t)), spinner: () => {}, event: (type, data) => events.push({ type, ...data }) });
   try { await runTeam(env, TASK, { mode }); } finally { ui.attachSink(null); }
@@ -102,7 +118,7 @@ test('agent en échec : agentUpdate « error », agentDone ok=false avec le mess
 
 test('sortie plafonnée (~20 Ko) dans agentDone', async () => {
   const { agentEvents: evs } = await run('same', { big: '\n' + 'x'.repeat(OUTPUT_CAP * 2) });
-  const done = evs.find(e => e.type === 'agentDone' && e.output.startsWith('```text index.html'));
+  const done = evs.find(e => e.type === 'agentDone' && e.output.startsWith('contenu de index.html'));
   assert.ok(done.output.length <= OUTPUT_CAP + 40, 'plafonnée');
   assert.match(done.output, /tronquée/);
 });

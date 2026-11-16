@@ -1,17 +1,15 @@
-// /team : des agents qui écrivent chacun leurs fichiers (à la suite dans la conversation courante, ou en parallèle dans des conversations réutilisées)
-// puis le CLI exécute le résultat avec les mêmes garde-fous que d'habitude.
-import fs from 'node:fs';
-import { streamChat, fetchChat } from './api.js';
-import { extractBlocks, panelBlocks } from './blocks.js';
-import { runBlock, baseDir } from './agent.js';
-import { resolveP } from './tools.js';
+// /team : le travail est découpé en parts (une par fichier) ; chaque part est une demande normale à l'agent FS-CLI, qui écrit avec les outils
+// officiels de France Student (à la suite dans la conversation courante, ou en parallèle dans des conversations réutilisées).
+import path from 'node:path';
+import { streamChat } from './api.js';
+import { baseDir } from './agent.js';
+import { summarizeChanges } from './changes.js';
 import { cfg } from './config.js';
 import { contextPercent } from './account.js';
-import { newSid, tag, createdToday, DAILY_LIMIT } from './chats.js';
+import { newSid, createdToday, DAILY_LIMIT } from './chats.js';
 import * as ui from './ui.js';
-import { c, println } from './ui.js';
+import { c } from './ui.js';
 
-const FILE_RE = /^[\w.\/\\:-]+\.[A-Za-z0-9]{1,6}$/;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Découpage fait par le CLI (aucun appel au modèle) : le modèle FS refuse de produire du JSON destiné à un programme.
@@ -71,21 +69,22 @@ export function buildPlan(raw, { n = null } = {}) {
   return { task, plan, mode, note };
 }
 
-function workerPrompt(task, W, plan, dir, { same = false, reused = false } = {}) {
-  const all = plan.flatMap(p => p.files);
-  return (reused && !same ? `[Nouvelle tâche, indépendante des précédentes de cette conversation]\n` : '') +
-    `Agent ${W.titre} — tu fais partie d'une équipe qui construit : ${task}\n` +
-    (all.length ? `Fichiers de l'ensemble (garde des noms, ids, classes et liens cohérents avec eux) : ${all.join(', ')}.\n` : '') +
-    (same ? `Les fichiers déjà écrits par les agents précédents figurent plus haut dans cette conversation : reste cohérent avec eux.\n` : '') +
-    `Ta part : ${W.consigne}\n` +
-    (W.files.length ? `Écris uniquement tes fichiers : ${W.files.join(', ')}. ` : '') +
-    `Pour chaque fichier, un bloc de code dont la ligne d'ouverture donne le langage et le nom du fichier (par exemple \`\`\`html index.html) avec le contenu final complet — pas un script qui le génère. Très peu de texte autour.\n` +
-    `Dossier cible : ${dir}`;
+/** Consigne d'une part du travail : une demande normale, sans jeu de rôle ni format imposé (France Student refuse « tu es l'agent X d'une équipe »).
+ *  Le modèle travaille avec les outils officiels (lire, écrire, modifier), comme pour n'importe quelle demande. */
+export function workerTask(task, W, plan, dir, { same = false, reused = false } = {}) {
+  if (!W.files.length) return task;                                   // une seule part, sans fichiers précis : la demande telle quelle
+  const others = plan.flatMap(p => p.files).filter(f => !W.files.includes(f));
+  return (reused ? '(Nouvelle tâche, indépendante des précédentes de cette conversation.)\n' : '') +
+    `Dans le dossier ${dir} : ${W.consigne}.\n` +
+    `C'est une partie du projet « ${task} ».` +
+    (others.length ? ` Les autres fichiers du projet (${others.join(', ')}) sont faits ${same ? 'juste avant ou juste après' : 'en même temps, séparément'} : ` +
+      `garde des noms, ids, classes et liens cohérents avec eux${same ? '' : ', sans les créer toi-même'}.` : '') +
+    `\nCrée ou modifie uniquement : ${W.files.join(', ')}. Écris le contenu final complet avec tes outils.`;
 }
 
 // ── événements pour la vue « Agents » du panneau VS Code (sans sink à événements : rien n'est émis, le terminal ne change pas) ──
 //  teamStart {team, task, mode, model, count, parallel, agents:[{id, name, task, files}]}
-//  agentStart {team, id, name, task, files, model, mode, slot} · agentUpdate {team, id, status, chars?, tokens?, durationMs?}
+//  agentStart {team, id, name, task, files, model, mode, slot} · agentUpdate {team, id, status, tokens?, durationMs?}
 //  agentDone {team, id, ok, summary, output, files, tokens?, durationMs, aborted?} · teamDone {team, count, durationMs, ok, aborted?}
 //  status : 'running' | 'done' | 'error'  (en attente = pas encore d'agentStart)
 export const OUTPUT_CAP = 20_000;
@@ -98,96 +97,83 @@ export function tokensOf(u) {
   return t > 0 ? t : null;
 }
 function summaryOf(W) {
-  if (W.status === 'ok') { const n = W.blocks.length; return `${n} fichier${n > 1 ? 's' : ''} : ${W.blocks.map(b => b.name).join(', ')}`; }
+  if (W.status === 'ok') { const n = W.written.length; return n ? `${n} fichier${n > 1 ? 's' : ''} : ${W.written.join(', ')}` : 'terminé'; }
   if (W.status === 'sans fichier') return 'le modèle n\'a pas écrit de fichier';
   return W.error || 'échec';
 }
+const QUIET = { print() {}, spinner() {}, setActive() {} };           // affichage mis de côté pendant le travail en parallèle
 
-/** Un agent = un message envoyé dans une conversation (la courante, ou une conversation réutilisable « w0, w1… ») */
-async function runWorker(W, ctx) {
+/** Une part du travail = une demande à l'agent FS-CLI (outils officiels), dans la conversation courante ou dans « w0, w1… » */
+async function runWorker(W, WS, ctx) {
   const t0 = Date.now();
-  W.status = 'en cours'; W.text = '';
+  W.status = 'en cours';
   ctx.ev('agentStart', { id: W.id, name: W.titre, task: W.consigne, files: W.files, model: ctx.modelLabel, mode: ctx.sameChat ? 'same' : 'pool', slot: ctx.sameChat ? 'main' : W.slot });
-  let lastUp = 0;
+  const timer = setInterval(() => ctx.ev('agentUpdate', { id: W.id, status: 'running', durationMs: Date.now() - t0 }), 1000);
+  timer.unref?.();
+  const undoBefore = WS.undo.length, tokBefore = (WS.tokens?.in || 0) + (WS.tokens?.out || 0), hadChat = !!WS.chatId;
   try {
-    const { S, stream, getChat } = ctx;
-    let chatId = ctx.sameChat ? S.chatId : (S.slots[W.slot] || null);
-    const fresh = !chatId;
-    let content = W.prompt(!fresh);
-    if (fresh && cfg.tagChats !== false) content = tag(S.sid, ctx.sameChat ? '' : W.slot) + content;      // titre FS « [7f3a·w0] Agent … »
-    const res = await stream({
-      agentId: ctx.workerId, chatId, content, webSearch: false, signal: ctx.signal,
-      register: { sid: S.sid, role: ctx.sameChat ? 'main' : W.slot },
-      onChat: id => { if (!chatId) { chatId = id; if (ctx.sameChat) S.chatId = id; else S.slots[W.slot] = id; } },
-      onText: d => {
-        W.chars += d.length; if (W.text.length < OUTPUT_CAP + 1) W.text += d; ctx.tick();
-        const now = Date.now();
-        if (now - lastUp >= 500) { lastUp = now; ctx.ev('agentUpdate', { id: W.id, status: 'running', chars: W.chars, durationMs: now - t0 }); }
-      },
-    });
-    W.tokens = tokensOf(res.usage);
-    let blocks = extractBlocks(res.text).filter(b => b.action === 'write');
-    if (!blocks.length && chatId) {                          // code parti dans le « panneau » serveur
-      for (let k = 0; k < 2 && !blocks.length; k++) {
-        const cd = await getChat(chatId);
-        const last = [...(cd?.chatMessages || [])].reverse().find(m => m.role === 'assistant');
-        blocks = panelBlocks(last).filter(b => b.action === 'write');
-        if (!blocks.length) await sleep(700);
-      }
-    }
-    W.blocks = blocks; W.chatId = chatId; W.text = res.text;
-    W.status = blocks.length ? 'ok' : 'sans fichier';
-    if (fresh) ctx.created++;
+    await ctx.runNative(WS, workerTask(ctx.task, W, ctx.plan, ctx.dir, { same: ctx.sameChat, reused: !ctx.sameChat && hadChat }),
+      { signal: ctx.signal, ask: ctx.ask, stream: ctx.stream, ...(ctx.sameChat ? {} : { ctxPct: async () => null }) });
+    W.text = WS.lastResponse || '';
+    W.written = summarizeChanges(WS.undo, undoBefore).filter(f => !f.deleted).map(f => path.relative(ctx.dir, f.path) || path.basename(f.path));
+    W.status = W.files.length && !W.written.length ? 'sans fichier' : 'ok';
+    if (!hadChat && WS.chatId) ctx.created++;
   } catch (e) {
-    if (e.name === 'AbortError') {
+    if (e?.name === 'AbortError') {
+      clearInterval(timer);
       W.status = 'annulé';
       const durationMs = Date.now() - t0;
       ctx.ev('agentUpdate', { id: W.id, status: 'error', durationMs });
       ctx.ev('agentDone', { id: W.id, ok: false, summary: 'interrompu', output: capOut(W.text), files: [], durationMs, aborted: true });
       throw e;
     }
-    W.status = 'échec'; W.error = e.message; if (e.code === 'DAILY_CHAT_LIMIT') ctx.limitHit = e;
-  }
+    W.status = 'échec'; W.error = e?.message || String(e); if (e?.code === 'DAILY_CHAT_LIMIT') ctx.limitHit = e;
+  } finally { clearInterval(timer); }
   const durationMs = Date.now() - t0;
   W.secs = durationMs / 1000;
+  const used = (WS.tokens?.in || 0) + (WS.tokens?.out || 0) - tokBefore;
+  W.tokens = used > 0 ? used : null;
   const ok = W.status === 'ok', tok = W.tokens != null ? { tokens: W.tokens } : {};
-  ctx.ev('agentUpdate', { id: W.id, status: ok ? 'done' : 'error', chars: W.chars, durationMs, ...tok });
-  ctx.ev('agentDone', { id: W.id, ok, summary: summaryOf(W), output: capOut(W.text), files: W.blocks.map(b => b.name), durationMs, ...tok });
-  ctx.tick(true);
+  ctx.ev('agentUpdate', { id: W.id, status: ok ? 'done' : 'error', durationMs, ...tok });
+  ctx.ev('agentDone', { id: W.id, ok, summary: summaryOf(W), output: capOut(W.text), files: W.written, durationMs, ...tok });
 }
 
 /**
- * Exécute l'équipe : répartition → agents → écriture (avec garde-fous) → relecture facultative.
- *  mode 'same' (défaut) : les agents travaillent À LA SUITE dans la conversation courante → une seule conversation, aucune création.
- *  mode 'pool'          : jusqu'à `maxParallel` agents EN PARALLÈLE, chacun dans sa propre conversation, réutilisée d'une équipe à l'autre.
+ * Exécute l'équipe : répartition → agents (outils officiels de France Student) → relecture facultative.
+ *  mode 'same' (défaut) : les parts sont faites À LA SUITE dans la conversation courante → une seule conversation, aucune création.
+ *  mode 'pool'          : jusqu'à `maxParallel` parts EN PARALLÈLE, chacune dans sa propre conversation, réutilisée d'une équipe à l'autre.
  */
 export async function runTeam(env, rawTask, { review = false, agents = null, mode: modeOpt = null } = {}) {
   const { S, modelName, ask, withAbort } = env;
-  const stream = env.stream || streamChat, getChat = env.fetchChat || fetchChat, ctxPct = env.contextPercent || contextPercent;
+  const stream = env.stream || streamChat, ctxPct = env.contextPercent || contextPercent;
+  const runNative = env.runNative || (await import('./native.js')).runNative;
   const { task, plan, mode, note } = buildPlan(rawTask, { n: agents });
   const teamMode = modeOpt || (cfg.teamMode === 'pool' ? 'pool' : 'same');
   const sameChat = teamMode === 'same';
   const parallel = sameChat ? 1 : Math.min(6, Math.max(1, cfg.maxParallel || 3));
-  S.slots ||= {}; S.sid ||= newSid();
+  S.slots ||= {}; S.sid ||= newSid(); S.undo ||= []; S.notes ||= []; S.allow ||= {}; S.tokens ||= { in: 0, out: 0 };
+  S.turnMarks ||= []; S.turnMarks.push({ at: S.undo.length, text: `/team ${task}`.replace(/\s+/g, ' ').slice(0, 70), t: Date.now() });   // /rewind
   await withAbort(async signal => {
     const workerId = cfg.workerModel != null ? cfg.workerModel : S.agentId;
     const dir = baseDir(S);
     const T0 = Date.now();
     const team = `t${(++teamSeq).toString(36)}${T0.toString(36).slice(-4)}`;
-    const ev = (type, data) => ui.emit(type, { team, ...data });
-    const quiet = !!env.agentMap && ui.hasEvents();          // panneau avec la vue « Agents » : le bloc remplace la liste en texte
+    const outer = ui.currentSink();
+    const ev = (type, data) => { if (outer?.event) try { outer.event(type, { team, ...data }); } catch {} };
+    const say = s => { if (outer) outer.print(s + '\n'); else process.stdout.write(s + '\n'); };   // passe même quand l'affichage des agents est mis de côté
+    const quiet = !!env.agentMap && !!outer?.event;                    // panneau avec la vue « Agents » : le bloc remplace la liste en texte
     const modelLabel = modelName(workerId);
     if (!quiet) {
       ui.toolHeader('équipe', task.slice(0, 80));
-      println(c.dim(`    ${plan.length} agent${plan.length > 1 ? 's' : ''} (${mode}) · modèle : ${modelLabel} · ` +
+      say(c.dim(`    ${plan.length} agent${plan.length > 1 ? 's' : ''} (${mode}) · modèle : ${modelLabel} · ` +
         (sameChat ? 'à la suite, dans la conversation courante' : `${Math.min(parallel, plan.length)} en parallèle, conversations réutilisées`)));
     }
-    if (note) println(c.yellow('    ⚠ ' + note));
-    if (!sameChat && parallel > 4) println(c.dim('    (plus de 4 requêtes simultanées : risque d\'erreurs 429 « trop de requêtes »)'));
-    if (plan.length === 1 && !plan[0].files.length) println(c.dim('    un seul agent (précise des fichiers : « … avec index.html, style.css et script.js » ou « | fichier: consigne »)'));
-    else if (!quiet) plan.forEach(p => println(`    ${c.accent('▸')} ${c.bold(p.titre)} ${c.dim('→ ' + p.files.join(', '))}`));
+    if (note) say(c.yellow('    ⚠ ' + note));
+    if (!sameChat && parallel > 4) say(c.dim('    (plus de 4 requêtes simultanées : risque d\'erreurs 429 « trop de requêtes »)'));
+    if (plan.length === 1 && !plan[0].files.length) say(c.dim('    une seule part (précise des fichiers : « … avec index.html, style.css et script.js » ou « | fichier: consigne »)'));
+    else if (!quiet) plan.forEach(p => say(`    ${c.accent('▸')} ${c.bold(p.titre)} ${c.dim('→ ' + p.files.join(', '))}`));
 
-    const workers = plan.map((p, i) => ({ ...p, id: `${team}-${i + 1}`, chars: 0, status: 'attente', blocks: [], secs: 0, slot: '', prompt: null, text: '', tokens: null }));
+    const workers = plan.map((p, i) => ({ ...p, id: `${team}-${i + 1}`, status: 'attente', written: [], secs: 0, slot: '', text: '', tokens: null }));
     ev('teamStart', { task, mode: teamMode, plan: mode, model: modelLabel, count: workers.length, parallel: Math.min(parallel, workers.length),
       agents: workers.map(W => ({ id: W.id, name: W.titre, task: W.consigne, files: W.files })) });
     let doneSent = false;
@@ -202,92 +188,74 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
         const id = S.slots[`w${j}`];
         if (!id) continue;
         const pct = await ctxPct(id).catch(() => null);
-        if (typeof pct === 'number' && pct >= 70) { delete S.slots[`w${j}`]; println(c.dim(`    conversation w${j} presque pleine (${Math.round(pct)} %) → une neuve sera ouverte`)); }
+        if (typeof pct === 'number' && pct >= 70) { delete S.slots[`w${j}`]; say(c.dim(`    conversation w${j} presque pleine (${Math.round(pct)} %) → une neuve sera ouverte`)); }
       }
     }
 
-    workers.forEach(W => { W.prompt = reused => workerPrompt(task, W, plan, dir, { same: sameChat, reused }); });
-    let lastDraw = 0;
-    const ctx = {
-      S, stream, getChat, workerId, signal, sameChat, created: 0, limitHit: null, ev, modelLabel,
-      tick: (force) => {
-        const now = Date.now();
-        if (!force && now - lastDraw < 400) return;
-        lastDraw = now;
-        const bits = workers.map(W => `${W.titre} ${W.status === 'ok' ? '✓' : W.status === 'en cours' ? (W.chars > 999 ? (W.chars / 1000).toFixed(1) + 'k' : W.chars || '…') : W.status === 'attente' ? '·' : '✗'}`);
-        if (ui.spinner.active) ui.spinner.label('agents : ' + bits.join(' · '));
-      },
-    };
-    ui.spinner.start('agents…');
+    const ctx = { task, plan, dir, signal, ask, stream, runNative, sameChat, created: 0, limitHit: null, ev, modelLabel };
     const K = Math.min(parallel, workers.length);
     const work = Array.from({ length: K }, (_, j) => workers.filter((_, i) => i % K === j));   // répartition fixe : la voie j garde sa conversation « wj »
-    const lane = async (j) => {
-      for (const W of work[j]) {
-        if (signal.aborted) return;
-        W.slot = `w${j}`;
-        await runWorker(W, ctx);
-      }
-    };
-    const lanes = [];
+    const states = [];
+    const tasksBefore = ui.tasks.list;
+    let prog = null;
+    const agentBefore = S.agentId;
+    if (sameChat) S.agentId = workerId;
+    else {
+      ui.attachSink(QUIET);                                            // chaque agent travaille sans écrire à l'écran (sinon les sorties se mélangent)
+      if (outer?.event) outer.event('spinner', { label: 'agents…' });
+      const line = () => workers.map(W => `${W.titre} ${W.status === 'ok' ? '✓' : W.status === 'en cours' ? '…' : W.status === 'attente' ? '·' : '✗'}`).join(' · ');
+      prog = setInterval(() => { if (outer?.event) return; const t = `${c.accent('✻')} agents : ${line()} ${c.dim('(échap pour interrompre)')}`; if (outer?.spinner) outer.spinner(t); else process.stdout.write(`\r\x1b[K  ${t}`); }, 300);
+      prog.unref?.();
+    }
     try {
-      for (let j = 0; j < K; j++) { lanes.push(lane(j)); await sleep(350); }   // départs décalés (limites de débit)
+      const lane = async j => {
+        const WS = sameChat ? S : { chatId: S.slots[`w${j}`] || null, sid: S.sid, tagRole: `w${j}`, agentId: workerId, cwd: S.cwd, targetDir: S.targetDir, undo: [], allow: { ...S.allow },
+          pendingResults: [], notes: [], tokens: { in: 0, out: 0 }, slots: {}, stats: { turns: 0, requests: 0, tools: 0 }, lastResponse: '', maxSteps: S.maxSteps };
+        if (!sameChat) states.push(WS);
+        for (const W of work[j]) {
+          if (signal.aborted) return;
+          W.slot = `w${j}`;
+          await runWorker(W, WS, ctx);
+          if (!sameChat && WS.chatId) S.slots[`w${j}`] = WS.chatId;
+        }
+      };
+      const lanes = [];
+      for (let j = 0; j < K; j++) { lanes.push(lane(j)); if (!sameChat) await sleep(350); }   // départs décalés (limites de débit)
       await Promise.all(lanes);
     } catch (e) { teamDone({ aborted: true }); throw e; }
-    ui.spinner.stop();
+    finally {
+      if (sameChat) S.agentId = agentBefore;
+      else {
+        clearInterval(prog);
+        ui.attachSink(outer);
+        if (outer?.event) outer.event('spinner', { label: null }); else if (outer?.spinner) outer.spinner(null); else process.stdout.write('\r\x1b[K');
+        for (const WS of states) S.undo.push(...WS.undo);              // /changes et /rewind voient le travail des agents
+        ui.tasks.set(tasksBefore);
+      }
+    }
     if (signal.aborted) { teamDone({ aborted: true }); throw Object.assign(new Error('annulé'), { name: 'AbortError' }); }
     teamDone();
 
-    if (!quiet) println();
-    for (const W of quiet ? [] : workers) {                  // bilan en texte (le bloc « Agents » du panneau le montre déjà)
-      const mark = W.status === 'ok' ? c.green('✓') : c.red('✗');
-      println(`    ${mark} ${c.bold(W.titre.padEnd(14))} ${c.dim(`${W.secs.toFixed(1)}s · ${W.blocks.length} fichier${W.blocks.length > 1 ? 's' : ''}${W.error ? ' · ' + W.error : W.status === 'sans fichier' ? ' · le modèle n\'a pas écrit de fichier' : ''}`)}`);
-    }
-    if (ctx.limitHit) println(c.yellow('\n    ⚠ ' + ctx.limitHit.message));
-    if (ctx.created) println(c.dim(`    ${ctx.created} nouvelle${ctx.created > 1 ? 's' : ''} conversation${ctx.created > 1 ? 's' : ''} créée${ctx.created > 1 ? 's' : ''} (aujourd'hui : ${createdToday()}/${DAILY_LIMIT} via le CLI)`));
-
-    // fichiers : un nom = une seule version (le premier agent qui l'écrit)
-    const files = new Map();
-    for (const W of workers) for (const b of W.blocks) if (!files.has(b.name)) files.set(b.name, b);
-    if (!files.size) { println(c.yellow('\n    aucun fichier produit par l\'équipe')); return; }
-
-    if (!cfg.autoRun) {
-      S.blocks = [...files.values()];
-      println(c.dim(`\n    ${files.size} fichier(s) prêts — /run all pour les écrire`)); return;
-    }
-    const trusted = new Set();
-    const io = { signal, ask, auto: true, trusted };
-    for (const b of files.values()) {
-      if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
-      const r = await runBlock(S, b, io);
-      if (r?.ok) trusted.add(resolveP(b.name, dir));
-    }
-    S.pendingResults = [];                                   // les résultats ne sont pas renvoyés au chat principal
-    if (!sameChat) S.notes.push(`Via /team, ces fichiers ont été créés dans ${dir} : ${[...files.keys()].join(', ')}.`);
-
-    // relecture facultative (dans la conversation courante en mode « same », sinon dans la conversation w0)
-    if (review && trusted.size) {
-      ui.spinner.start('relecture…');
-      let body = '';
-      for (const p of trusted) { try { body += `\n### ${p}\n\`\`\`\n${fs.readFileSync(p, 'utf8').slice(0, 14000)}\n\`\`\`\n`; } catch {} }
-      let rv = '';
-      try {
-        const chatId = sameChat ? S.chatId : (S.slots.w0 || null);
-        const prompt = `Relis ces fichiers qui forment un seul projet (${task}). Vérifie la cohérence : ids, classes, chemins, noms de fonctions, liens entre fichiers. Si tout est cohérent, réponds exactement : OK\nSinon, renvoie uniquement les fichiers à corriger, complets, chacun dans un bloc de code dont la ligne d'ouverture donne le langage et le nom du fichier (par exemple \`\`\`html index.html).\n${body}`;
-        const r = await stream({
-          agentId: S.agentId, chatId, webSearch: false, signal, register: { sid: S.sid, role: sameChat ? 'main' : 'w0' },
-          content: (!chatId && cfg.tagChats !== false ? tag(S.sid, sameChat ? '' : 'w0') : '') + prompt,
-          onChat: id => { if (!chatId) { if (sameChat) S.chatId = id; else S.slots.w0 = id; } },
-        });
-        rv = r.text;
-      } catch (e) { if (e.name === 'AbortError') throw e; }
-      ui.spinner.stop();
-      if (/^\s*OK\b/i.test(rv)) println(c.green('\n    ✓ ') + c.dim('relecture : cohérent'));
-      else {
-        const fixes = extractBlocks(rv).filter(b => b.action === 'write');
-        if (!fixes.length) println(c.dim('\n    relecture : rien à corriger'));
-        else { println(c.dim(`\n    relecture : ${fixes.length} fichier(s) corrigé(s)`)); for (const b of fixes) await runBlock(S, b, io); S.pendingResults = []; }
+    if (!quiet) {                                                      // bilan en texte (le bloc « Agents » du panneau le montre déjà)
+      say('');
+      for (const W of workers) {
+        const mark = W.status === 'ok' ? c.green('✓') : c.red('✗');
+        say(`    ${mark} ${c.bold(W.titre.padEnd(14))} ${c.dim(`${W.secs.toFixed(1)}s · ${W.written.length} fichier${W.written.length > 1 ? 's' : ''}${W.error ? ' · ' + W.error : W.status === 'sans fichier' ? ' · le modèle n\'a pas écrit de fichier' : ''}`)}`);
       }
     }
-    println();
+    if (ctx.limitHit) say(c.yellow('\n    ⚠ ' + ctx.limitHit.message));
+    if (ctx.created) say(c.dim(`    ${ctx.created} nouvelle${ctx.created > 1 ? 's' : ''} conversation${ctx.created > 1 ? 's' : ''} créée${ctx.created > 1 ? 's' : ''} (aujourd'hui : ${createdToday()}/${DAILY_LIMIT} via le CLI)`));
+
+    const written = [...new Set(workers.flatMap(W => W.written))];
+    if (!written.length && plan.some(p => p.files.length)) { say(c.yellow('\n    aucun fichier produit par l\'équipe')); return; }
+    if (!sameChat && written.length) S.notes.push(`Ces fichiers ont été créés ou modifiés dans ${dir} par des agents en parallèle : ${written.join(', ')}.`);
+
+    // relecture facultative : dans la conversation courante, visible comme une demande normale
+    if (review && written.length) {
+      await runNative(S, `Relis ${written.join(', ')} dans ${dir} : ils forment un seul projet (${task}). Vérifie la cohérence entre eux (ids, classes, chemins, noms de fonctions, liens). ` +
+        'Corrige directement avec tes outils ce qui ne va pas ; si tout est cohérent, dis-le en une phrase.', { signal, ask, stream, ctxPct });
+    }
+    env.printTurnChanges?.();
+    say('');
   });
 }

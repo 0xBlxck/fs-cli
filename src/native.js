@@ -61,7 +61,7 @@ export async function runNative(S, userText, opts) {
   let content = userText;
   if (S.notes.length) { content = `[${S.notes.join(' ')}]\n${content}`; S.notes = []; }
   S.sid ||= newSid();
-  if (!S.chatId && cfg.tagChats !== false) content = tag(S.sid) + content;
+  if (!S.chatId && cfg.tagChats !== false) content = tag(S.sid, S.tagRole || '') + content;   // agents de /team : « [abcd·w0] »
   const root = baseDir(S);
   const t0 = Date.now();
   let results = null, resultFiles = [], nTools = 0, nReq = 0, tokensIn = 0, tokensOut = 0, steps = 0, hitLimit = false, visible = '';

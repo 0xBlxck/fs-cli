@@ -40,7 +40,10 @@ const MODELS = /\b(gpt[- ]?\S*|claude\S*|gemini\S*|mistral\S*|deepseek\S*|grok\S
 export function detectIntent(raw) {
   const text = String(raw || '').trim();
   if (!text || text.startsWith('/') || text.startsWith('!')) return null;
-  const head = text.slice(0, 600);                      // l'intention est dans la demande, pas dans un long collage
+  // l'intention est dans la demande, pas dans un long collage ni dans un chemin (« C:\…\test multi agent » n'est pas une demande d'équipe)
+  const head = text.slice(0, 600)
+    .replace(/["«]\s*(?:[A-Za-z]:[\\/]|\\\\|~?\/)[^"»\n]*["»]/g, ' ')                     // chemin entre guillemets (peut contenir des espaces)
+    .replace(/(?:[A-Za-z]:)?(?:[\\/][^\\/\s"'»]+)+[\\/]?/g, ' ');                        // chemin sans espaces
   const isQuestion = /\?\s*$/.test(head.split('\n')[0]);
 
   // ── mémoire : « retiens que… », « souviens-toi que… », « n'oublie pas que… »
@@ -101,7 +104,10 @@ export function detectIntent(raw) {
 
   // ── équipe d'agents : « fais ce site avec plusieurs agents », « utilise 3 agents en parallèle »
   if (!NO_TEAM.test(head) && !isQuestion && TEAM_PATTERNS.some(r => r.test(head))) {
-    const task = text.replace(CLAUSE, ' ').replace(/\s{2,}/g, ' ').replace(/\s+([,.;!])/g, '$1').replace(/^[\s,;.]+|[\s,;]+$/g, '').trim();
+    const kept = [];                                                    // chemins mis de côté : « multi agent » dans un nom de dossier n'est pas retiré
+    const shield = text.replace(/["«]\s*(?:[A-Za-z]:[\\/]|\\\\|~?\/)[^"»\n]*["»]|(?:[A-Za-z]:)?(?:[\\/][^\\/\s"'»]+)+[\\/]?/g, m => `\u0000${kept.push(m) - 1}\u0000`);
+    const task = shield.replace(CLAUSE, ' ').replace(/\s{2,}/g, ' ').replace(/\s+([,.;!])/g, '$1').replace(/^[\s,;.]+|[\s,;]+$/g, '').trim()
+      .replace(/\u0000(\d+)\u0000/g, (_, i) => kept[Number(i)]);
     if (task.length >= 6) {
       const n = agentCount(head);
       const mode = PARALLEL.test(head) ? 'pool' : SEQUENTIAL.test(head) ? 'same' : null;

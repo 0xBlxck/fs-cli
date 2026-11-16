@@ -41,6 +41,7 @@ process.on('exit', () => { if (TTY) process.stdout.write('\x1b[?25h'); });
 // Avec l'interface plein écran (sink), le texte et le spinner passent par la zone d'affichage : le spinner reste visible pendant le flux.
 let sink = null;
 export function attachSink(s) { sink = s; }
+export const currentSink = () => sink;                               // /team en parallèle : l'affichage normal est mis de côté pendant que les agents travaillent
 /** Événement structuré pour le panneau VS Code (équipe d'agents…) : sans effet dans le terminal. */
 export function emit(type, data = {}) { if (sink?.event) try { sink.event(type, data); } catch {} }
 export const hasEvents = () => !!sink?.event;
