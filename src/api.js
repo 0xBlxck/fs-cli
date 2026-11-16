@@ -272,6 +272,13 @@ export async function lastMessageImages(chatId) {
   const m = [...(d?.chatMessages || [])].reverse().find(x => x.role === 'assistant');
   return imagesOf(m?.parts);
 }
+/** contenu d'un fichier de l'API France Student (chemin /chats/…), en mémoire */
+export async function fetchApiFile(apiPath) {
+  if (!/^\/[\w\-./]+$/.test(apiPath)) throw new Error('adresse de fichier inattendue');
+  const r = await fetch(`https://${HOST}${apiPath}`, { headers: { Authorization: baseHeaders().Authorization } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return Buffer.from(await r.arrayBuffer());
+}
 /** télécharge un fichier de l'API France Student (chemin /chats/…) vers dest ; renvoie la taille */
 export async function downloadApiFile(apiPath, dest) {
   if (!/^\/[\w\-./]+$/.test(apiPath)) throw new Error('adresse de fichier inattendue');

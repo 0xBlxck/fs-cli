@@ -895,8 +895,16 @@
       case 'image': {
         aiEnd(); thinkEnd();
         const el = h('div', 'tl ok genimg');
-        if (ev.data && /^image\/(png|jpeg|webp|gif)$/.test(ev.mime)) { const im = h('img'); im.src = `data:${ev.mime};base64,${ev.data}`; im.alt = ev.prompt || 'image générée'; im.title = ev.prompt || ''; im.onclick = () => post({ type: 'openFile', path: ev.path }); el.append(im); }
-        const cap = h('a', 'gcap', '🖼 ' + ev.path); cap.title = 'Ouvrir'; cap.onclick = () => post({ type: 'openFile', path: ev.path }); el.append(cap);
+        if (ev.data && /^image\/(png|jpeg|webp|gif)$/.test(ev.mime)) {
+          const src = `data:${ev.mime};base64,${ev.data}`;
+          const im = h('img'); im.src = src; im.alt = ev.prompt || 'image générée'; im.title = 'Agrandir';
+          im.onclick = () => { const bg = h('div', 'modal-bg lightbox'); const big = h('img'); big.src = src; bg.append(big); bg.onclick = () => bg.remove(); document.body.append(bg); };
+          const bar = h('div', 'gbar');
+          const save = h('button', 'btn sec', 'Enregistrer…'); save.onclick = () => post({ type: 'saveImage', data: ev.data, name: ev.name || 'image.png' });
+          bar.append(save);
+          if (ev.prompt) bar.append(h('span', 'gcap', ev.prompt.slice(0, 160)));
+          el.append(im, bar);
+        }
         add(el); break;
       }
       case 'skills': skShow(ev); break;

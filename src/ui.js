@@ -417,11 +417,10 @@ export function toolBody(text, { max = 8, error = false } = {}) {
 }
 
 /** image générée : affichée dans le panneau, chemin cliquable dans le terminal */
-export function image(file, prompt = '') {
-  if (sink?.event) {
-    let data = '';
-    try { const b = fs.readFileSync(file); if (b.length < 12_000_000) data = b.toString('base64'); } catch {}
-    sink.event('image', { path: file, data, mime: /\.jpe?g$/i.test(file) ? 'image/jpeg' : /\.webp$/i.test(file) ? 'image/webp' : 'image/png', prompt: sanitize(prompt).slice(0, 400) });
+export const showsImages = () => !!sink?.event;                     // le panneau sait afficher une image, pas le terminal
+export function image({ data = null, file = '', mime = 'image/png', prompt = '', name = 'image.png' } = {}) {
+  if (sink?.event && data && data.length < 12_000_000) {
+    sink.event('image', { data: data.toString('base64'), mime: /^image\/(png|jpeg|webp|gif)$/.test(mime) ? mime : 'image/png', prompt: sanitize(prompt).slice(0, 400), name: String(name).replace(/[^\w.-]/g, '_') });
     return;
   }
   println(`  ${c.green('🖼')} image enregistrée : ${c.accent(file)}`);

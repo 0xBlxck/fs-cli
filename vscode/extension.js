@@ -164,6 +164,14 @@ class Chat {
         return;
       }
       case 'copy': return vscode.env.clipboard.writeText(String(m.text || ''));
+      case 'saveImage': {                                              // image générée : enregistrée seulement si l'utilisateur le veut, où il veut
+        const name = String(m.name || 'image.png').replace(/[^\w.-]/g, '_');
+        const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(path.join(this.cwd || workspaceDir(), name)), filters: { Images: ['png', 'jpg', 'jpeg', 'webp'] }, saveLabel: 'Enregistrer l\'image' });
+        if (!target) return;
+        fs.writeFileSync(target.fsPath, Buffer.from(String(m.data || ''), 'base64'));
+        this.post({ type: 'event', ev: { type: 'flash', text: '✓ image enregistrée : ' + path.basename(target.fsPath) } });
+        return;
+      }
       case 'pickFiles': {
         const r = await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Joindre', defaultUri: vscode.Uri.file(workspaceDir()) });
         if (r && r.length) this.post({ type: 'insert', text: r.map(u => '@' + (u.fsPath.includes(' ') ? `"${u.fsPath}"` : u.fsPath)).join(' ') + ' ' });

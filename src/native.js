@@ -4,7 +4,7 @@
 // Documentation FS : « Outils client (mode avancé) », flag 2026_11_client_tools.
 import fs from 'node:fs';
 import path from 'node:path';
-import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, downloadApiFile } from './api.js';
+import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile } from './api.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent } from './account.js';
@@ -97,12 +97,19 @@ export async function runNative(S, userText, { signal, ask, stream = streamChat,
     if (res.sawImage && S.chatId) {                                     // image générée par France Student : enregistrée sur le PC et montrée
       const imgs = res.images?.length ? res.images : await lastMessageImages(S.chatId).catch(() => []);
       for (const im of imgs) {
-        const file = path.join(HOME_DIR, 'images', `${new Date().toISOString().slice(0, 10)}-${String(im.id || Date.now()).slice(0, 8)}.${im.ext}`);
+        const name = `image-${new Date().toISOString().slice(0, 10)}-${String(im.id || Date.now()).slice(0, 8)}.${im.ext}`;
         try {
-          if (!fs.existsSync(file)) await downloadApiFile(im.url, file);
-          ui.image(file, im.prompt);
-          S.notes.push(`Image générée et enregistrée sur le PC de l'utilisateur : ${file}. Pour l'utiliser dans le projet, copie-la dans le dossier voulu avec run_command.`);
-        } catch (e) { ui.println(c.yellow(`  image générée, mais téléchargement impossible : ${e.message}`)); }
+          const data = await fetchApiFile(im.url);                          // en mémoire : affichée directement
+          if (ui.showsImages()) {                                            // panneau : affichée, « Enregistrer… » pour la garder
+            ui.image({ data, mime: im.contentType, prompt: im.prompt, name });
+            S.notes.push(`Une image générée a été affichée à l'utilisateur (${name}) ; il peut l'enregistrer d'un clic. Si elle doit servir dans le projet, demande-lui de l'enregistrer dans le dossier voulu.`);
+          } else {                                                           // terminal : il ne peut pas afficher d'image → fichier
+            const file = path.join(HOME_DIR, 'images', name);
+            fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data);
+            ui.image({ file, prompt: im.prompt, name });
+            S.notes.push(`Image générée enregistrée sur le PC de l'utilisateur : ${file}. Pour l'utiliser dans le projet, copie-la dans le dossier voulu avec run_command.`);
+          }
+        } catch (e) { ui.println(c.yellow(`  image générée, mais récupération impossible : ${e.message}`)); }
       }
     }
     const calls = res.toolCalls || [];
