@@ -43,7 +43,8 @@
   btnUse.onclick = () => post({ type: 'command', text: '/usage' });     // même pendant une réponse : s'ouvre dans une fenêtre
   const btnAgents = h('button', 'icon-btn'); btnAgents.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="6" width="4" height="4" rx="1"/><rect x="10.5" y="1.5" width="4" height="3.5" rx="1"/><rect x="10.5" y="6.25" width="4" height="3.5" rx="1"/><rect x="10.5" y="11" width="4" height="3.5" rx="1"/><path d="M5.5 8h2.5M8 3.25v9.5M8 3.25h2.5M8 8h2.5M8 12.75h2.5"/></svg>'; btnAgents.title = 'Agents de l\'équipe';
   btnAgents.hidden = true; btnAgents.onclick = () => agOpen(null);
-  head.append(title, btnAgents, btnUse, btnMcp, btnHist, btnNew);
+  const btnUpd = h('button', 'upd'); btnUpd.hidden = true; btnUpd.onclick = () => post({ type: 'command', text: '/update' });
+  head.append(title, btnUpd, btnAgents, btnUse, btnMcp, btnHist, btnNew);
   const log = h('div', 'log');
   const tasksEl = h('div', 'tasks'); tasksEl.hidden = true;
   const composer = h('div', 'composer');
@@ -55,7 +56,7 @@
   const ta = h('textarea'); ta.rows = 1; ta.placeholder = 'Demande quelque chose à FS-CLI…  (/ pour les commandes)';
   const tools = h('div', 'tools');
   const bPlus = h('button', 'icon-btn'); bPlus.innerHTML = ICON.plus; bPlus.title = 'Joindre des fichiers ou images';
-  const bSlash = h('button', 'icon-btn'); bSlash.innerHTML = ICON.slash; bSlash.title = 'Commandes';
+  const bSlash = h('button', 'icon-btn'); bSlash.innerHTML = ICON.slash; bSlash.title = 'Actions et réglages';
   const bModel = h('button', 'pill model', '…'); bModel.title = 'Modèle';
   const bMode = h('button', 'pill', MODE_UI.auto); bMode.title = 'Mode (Maj+Tab)';
   const bSend = h('button', 'send'); bSend.innerHTML = ICON.send; bSend.title = 'Envoyer (Entrée)';
@@ -550,6 +551,7 @@
     }
     closeMenu();
     const el = h('div', 'msg-user' + (S.busy ? ' queued' : ''), text);
+    el.dataset.text = text;
     if (S.ctxOn && S.ctx && !/^\s*[/!]/.test(text)) el.append(h('div', 'ctx', '⧉ ' + chipText(S.ctx)));
     aiEnd(); endExplore(); S.tool = null;
     stick = true;
@@ -596,8 +598,8 @@
 
   bSend.onclick = () => (S.busy && !ta.value.trim() ? post({ type: 'interrupt' }) : send());
   bPlus.onclick = () => post({ type: 'pickFiles' });
-  bSlash.onclick = skOpen;
-  bSlash.title = 'Commandes & skills';
+  bSlash.onclick = e => { e.stopPropagation(); palOpen(); };
+  bSlash.title = 'Actions et réglages';
   bModel.onclick = modelMenu;
   bMode.onclick = modeMenu;
   btnNew.onclick = () => { if (!S.busy) post({ type: 'send', text: '/new' }); };
@@ -845,6 +847,114 @@
     }
   }
   document.addEventListener('keydown', e => { if (HIST.el && e.key === 'Escape') { e.preventDefault(); histClose(); } });
+
+  // ── bouton « Revenir ici » au survol d'un message (comme Claude Code) : fichiers d'avant ce message, puis le message revient dans la saisie ──
+  function markMsg(ev) {
+    const want = String(ev.text || '').slice(0, 40);
+    const el = [...log.querySelectorAll('.msg-user')].find(m => !m.dataset.mark && m.dataset.text != null && m.dataset.text.replace(/\s+/g, ' ').trim().startsWith(want));
+    if (!el) return;
+    el.dataset.mark = ev.id;
+    const b = h('button', 'rw', '↺'); b.title = 'Revenir à ce point : les fichiers reprennent leur état d\'avant ce message';
+    b.onclick = e => { e.stopPropagation(); if (S.busy) return showFlash('attends la fin de la réponse'); post({ type: 'command', text: `/rewind @${ev.id}` }); };
+    el.append(b);
+  }
+
+  // ── palette d'actions et de réglages (bouton « / ») ──
+  const PAL = { el: null, list: null, filter: null, st: null };
+  const short = p => String(p || '').split(/[\\/]/).filter(Boolean).slice(-2).join('/') || '';
+  const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  const EFFORT_FR = { none: 'aucun', minimal: 'minimal', low: 'faible', medium: 'moyen', high: 'élevé', xhigh: 'très élevé' };
+  function palItems(st) {
+    const cmd = t => post({ type: 'command', text: t });
+    const fill = t => { ta.value = t; autosize(); ta.focus(); };
+    return [
+      { sec: 'Conversation' },
+      { label: 'Revenir en arrière…', desc: 'fichiers d\'avant une demande', act: () => cmd('/rewind') },
+      { label: 'Exporter la conversation', desc: 'Markdown', act: () => cmd('/export') },
+      { label: 'Renommer la conversation…', act: () => fill('/rename ') },
+      { label: 'Résumer pour libérer du contexte', act: () => cmd('/compact') },
+      { label: 'Conversations précédentes', act: () => histOpen() },
+      { label: 'Nouvelle conversation', act: () => cmd('/new') },
+      { sec: 'Modèle' },
+      { label: 'Changer de modèle…', desc: st?.model || S.status.model || '', act: () => modelMenu() },
+      { label: 'Effort de réflexion (GPT)', kind: 'effort' },
+      { label: 'Recherche web', kind: 'toggle', key: 'webSearch' },
+      { label: 'Autre modèle si le modèle refuse', kind: 'toggle', key: 'refusalRecover' },
+      { label: 'Afficher la réflexion du modèle', kind: 'toggle', key: 'showThinking' },
+      { label: 'Compte & consommation…', act: () => cmd('/usage') },
+      { sec: 'Travail' },
+      { label: 'Mode…', desc: MODE_UI[st?.mode || S.status.mode] || '', act: () => modeMenu() },
+      { label: 'Projet France Student…', desc: st?.project || S.status.project || 'aucun', act: () => { HIST.tab = 'proj'; HIST.proj = undefined; histOpen(); } },
+      { label: 'Dossier de travail…', desc: short(st?.cwd || S.status.cwd), act: () => post({ type: 'pickFolder', purpose: 'cwd' }) },
+      { label: 'Écrire les fichiers ailleurs…', desc: st?.target ? short(st.target) : 'même hors du workspace', act: () => post({ type: 'pickFolder', purpose: 'target' }) },
+      { label: 'Résumé automatique', kind: 'toggle', key: 'autoCompact' },
+      { sec: 'Outils' },
+      { label: 'Serveurs MCP…', act: () => cmd('/mcp') },
+      { label: 'Commandes & skills…', act: () => skOpen() },
+      { label: 'Équipe d\'agents…', desc: '/team', act: () => fill('/team ') },
+      { label: 'Le MCP demande où écrire', kind: 'toggle', key: 'mcpAskWhere' },
+      { sec: 'FS-CLI' },
+      { label: 'Mettre à jour FS-CLI…', desc: S.update ? `v${S.update.latest} disponible` : (st?.version ? 'v' + st.version : ''), act: () => cmd('/update') },
+      { label: 'Diagnostic de l\'installation', desc: '/doctor', act: () => cmd('/doctor') },
+      { label: 'Bip en fin de tâche', kind: 'toggle', key: 'sound' },
+    ];
+  }
+  function palClose() { if (PAL.el) { PAL.el.remove(); PAL.el = null; document.removeEventListener('mousedown', palOutside, true); } }
+  function palOutside(e) { if (PAL.el && !PAL.el.contains(e.target) && !bSlash.contains(e.target)) palClose(); }
+  function palOpen() {
+    if (PAL.el) return palClose();
+    closeMenu(); if (HIST.el) histClose();
+    post({ type: 'settingsOpen' });
+    const pop = h('div', 'pop pal');
+    const f = h('input', 'pf'); f.placeholder = 'Filtrer les actions…'; f.oninput = palRender;
+    f.onkeydown = e => {
+      if (e.key === 'Escape') { e.preventDefault(); palClose(); ta.focus(); }
+      if (e.key === 'Enter') { e.preventDefault(); PAL.list.querySelector('.prow')?.click(); }
+    };
+    const list = h('div', 'plist');
+    pop.append(f, list);
+    app.append(pop);
+    const r = app.getBoundingClientRect(), cr = composer.getBoundingClientRect();
+    pop.style.top = 'auto'; pop.style.bottom = Math.max(8, r.bottom - cr.top + 6) + 'px'; pop.style.left = '10px'; pop.style.right = '10px'; pop.style.width = 'auto';
+    PAL.el = pop; PAL.list = list; PAL.filter = f; f.focus();
+    document.addEventListener('mousedown', palOutside, true);
+    palRender();
+  }
+  function palRender() {
+    if (!PAL.el) return;
+    const st = PAL.st, q = PAL.filter.value.trim().toLowerCase();
+    const list = PAL.list; list.textContent = '';
+    let sec = null;
+    for (const it of palItems(st)) {
+      if (it.sec) { sec = it.sec; continue; }
+      if (q && !(it.label + ' ' + (it.desc || '') + ' ' + sec).toLowerCase().includes(q)) continue;
+      if (sec) { list.append(h('div', 'psec', sec)); sec = null; }
+      const row = h('div', 'prow');
+      row.append(h('span', 'pt', it.label));
+      if (it.kind === 'toggle') {
+        const on = !!st?.toggles?.[it.key];
+        const sw = h('span', 'sw' + (on ? ' on' : '') + (st ? '' : ' wait'));
+        row.append(sw);
+        row.onclick = () => { if (!st) return; st.toggles[it.key] = !on; post({ type: 'setting', key: it.key, value: !on }); palRender(); };
+      } else if (it.kind === 'effort') {
+        const cur = st?.effort;
+        row.append(h('span', 'pa', cur ? EFFORT_FR[cur] || cur : (st ? 'inconnu' : '…')));
+        const seg = h('span', 'seg');
+        EFFORTS.forEach((v, i) => {
+          const b = h('button', EFFORTS.indexOf(cur) >= i ? 'on' : ''); b.title = `${EFFORT_FR[v]} (${v})`;
+          b.onclick = e => { e.stopPropagation(); if (!st) return; st.effort = v; post({ type: 'setting', key: 'effort', value: v }); palRender(); };
+          seg.append(b);
+        });
+        row.append(seg);
+        row.title = 'Réglage de ton compte France Student (s\'applique aussi sur le site). Seuls les modèles GPT l\'utilisent.';
+      } else {
+        if (it.desc) row.append(h('span', 'pa', it.desc));
+        row.onclick = () => { palClose(); it.act(); };
+      }
+      list.append(row);
+    }
+    if (!list.children.length) list.append(h('div', 'pnote', 'Aucune action ne correspond.'));
+  }
 
   /** conversation reprise : on réaffiche ses messages */
   function transcript(ev) {
@@ -1154,6 +1264,14 @@
       case 'teamDone': teamDone(ev); break;
       case 'skills': skShow(ev); break;
       case 'history': if (HIST.el) histShow(ev); break;               // fenêtre fermée entre-temps : on ne la rouvre pas
+      case 'settings': PAL.st = ev; if (PAL.el) palRender(); break;
+      case 'updateAvailable': S.update = ev; btnUpd.hidden = false; btnUpd.textContent = `⬆ v${ev.latest}`; btnUpd.title = `Nouvelle version de FS-CLI (tu as la v${ev.current}) : cliquer pour mettre à jour`; break;
+      case 'turnMark': markMsg(ev); break;
+      case 'restorePrompt': {
+        log.querySelectorAll('.msg-user[data-mark]').forEach(m => { if (Number(m.dataset.mark) >= Number(ev.id || 0)) m.querySelector('.rw')?.remove(); });
+        if (!ta.value.trim()) { ta.value = String(ev.text || ''); autosize(); }
+        ta.focus(); break;
+      }
       case 'transcript': transcript(ev); break;
       case 'mcpStatus': mcpStatus(ev); break;
       case 'mcpLoginUrl': mcpStatus({ name: ev.name, loginUrl: ev.url }); break;

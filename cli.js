@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync, spawnSync, spawn } from 'node:child_process';
 
 import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
@@ -35,6 +35,7 @@ import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_S
 import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
+import { stripEditorContext } from './src/editor-context.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
@@ -472,6 +473,11 @@ const PANEL_FEATURES = new Set(String(process.env.FS_CLI_PANEL_FEATURES || '').s
 /** conversations du compte vues au dernier passage (affichées tout de suite à l'ouverture suivante) */
 let remoteCache = [];
 let lastProjects = [];                                               // projets France Student vus au dernier passage (onglet « Projets » du panneau)
+// déclarées tôt : le panneau peut envoyer des messages pendant le démarrage (await plus bas)
+let markSeq = 0;
+const SETTING_KEYS = { webSearch: 'recherche web', refusalRecover: 'reprise avec un autre modèle en cas de refus', autoCompact: 'résumé automatique', showThinking: 'réflexion du modèle affichée', sound: 'bip de fin', mcpAskWhere: 'le MCP demande où écrire' };
+let effortCache;
+let folderWaiter = null;
 const within = (p, ms, dflt) => Promise.race([Promise.resolve(p).catch(() => dflt), new Promise(r => setTimeout(() => r(dflt), ms).unref?.())]);
 
 /** titre d'une conversation tel que France Student l'affiche, sans l'étiquette technique « [7f3a] » de FS-CLI */
@@ -579,6 +585,7 @@ async function command(line) {
     case '/help': case '/?': return help();
     case '/clear': input.clearScreen(); return banner();
     case '/status': return status();
+    case '/update': case '/maj': return runUpdate();
     case '/rename': {                                                  // renomme la conversation sur France Student (visible sur le site et ici)
       const t = arg.trim().slice(0, 120);
       if (!S.chatId) return println(c.dim('  pas encore de conversation à renommer : envoie d\'abord un message'));
@@ -736,6 +743,7 @@ async function command(line) {
       return println(bad ? c.dim(`\n  ${bad} point${bad > 1 ? 's' : ''} à regarder\n`) : c.green('\n  tout est en ordre\n'));
     }
     case '/rewind': {                                                 // revenir à l'état d'avant une demande : tous ses fichiers d'un coup
+      if (/^@\d+$/.test(arg)) return rewindToMark(parseInt(arg.slice(1), 10));
       const marks = (S.turnMarks || []).map((m, i) => ({ ...m, i, changes: S.undo.length - m.at })).filter(m => m.changes > 0).reverse();
       if (!marks.length) return println(c.dim('  rien à annuler : aucune modification de fichier depuis le début de la session'));
       const label = m => `avant « ${m.text}${m.text.length >= 70 ? '…' : ''} » · ${m.changes} modif${m.changes > 1 ? 's' : ''} annulée${m.changes > 1 ? 's' : ''} · ${new Date(m.t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
@@ -921,7 +929,12 @@ async function chatTurn(text, { keepLast = false } = {}) {
   try {
     ui.tasks.clear();                                                  // nouvelle demande : le panneau de tâches repart de zéro
     ui.resetThinking();
-    if (!keepLast) { S.turnMarks ||= []; S.turnMarks.push({ at: S.undo.length, text: text.replace(/\s+/g, ' ').trim().slice(0, 70), t: Date.now() }); if (S.turnMarks.length > 50) S.turnMarks.shift(); }   // repère pour /rewind
+    if (!keepLast) {                                                   // repère pour /rewind (et le bouton « Revenir ici » du panneau)
+      const own = stripEditorContext(text);
+      const mark = { id: ++markSeq, at: S.undo.length, text: own.replace(/\s+/g, ' ').trim().slice(0, 70), full: own.slice(0, 20000), t: Date.now() };
+      S.turnMarks ||= []; S.turnMarks.push(mark); if (S.turnMarks.length > 50) S.turnMarks.shift();
+      if (opts.stdio) stdioSend('turnMark', { id: mark.id, text: mark.text });
+    }
     await maybeAutoCompact(S, turnAbort.signal);                       // contexte plein → résumé + nouvelle conversation
     const ex = extractImagePaths(text, S.images.length);               // image glissée-déposée (chemin collé) → [Image #n]
     if (ex.paths.length) { text = ex.text; for (const p of ex.paths) if (!S.images.includes(p)) S.images.push(p); }
@@ -1199,6 +1212,21 @@ if (opts.stdio) {                                                    // commande
     if (purpose === 'cwd') return changeCwd(path.resolve(p));
     if (purpose === 'target') { S.targetDir = path.resolve(p); refreshPrompt(); return println(c.dim('  → les fichiers seront écrits dans : ' + S.targetDir)); }
   });
+  input.on('settingsOpen', () => { sendSettings(false); sendSettings(true).catch(() => {}); });
+  input.on('setting', async (key, value) => {
+    if (key === 'effort') {
+      const LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+      if (!LEVELS.includes(value)) return;
+      const r = await requestJson('PATCH', '/user/instructions', { gptReasoning: value }).catch(() => ({ status: 0 }));
+      if (r.status >= 200 && r.status < 300) { effortCache = value; stdioSend('flash', { text: `effort de réflexion des GPT : ${value} (réglage du compte)` }); }
+      else stdioSend('flash', { text: 'France Student a refusé le réglage' });
+      return sendSettings();
+    }
+    if (!(key in SETTING_KEYS)) return;
+    cfg[key] = value === true || value === 'true'; saveCfg();
+    stdioSend('flash', { text: `${SETTING_KEYS[key]} : ${cfg[key] ? 'activé' : 'désactivé'}` });
+    sendSettings();
+  });
   input.on('projectUse', async id => {                              // onglet « Projets » : les nouvelles conversations vont dans ce projet (ou hors projet)
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de projet' });
     const p = lastProjects.find(x => x.id === id);
@@ -1271,6 +1299,89 @@ function installVscode({ editors = null, all = false, log }) {
 }
 
 /** Première ouverture d'un dossier : on demande la confiance avant que le modèle puisse y agir. */
+/** bouton « Revenir ici » du panneau : fichiers remis dans l'état d'avant ce message, puis le message revient dans la saisie */
+async function rewindToMark(id) {
+  const idx = (S.turnMarks || []).findIndex(m => m.id === id);
+  if (idx < 0) return println(c.dim('  ce message est trop ancien : utilise /rewind pour choisir un point de retour'));
+  const mark = S.turnMarks[idx], changes = S.undo.length - mark.at;
+  const detail = (changes > 0
+    ? `${changes} modification${changes > 1 ? 's' : ''} de fichiers faite${changes > 1 ? 's' : ''} depuis ce message sera annulée${changes > 1 ? 's' : ''} : les fichiers reprennent leur contenu d'avant, ceux créés partent dans la corbeille de FS-CLI. Les effets des commandes (npm install…) ne sont pas annulés.`
+    : 'Aucun fichier n\'a été modifié depuis ce message.') +
+    '\nLa conversation sur France Student n\'est pas effacée : le modèle est prévenu du retour en arrière. Ton message revient dans la zone de saisie pour que tu puisses le modifier.';
+  let ok = true;
+  if (input.select && interactive) ok = (await input.select({ title: `Revenir à ce point (avant « ${mark.text}${mark.text.length >= 70 ? '…' : ''} ») ?`, detail, options: ['Revenir à ce point', 'Annuler'], defaultIndex: 0 })) === 0;
+  if (!ok) return println(c.dim('  rien n\'a été annulé'));
+  const done = [];
+  while (S.undo.length > mark.at) { const r = undoLast({ undo: S.undo }, FILES.trash); if (!r) break; done.push(r); }
+  S.turnMarks = S.turnMarks.slice(0, idx);
+  S.notes.push(`L'utilisateur est revenu en arrière jusqu'avant sa demande « ${mark.text} » : ${done.length ? 'les fichiers modifiés depuis sont revenus à leur état d\'avant, relis-les avant de les modifier' : 'aucun fichier n\'avait été modifié'}. Ce qui a été dit depuis ne compte plus.`);
+  println(c.green(`  ✓ retour avant « ${mark.text} »`) + c.dim(done.length ? ` : ${done.length} modification${done.length > 1 ? 's' : ''} annulée${done.length > 1 ? 's' : ''}` : ''));
+  for (const d of done.slice(0, 12)) println(c.dim('    ' + d));
+  if (opts.stdio) stdioSend('restorePrompt', { text: mark.full || mark.text, id: mark.id });
+}
+
+/** /update : met à jour FS-CLI (npm) puis le panneau des éditeurs, après un avertissement clair */
+function runStep(cmd, args, label) {
+  return new Promise(res => {
+    let tail = '';
+    const p = spawn(cmd, args, { shell: process.platform === 'win32', env: process.env, windowsHide: true });
+    const take = d => { tail = (tail + d).slice(-4000); };
+    p.stdout.on('data', take); p.stderr.on('data', take);
+    const timer = setTimeout(() => { try { p.kill(); } catch {} }, 5 * 60_000);
+    p.on('error', e => { clearTimeout(timer); res({ ok: false, tail: e.message }); });
+    p.on('close', code => { clearTimeout(timer); res({ ok: code === 0, tail: tail.replace(/\x1b\[[0-9;]*m/g, '') }); });
+    ui.spinner.start(label);
+  }).finally(() => ui.spinner.stop());
+}
+async function runUpdate() {
+  if (fs.existsSync(path.join(ROOT, '.git'))) return println(c.yellow('  FS-CLI tourne depuis un dossier de développement (git) : mets-le à jour avec git pull, pas avec /update.'));
+  ui.spinner.start('recherche de la dernière version…');
+  const u = await checkUpdate({ force: true }).catch(() => ({}));
+  ui.spinner.stop();
+  if (!u?.latest) return println(c.red('  impossible de joindre GitHub pour vérifier la version : réessaie plus tard ou lance ') + c.accent(INSTALL_CMD));
+  const title = u.newer ? `Mettre à jour FS-CLI : v${u.current} → v${u.latest} ?` : `Tu as déjà la dernière version (v${u.current}). Réinstaller quand même ?`;
+  const detail = [
+    'FS-CLI va lancer sur ton PC :',
+    `  1. ${INSTALL_CMD}`,
+    '  2. l\'installation du panneau dans tes éditeurs (VS Code, Cursor, Antigravity IDE…)',
+    'Ça prend 30 s à 1 min, avec Internet. Une réponse en cours serait interrompue.',
+    'Gardés : tes conversations, tes réglages, tes dossiers approuvés et ta connexion à France Student.',
+    'Ensuite il faut recharger la fenêtre de l\'éditeur (ou relancer fs-cli dans le terminal).',
+    'FS-CLI est un projet communautaire non officiel de France Student. Nouveautés : https://github.com/0xBlxck/fs-cli/releases',
+  ].join('\n');
+  if (!(input.select && interactive)) { println(c.yellow('  ' + title)); println(c.dim('    ' + detail.replace(/\n/g, '\n    '))); println(c.dim('  en mode non interactif, lance : ') + c.accent(INSTALL_CMD)); return; }
+  const go = await input.select({ title, detail, options: [u.newer ? 'Mettre à jour maintenant' : 'Réinstaller maintenant', 'Annuler'], defaultIndex: u.newer ? 0 : 1 });
+  if (go !== 0) return println(c.dim('  mise à jour annulée'));
+  const url = INSTALL_CMD.split(' ').pop();
+  const r1 = await runStep(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', url], 'mise à jour de FS-CLI…');
+  if (!r1.ok) {
+    println(c.red('  ✗ la mise à jour a échoué :'));
+    for (const l of r1.tail.trim().split('\n').slice(-6)) println(c.dim('    ' + l));
+    if (/EACCES|permission/i.test(r1.tail)) println(c.yellow('    droits insuffisants : sur Linux/Mac, lance la commande avec sudo'));
+    return println(c.dim('  à la main : ') + c.accent(INSTALL_CMD));
+  }
+  let ver = u.latest;
+  try { ver = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch {}
+  println(c.green(`  ✓ FS-CLI v${ver} installé`));
+  const r2 = await runStep(process.execPath, [path.join(ROOT, 'cli.js'), '--vscode'], 'mise à jour du panneau dans tes éditeurs…');
+  for (const l of r2.tail.trim().split('\n').filter(l => /✓|✗|installée|introuvable|échou/i.test(l)).slice(0, 6)) println('  ' + l.trim());
+  if (!opts.stdio) return println(c.dim('  → relance fs-cli pour utiliser la nouvelle version'));
+  const again = await input.select({ title: 'Recharger la fenêtre de l\'éditeur maintenant ?', detail: 'Le panneau redémarre avec la nouvelle version. Tes conversations sont gardées (horloge en haut à droite).', options: ['Recharger maintenant', 'Plus tard'], defaultIndex: 0 });
+  if (again === 0) stdioSend('reloadWindow');
+  else println(c.dim('  → recharge plus tard : Ctrl+Maj+P › « Reload Window »'));
+}
+
+/** palette d'actions du panneau (comme celle de Claude Code) : état des réglages, modifiables d'un clic */
+async function sendSettings(fetchEffort = false) {
+  if (fetchEffort) effortCache = (await requestJson('GET', '/user/instructions').catch(() => ({}))).data?.gptReasoning ?? effortCache;
+  stdioSend('settings', {
+    version: VERSION, effort: effortCache ?? null,
+    toggles: Object.fromEntries(Object.keys(SETTING_KEYS).map(k => [k, k === 'refusalRecover' || k === 'mcpAskWhere' ? cfg[k] !== false : !!cfg[k]])),
+    model: modelName(), mode: cfg.mode, project: cfg.fsProject?.name || '', cwd: S.cwd, target: S.targetDir || '', chat: !!S.chatId,
+    rewindable: (S.turnMarks || []).some(m => S.undo.length > m.at),
+  });
+}
+
 /** dossier de travail changé (commande /cd ou sélecteur du panneau) ; la confiance peut mener à un autre dossier */
 async function changeCwd(dir) {
   const ok = await ensureFolderTrust(dir);
@@ -1280,7 +1391,6 @@ async function changeCwd(dir) {
 }
 
 /** demande un dossier : sélecteur de l'éditeur (panneau), sinon chemin tapé */
-let folderWaiter = null;
 async function pickFolder(title) {
   if (opts.stdio && panelAtLeast('0.10.3')) {
     return new Promise(res => { folderWaiter = res; stdioSend('pickFolder', { purpose: 'trust', title }); });
@@ -1371,8 +1481,10 @@ if (interactive && input.select && !cfg.fsProjectChosen) {
 // nouvelle version disponible ? (en arrière-plan, au plus une fois toutes les 12 h, n'empêche jamais de démarrer)
 checkUpdate().then(u => {
   if (!u.newer) return;
+  if (opts.stdio) stdioSend('updateAvailable', { latest: u.latest, current: u.current });
   println(c.yellow(`  ⬆ FS-CLI v${u.latest} est disponible (tu as la v${u.current}). Pour mettre à jour :`));
   println(`    ${c.accent(INSTALL_CMD)}`);
+  println(c.dim('    ou tape ') + c.accent('/update') + c.dim(' : FS-CLI le fait pour toi (panneau compris)'));
   if (!busy) input.prompt();
 }).catch(() => {});
 if (initial) await runInput(initial); else input.prompt();

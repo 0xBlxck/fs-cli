@@ -330,3 +330,11 @@ test('conversation bloquée par France Student (élément de l\'historique refus
   const cli = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'cli.js'), 'utf8');
   assert.match(cli, /isBrokenHistory\(e\) && S\.chatId && !S\.recovering/, 'une seule reprise automatique (pas de boucle)');
 });
+
+test('contexte de l\'éditeur retiré du message (repère « Revenir ici », message remis dans la saisie)', async () => {
+  const { stripEditorContext } = await import('../src/editor-context.js');
+  assert.equal(stripEditorContext('[Contexte VS Code : fichier ouvert dans l\'éditeur : src/app.js]\n\nAjoute un bouton'), 'Ajoute un bouton');
+  assert.equal(stripEditorContext('[Contexte VS Code : dans src/app.js, lignes 3-5 sélectionnées par l\'utilisateur]\n```js\nconst a = 1;\n```\n\nCorrige ça'), 'Corrige ça');
+  assert.equal(stripEditorContext('[Contexte VS Code : dans a.md, lignes 1-2 sélectionnées par l\'utilisateur]\n~~~~md\n```x```\n~~~~\n\nRésume'), 'Résume');
+  assert.equal(stripEditorContext('Message normal'), 'Message normal');
+});

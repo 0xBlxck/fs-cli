@@ -126,6 +126,7 @@ class Chat {
       let ev; try { ev = JSON.parse(line.slice(k + 1)); } catch { continue; }
       if (ev.type === 'diffBefore') { const r = this.pendingDiff.get(ev.id); if (r) { this.pendingDiff.delete(ev.id); r(ev); } continue; }
       if (ev.type === 'pickFolder') { this.pickFolder(String(ev.purpose || 'trust'), ev.title); continue; }   // FS-CLI demande un dossier (confiance)
+      if (ev.type === 'reloadWindow') { vscode.commands.executeCommand('workbench.action.reloadWindow'); continue; }   // après /update
       if (ev.type === 'status') { if (ev.title !== undefined) this.onTitle?.(ev.title); if (ev.cwd) this.cwd = ev.cwd; }
       if (ev.type === 'busy' && !ev.busy) this.closeProposals();          // tour terminé (ou interrompu) : plus aucune proposition en attente
       if (ev.type === 'select' && ev.proposal && typeof ev.proposal.after === 'string') {
@@ -169,6 +170,8 @@ class Chat {
       case 'skillToggle': return this.toCli({ type: 'skillToggle', kind: String(m.kind || ''), name: String(m.name || '') });
       case 'resumeChat': return this.toCli({ type: 'resumeChat', chatId: String(m.chatId || '') });
       case 'projectUse': return this.toCli({ type: 'projectUse', id: String(m.id || '') });
+      case 'settingsOpen': return this.toCli({ type: 'settingsOpen' });
+      case 'setting': return this.toCli({ type: 'setting', key: String(m.key || ''), value: typeof m.value === 'boolean' ? m.value : String(m.value ?? '') });
       case 'pickFolder': return this.pickFolder(m.purpose === 'target' ? 'target' : 'cwd');
       case 'ask': return this.toCli({ type: 'ask', id: m.id, text: String(m.text ?? '') });
       case 'interrupt': return this.toCli({ type: 'interrupt' });
