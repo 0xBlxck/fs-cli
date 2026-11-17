@@ -53,3 +53,12 @@ test('projet France Student : « travaille dans mon projet X »', () => {
   assert.equal(detectIntent('passe sur le projet « Site vitrine »')?.arg, 'Site vitrine');
   assert.equal(detectIntent('crée un projet react avec vite'), null);
 });
+
+test('chemin sans guillemets avec des espaces (« …\test multi agent ») : reconnu jusqu\'au bout grâce au disque, jamais lu comme une demande d\'équipe', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-intent-'));
+  const dir = path.join(base, 'test multi agent'); fs.mkdirSync(dir);
+  assert.equal(detectIntent(`du code dans ce dossier ${dir}`), null);
+  const r = detectIntent(`fais un site dans ${dir} avec 3 agents en parallèle`);
+  assert.equal(r?.cmd, '/team'); assert.ok(r.arg.includes(dir), 'le chemin reste entier dans la consigne : ' + r.arg);
+});

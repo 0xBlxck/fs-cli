@@ -152,3 +152,25 @@ test('limite quotidienne de FS : message clair, pas de nouvel essai', () => {
   assert.match(e.message, /50 nouvelles conversations par jour/); assert.match(e.message, /conversation existante/);
   assert.equal(parseDailyLimit('{"message":"autre erreur"}'), null);
 });
+
+test('une seule part sans fichiers : pas d\'équipe, la demande part normalement', async () => {
+  const { srv, env } = setup();
+  const asked = [];
+  env.chatTurn = async t => { asked.push(t); };
+  await runTeam(env, 'du code dans ce dossier', { mode: 'same' });
+  assert.deepEqual(asked, ['du code dans ce dossier']);
+  assert.equal(srv.st.calls.length, 0);
+});
+
+test('conversation verrouillée par France Student pendant le travail d\'un agent : oubliée, la suite repart dans une neuve', async () => {
+  const { isLockedChat } = await import('../src/api.js');
+  assert.equal(isLockedChat(new Error('Erreur du serveur: This conversation was flagged by the AI provider and has been locked. A warning…')), true);
+  assert.equal(isLockedChat(new Error('Erreur du serveur: 500')), false);
+  cfg.maxParallel = 3;
+  const { S, env } = setup({ slots: { w0: 'verrou-0', w1: 'ok-1', w2: 'ok-2' } });
+  const base = env.stream;
+  env.stream = async o => { if (o.chatId === 'verrou-0') throw new Error('Erreur du serveur: This conversation was flagged by the AI provider and has been locked.'); return base(o); };
+  await runTeam(env, TASK, { mode: 'pool' });
+  assert.equal(S.slots.w0, undefined, 'la conversation verrouillée est oubliée');
+  assert.equal(S.slots.w1, 'ok-1');
+});

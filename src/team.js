@@ -1,14 +1,14 @@
 // /team : le travail est découpé en parts (une par fichier) ; chaque part est une demande normale à l'agent FS-CLI, qui écrit avec les outils
 // officiels de France Student (à la suite dans la conversation courante, ou en parallèle dans des conversations réutilisées).
 import path from 'node:path';
-import { streamChat } from './api.js';
+import { streamChat, isLockedChat } from './api.js';
 import { baseDir } from './agent.js';
 import { summarizeChanges } from './changes.js';
 import { cfg } from './config.js';
 import { contextPercent } from './account.js';
 import { newSid, createdToday, DAILY_LIMIT } from './chats.js';
 import * as ui from './ui.js';
-import { c } from './ui.js';
+import { c, println } from './ui.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -128,6 +128,7 @@ async function runWorker(W, WS, ctx) {
       throw e;
     }
     W.status = 'échec'; W.error = e?.message || String(e); if (e?.code === 'DAILY_CHAT_LIMIT') ctx.limitHit = e;
+    if (isLockedChat(e)) { WS.chatId = null; W.error = 'conversation verrouillée par France Student (signalée par le filtre du fournisseur) : la suite partira dans une nouvelle conversation'; }
   } finally { clearInterval(timer); }
   const durationMs = Date.now() - t0;
   W.secs = durationMs / 1000;
@@ -148,6 +149,10 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
   const stream = env.stream || streamChat, ctxPct = env.contextPercent || contextPercent;
   const runNative = env.runNative || (await import('./native.js')).runNative;
   const { task, plan, mode, note } = buildPlan(rawTask, { n: agents });
+  if (plan.length === 1 && !plan[0].files.length && env.chatTurn) {   // une seule part, sans fichiers à répartir : ce n'est pas une équipe, juste une demande
+    println(c.dim('  une seule tâche, sans fichiers à répartir entre plusieurs agents : traitée comme une demande normale'));
+    return env.chatTurn(task);
+  }
   const teamMode = modeOpt || (cfg.teamMode === 'pool' ? 'pool' : 'same');
   const sameChat = teamMode === 'same';
   const parallel = sameChat ? 1 : Math.min(6, Math.max(1, cfg.maxParallel || 3));
@@ -216,7 +221,7 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
           if (signal.aborted) return;
           W.slot = `w${j}`;
           await runWorker(W, WS, ctx);
-          if (!sameChat && WS.chatId) S.slots[`w${j}`] = WS.chatId;
+          if (!sameChat) { if (WS.chatId) S.slots[`w${j}`] = WS.chatId; else delete S.slots[`w${j}`]; }
         }
       };
       const lanes = [];

@@ -2,6 +2,28 @@
 // le CLI déclenche la bonne fonction (équipe d'agents, comparaison de modèles, mémoire, quota…)
 // sans qu'il ait à connaître les commandes. Fonction pure : aucune action ici, seulement une décision.
 
+import fs from 'node:fs';
+
+/** Chemins du message (entre guillemets, ou non : « C:\…\test multi agent » est prolongé mot par mot tant que le dossier existe sur le disque),
+ *  remplacés par `mark(chemin)` : un nom de dossier n'est jamais lu comme une demande (« multi agent » ≠ équipe d'agents). */
+export function shieldPaths(text, mark) {
+  const s = String(text || '').replace(/["«]\s*(?:[A-Za-z]:[\\/]|\\\\|~?\/)[^"»\n]*["»]/g, m => mark(m));
+  const re = /(?:[A-Za-z]:)?(?:[\\/][^\\/\s"'»]+)+[\\/]?/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(s))) {
+    let best = m[0], acc = m[0];
+    const words = s.slice(m.index + m[0].length).match(/^(?: [^\s"'»]+){1,6}/)?.[0] || '';
+    for (const w of words.match(/ [^ ]+/g) || []) {                    // le plus long chemin qui existe vraiment
+      acc += w;
+      try { if (fs.existsSync(acc)) best = acc; } catch {}
+    }
+    out += s.slice(last, m.index) + mark(best);
+    last = m.index + best.length;
+    re.lastIndex = last;
+  }
+  return out + s.slice(last);
+}
+
 const NUM = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8 };
 const NUM_RE = '(\\d+|un|une|deux|trois|quatre|cinq|six|sept|huit)';
 const AGENT_RE = '(?:sous[- ]?agents?|subagents?|agents?|ia|bots?|workers?)';
@@ -41,9 +63,7 @@ export function detectIntent(raw) {
   const text = String(raw || '').trim();
   if (!text || text.startsWith('/') || text.startsWith('!')) return null;
   // l'intention est dans la demande, pas dans un long collage ni dans un chemin (« C:\…\test multi agent » n'est pas une demande d'équipe)
-  const head = text.slice(0, 600)
-    .replace(/["«]\s*(?:[A-Za-z]:[\\/]|\\\\|~?\/)[^"»\n]*["»]/g, ' ')                     // chemin entre guillemets (peut contenir des espaces)
-    .replace(/(?:[A-Za-z]:)?(?:[\\/][^\\/\s"'»]+)+[\\/]?/g, ' ');                        // chemin sans espaces
+  const head = shieldPaths(text.slice(0, 600), () => ' ');
   const isQuestion = /\?\s*$/.test(head.split('\n')[0]);
 
   // ── mémoire : « retiens que… », « souviens-toi que… », « n'oublie pas que… »
@@ -105,7 +125,7 @@ export function detectIntent(raw) {
   // ── équipe d'agents : « fais ce site avec plusieurs agents », « utilise 3 agents en parallèle »
   if (!NO_TEAM.test(head) && !isQuestion && TEAM_PATTERNS.some(r => r.test(head))) {
     const kept = [];                                                    // chemins mis de côté : « multi agent » dans un nom de dossier n'est pas retiré
-    const shield = text.replace(/["«]\s*(?:[A-Za-z]:[\\/]|\\\\|~?\/)[^"»\n]*["»]|(?:[A-Za-z]:)?(?:[\\/][^\\/\s"'»]+)+[\\/]?/g, m => `\u0000${kept.push(m) - 1}\u0000`);
+    const shield = shieldPaths(text, m => `\u0000${kept.push(m) - 1}\u0000`);
     const task = shield.replace(CLAUSE, ' ').replace(/\s{2,}/g, ' ').replace(/\s+([,.;!])/g, '$1').replace(/^[\s,;.]+|[\s,;]+$/g, '').trim()
       .replace(/\u0000(\d+)\u0000/g, (_, i) => kept[Number(i)]);
     if (task.length >= 6) {

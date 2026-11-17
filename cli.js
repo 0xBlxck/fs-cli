@@ -39,7 +39,7 @@ import { stripEditorContext } from './src/editor-context.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
-import { fetchChat, isBrokenHistory } from './src/api.js';
+import { fetchChat, isBrokenHistory, isLockedChat } from './src/api.js';
 import { toolsCatalog, loadMcpConfig, saveMcpConfig } from './src/mcp.js';
 import { getMcp, activeServers } from './src/mcp-runtime.js';
 import * as ui from './src/ui.js';
@@ -1041,6 +1041,15 @@ async function chatTurn(text, { keepLast = false } = {}) {
       println(c.yellow('  cette conversation a été supprimée du site : ton message part dans une nouvelle conversation'));
       turnAbort = null;
       return chatTurn(text, { keepLast: true });
+    }
+    if (isLockedChat(e) && S.chatId) {                                 // verrouillée par France Student (signalement du fournisseur) : on n'y renvoie rien
+      ui.spinner.stop();
+      println(c.yellow('\n  ⚠ France Student a verrouillé cette conversation : le filtre de sécurité du fournisseur du modèle l\'a signalée. Elle ne peut plus être utilisée.'));
+      println(c.dim('    Ton prochain message partira dans une nouvelle conversation (rien n\'y est recopié).'));
+      if (isBroadFolder(S.cwd)) println(c.dim('    Conseil : ton dossier de travail est ton dossier personnel ; choisis plutôt le dossier du projet (📁 en bas du panneau, ou /cd) : le modèle y voit moins de fichiers sans rapport.'));
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.pendingSummary = null; S.compactedFrom = null;
+      turnAbort = null;
+      return;
     }
     if (isBrokenHistory(e) && S.chatId && !S.recovering) {            // France Student ne peut plus relire cette conversation : on repart, avec la fin de l'ancienne
       const old = S.chatId;

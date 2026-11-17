@@ -21,6 +21,10 @@ export class ApiError extends Error {
  *  in `search_result` block ». Rien à corriger de notre côté : on ne peut que repartir d'une nouvelle conversation. */
 export const isBrokenHistory = e => /Invalid\s+`?(?:encrypted_content|signature)`?\s+in\s+`?(?:search_result|web_search_tool_result|thinking|redacted_thinking)|messages\.\d+\.content\.\d+:\s*Invalid/i.test(String(e?.message || e || ''));
 
+/** Conversation verrouillée par France Student après un signalement du filtre de sécurité du fournisseur du modèle
+ *  (« This conversation was flagged by the AI provider and has been locked… ») : elle ne peut plus être utilisée. */
+export const isLockedChat = e => /flagged by the AI provider|has been locked|conversation (?:a été |est )?verrouill/i.test(String(e?.message || e || ''));
+
 /** corps d'une réponse 429 « Daily new chat limit… » → erreur claire (sans nouvel essai), sinon null */
 export function parseDailyLimit(body) {
   if (!/Daily new chat limit/i.test(body || '')) return null;
