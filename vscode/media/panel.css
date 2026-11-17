@@ -413,3 +413,11 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 
 /* mode « tout autoriser » : bien visible */
 .pill.mode-bypass { color: var(--vscode-errorForeground, #f14c4c); font-weight: 600; }
+
+/* accueil : « Quoi de neuf » */
+.welcome .news { margin-top: 18px; text-align: left; border-top: 1px solid var(--border); padding-top: 12px; }
+.welcome .news .nh { color: var(--accent, var(--fg)); font-weight: 600; font-size: 12.5px; margin-bottom: 4px; }
+.welcome .news ul { margin: 0; padding-left: 18px; color: var(--fg); font-size: 12.5px; }
+.welcome .news li { margin: 3px 0; }
+.welcome .news .nmore { margin-top: 6px; font-size: 12px; color: var(--dim); cursor: pointer; }
+.welcome .news .nmore:hover { color: var(--fg); }

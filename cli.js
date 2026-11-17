@@ -37,6 +37,7 @@ import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
 import { stripEditorContext } from './src/editor-context.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow } from './src/extra-commands.js';
+import { WHATS_NEW, latestNews } from './src/whatsnew.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
 import { fetchChat, isBrokenHistory, isLockedChat } from './src/api.js';
@@ -274,7 +275,7 @@ function copyToClipboard(text) {
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
   '/continue', '/navigateur ', '/doctor', '/vscode', '/projet ', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
-  '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/quit'];
+  '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/nouveautes', '/conversations', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
   const idx = Math.max(frag.lastIndexOf('/'), frag.lastIndexOf('\\'));
@@ -360,16 +361,41 @@ function banner() {
       if (verNum(bundled) > verNum(PANEL_VER || '0')) setTimeout(() => stdioSend('print', { text: c.yellow(`  ⬆ Nouvelle version du panneau (${bundled}) : tape /vscode puis recharge la fenêtre de l'éditeur`) + '\n' }), 50);
     } catch {}
   }
-  if (opts.stdio) return stdioSend('ready', { version: VERSION, shell: sysEnv.shellName, models: Object.entries(AGENTS).map(([id, name]) => ({ id, name })), modes: MODES.map(m => ({ id: m, name: MODE_NAME[m], desc: MODE_DESC[m] })), commands: SLASH.map(x => x.trim()), cwd: S.cwd, chatId: S.chatId || null, title: S.title || '' });
-  // accueil sobre, comme Claude Code : le détail technique (moteur, shell, web…) est dans /status
-  ui.box([
-    `${c.accent('✻')} Bienvenue dans ${c.bold('FS-CLI')} ! ${c.dim('v' + VERSION)}`,
-    '',
-    c.dim('  /help pour l\'aide · /status pour ta configuration'),
-    '',
-    `  ${c.dim('modèle :')} ${modelName()}${S.chatId ? c.dim(' · conversation reprise') : ''}`,
-    `  ${c.dim('dossier :')} ${ui.shortPath(S.cwd, 48)}`,
-  ], { width: 64 });
+  if (opts.stdio) return stdioSend('ready', { version: VERSION, shell: sysEnv.shellName, models: Object.entries(AGENTS).map(([id, name]) => ({ id, name })), modes: MODES.map(m => ({ id: m, name: MODE_NAME[m], desc: MODE_DESC[m] })), commands: SLASH.map(x => x.trim()), whatsNew: latestNews(3), cwd: S.cwd, chatId: S.chatId || null, title: S.title || '' });
+  // accueil comme Claude Code : bienvenue · modèle · dossier à gauche, « Pour commencer » et « Quoi de neuf » à droite
+  // (le détail technique — moteur, shell, web… — est dans /status)
+  const tips = isBroadFolder(S.cwd)
+    ? ['Dossier très large : travaille plutôt dans un projet (/cd)', '/resume pour reprendre une conversation ou un projet']
+    : ['/resume pour reprendre une conversation ou un projet', '/help pour l\'aide · @fichier pour joindre un fichier'];
+  const news = latestNews(3);
+  if (ui.cols() >= 100) {
+    const left = [
+      { text: '' }, { text: 'Bienvenue dans FS-CLI !', style: c.bold, center: true }, { text: '' },
+      { text: '✻', style: c.accent, center: true }, { text: '' },
+      { text: modelName() + (S.chatId ? ' · conversation reprise' : ''), style: c.dim, center: true },
+      { text: ui.shortPath(S.cwd, 30), style: c.dim, center: true },
+    ];
+    const right = [
+      { text: 'Pour commencer', style: s => c.accent(c.bold(s)) },
+      ...tips.map(t => ({ text: t })),
+      { rule: true },
+      { text: 'Quoi de neuf', style: s => c.accent(c.bold(s)) },
+      ...news.map(n => ({ text: n.text })),
+      { text: '/nouveautes pour tout voir', style: c.dim },
+    ];
+    ui.splitBox(left, right, { title: `FS-CLI v${VERSION}` });
+  } else {
+    ui.box([
+      `${c.accent('✻')} Bienvenue dans ${c.bold('FS-CLI')} ! ${c.dim('v' + VERSION)}`,
+      '',
+      `  ${c.dim('modèle :')} ${modelName()}${S.chatId ? c.dim(' · conversation reprise') : ''}`,
+      `  ${c.dim('dossier :')} ${ui.shortPath(S.cwd, 48)}`,
+      '',
+      c.accent('  Quoi de neuf'),
+      ...news.map(n => c.dim('  · ') + n.text),
+      c.dim('  /nouveautes pour tout voir · /help pour l\'aide'),
+    ], { width: 64 });
+  }
   println();
 }
 
@@ -407,7 +433,7 @@ const HELP_ROWS = [
     ['/export [fichier.md|.html]', 'enregistrer la conversation en Markdown ou en page HTML'],
     ['/btw <question>', 'question à côté, sans encombrer la conversation en cours'],
     ['/webhook [url|off|test]', 'adresse appelée à la fin de chaque demande (CI, notifications…)'],
-    ['/resume [n°]', 'reprendre une session (liste si pas de n°)'], ['/rename <titre>', 'renommer la conversation (aussi sur le site)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
+    ['/resume', 'choisir une conversation ou un projet (toutes · ce dossier · projets), comme l\'horloge du panneau'], ['/rename <titre>', 'renommer la conversation (aussi sur le site)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
     ['/think', 'afficher/masquer le raisonnement'], ['/steps <n>', 'étapes max par demande'], ['/theme <nom>', Object.keys(THEMES).join(' · ')],
     ['/clear', 'effacer l\'écran'], ['/quit', 'quitter'],
     ['!<commande>', 'exécuter une commande shell directement (sans le modèle)'], ['\\ en fin de ligne', 'continuer sur la ligne suivante'],
@@ -429,7 +455,8 @@ const COMMANDS = (() => {
       if (!seen.has(name)) seen.set(name, { name, usage, desc: descs.length === parts.length ? descs[i] : desc });
     });
   }
-  for (const [name, desc] of [['/exit', 'quitter'], ['/id', 'identifiant de la conversation'], ['/save', 'sauvegarder la session'], ['/clear', 'effacer l\'écran']])
+  for (const [name, desc] of [['/exit', 'quitter'], ['/id', 'identifiant de la conversation'], ['/save', 'sauvegarder la session'], ['/clear', 'effacer l\'écran'],
+    ['/conversations', 'choisir une conversation ou un projet (comme /resume)'], ['/nouveautes', 'quoi de neuf dans FS-CLI']])
     if (!seen.has(name)) seen.set(name, { name, usage: name, desc });
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 })();
@@ -576,6 +603,86 @@ function transcriptOf(chat) {
     .filter(m => m.text);
 }
 
+/** reprend une conversation (du PC, d'un autre PC ou du site) : session appliquée, titre du site synchronisé → messages de la conversation */
+async function resumeChatById(chatId) {
+  const s = loadSessions().find(x => x.chatId === chatId) || { chatId, title: '', agentId: S.agentId, ctxSent: true };   // conversation du compte (autre PC, site)
+  applySession(s); refreshPrompt(); saveSession();
+  let messages = [];
+  try {
+    const chat = await fetchChat(chatId);
+    messages = transcriptOf(chat);
+    const t = fsTitle(chat?.title);                                   // titre du site (renommée là-bas → renommée ici)
+    if (t && t !== S.title) { S.title = t; saveSession(); refreshPrompt(); }
+  } catch {}
+  return messages;
+}
+
+const agoText = t => {
+  const m = Math.max(0, Math.round((Date.now() - (t || 0)) / 60000));
+  return !t ? '' : m < 1 ? 'à l\'instant' : m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} j`;
+};
+
+/**
+ * Sélecteur de conversations du TERMINAL, comme la fenêtre de l'horloge du panneau : toutes · ce dossier · projets.
+ * Choisir une conversation la reprend (avec ses derniers messages) ; « Nouvelle conversation » dans un projet ne vaut que pour celle-là.
+ */
+async function pickConversation() {
+  ui.spinner.start('conversations…');
+  const list = await liveSessions(80).finally(() => ui.spinner.stop());
+  const here = list.filter(s => s.cwd && samePathCI(s.cwd, S.cwd));
+  const label = s => `${ui.clip(s.title || '(sans titre)', 52)}${s.chatId === S.chatId ? '  ● en cours' : ''}${s.updatedAt ? '  · ' + agoText(s.updatedAt) : ''}`;
+  const count = pid => list.filter(s => (pid ? s.projectId === pid : !s.projectId)).length;
+  let view = 'all';
+  for (;;) {
+    const opts = [], acts = [];
+    const push = (l, a) => { opts.push(l); acts.push(a); };
+    let title = 'Reprendre une conversation';
+    if (view === 'all' || view === 'here') {
+      push('＋ Nouvelle conversation', { new: true });
+      if (view === 'here') push('↔ Toutes les conversations', { view: 'all' }); else if (here.length) push(`📁 Seulement ce dossier (${here.length})`, { view: 'here' });
+      push(`▣ Projets (${lastProjects.length})`, { view: 'projects' });
+      if (view === 'here') title = `Conversations de ce dossier · ${ui.shortPath(S.cwd, 40)}`;
+      for (const s of (view === 'here' ? here : list).slice(0, 12)) push(label(s), { chat: s });
+    } else if (view === 'projects') {
+      title = 'Projets France Student';
+      push('← Retour', { view: 'all' });
+      push(`Conversations normales (aucun projet) · ${count('')} conv.`, { view: 'proj:' });
+      for (const p of lastProjects) push(`▣ ${p.name} · ${count(p.id)} conv.${cfg.fsProject?.id === p.id ? ' · par défaut' : ''}`, { view: 'proj:' + p.id });
+    } else {
+      const pid = view.slice(5), p = lastProjects.find(x => x.id === pid);
+      title = pid ? `Projet « ${p?.name || '?'} »` : 'Conversations normales';
+      push('← Projets', { view: 'projects' });
+      push(pid ? `＋ Nouvelle conversation dans « ${p?.name} »` : '＋ Nouvelle conversation hors projet', { newIn: pid ? p : false });
+      for (const s of list.filter(x => (pid ? x.projectId === pid : !x.projectId)).slice(0, 12)) push(label(s), { chat: s });
+    }
+    push('Annuler', { cancel: true });
+    const first = acts.findIndex(a => a.chat);
+    const idx = await input.select({ title, options: opts, defaultIndex: first >= 0 ? first : 0 });
+    const a = idx == null || idx < 0 ? null : acts[idx];
+    if (!a || a.cancel) return println(c.dim('  conversation inchangée'));
+    if (a.view) { view = a.view; continue; }
+    if (a.new) return command('/new');
+    if ('newIn' in a) {
+      await command('/new');
+      setProjectOnce(a.newIn ? { id: a.newIn.id, name: a.newIn.name } : false); S.projectName = a.newIn ? a.newIn.name : ''; refreshPrompt();
+      return println(c.dim(a.newIn ? `  → la prochaine conversation sera rangée dans le projet « ${a.newIn.name} »` : '  → la prochaine conversation sera hors projet'));
+    }
+    if (a.chat) {
+      if (a.chat.chatId === S.chatId) return println(c.dim('  c\'est déjà la conversation en cours'));
+      ui.spinner.start('reprise…');
+      const msgs = await resumeChatById(a.chat.chatId).finally(() => ui.spinner.stop());
+      println(c.green('  ✓ conversation reprise') + c.dim(` · ${S.title || a.chat.title || ''} · ${modelName()}`));
+      const last = msgs.slice(-4);                                     // fin de la conversation, pour savoir où on en était
+      if (msgs.length > last.length) println(c.dim(`  … ${msgs.length - last.length} message${msgs.length - last.length > 1 ? 's' : ''} plus haut`));
+      for (const m of last) {
+        const t = m.text.replace(/\s+/g, ' ').trim();
+        println(m.role === 'user' ? '  ' + c.accent('> ') + ui.clip(t, 140) : '  ' + c.dim('⎿  ' + ui.clip(t, 220)));
+      }
+      return;
+    }
+  }
+}
+
 /** fenêtre « Serveurs MCP » du panneau VS Code : la liste tout de suite, puis l'état de chaque serveur dès qu'il est connu */
 async function openMcpPanel() {
   const mgr = getMcp(S.cwd);
@@ -587,8 +694,19 @@ async function openMcpPanel() {
 async function command(line) {
   const [cmd, ...rest] = line.split(/\s+/);
   let arg = line.slice(cmd.length).trim();
+  if (/^\/(history|conversations|conv)$/.test(cmd) && !arg && !opts.stdio && input.select && interactive) return pickConversation();   // même sélecteur que /resume
+  if (/^\/(conversations|conv)$/.test(cmd)) return command('/resume' + (arg ? ' ' + arg : ''));   // ailleurs (panneau, mode classique) : la liste de /resume
   switch (cmd) {
     case '/quit': case '/exit': case '/q': return shutdown(0);
+    case '/nouveautes': case '/nouveautés': case '/quoi-de-neuf': case '/release-notes': case '/news': {   // comme /release-notes de Claude Code
+      const n = Math.max(1, parseInt(arg) || 6);
+      println();
+      for (const v of WHATS_NEW.slice(0, n)) {
+        println(`  ${c.accent(c.bold('v' + v.version))}${v.version === VERSION ? c.dim('  ← ta version') : ''}`);
+        for (const it of v.items) println(`    ${c.dim('·')} ${it}`);
+      }
+      return println(c.dim(`\n  Tout l'historique : https://github.com/0xBlxck/fs-cli/releases · /update pour mettre à jour\n`));
+    }
     case '/help': case '/?': return help();
     case '/clear': input.clearScreen(); return banner();
     case '/status': return status();
@@ -833,6 +951,7 @@ async function command(line) {
       return println();
     }
     case '/sessions': case '/resume': case '/load': {
+      if (!arg && cmd !== '/load' && !opts.stdio && input.select && interactive) return pickConversation();   // sélecteur à flèches : toutes · ce dossier · projets
       ui.spinner.start('conversations…');
       const list = await liveSessions(12).finally(() => ui.spinner.stop());   // sans celles supprimées du site
       if (!list.length) return println(c.dim('  aucune session sauvegardée'));
@@ -1319,15 +1438,7 @@ if (opts.stdio) {                                                    // commande
   });
   input.on('resumeChat', async chatId => {
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de conversation' });
-    const s = loadSessions().find(x => x.chatId === chatId) || { chatId, title: '', agentId: S.agentId, ctxSent: true };   // conversation du compte (autre PC, site)
-    applySession(s); refreshPrompt(); saveSession();
-    let messages = [];
-    try {
-      const chat = await fetchChat(chatId);
-      messages = transcriptOf(chat);
-      const t = fsTitle(chat?.title);                                 // titre du site (renommée là-bas → renommée ici)
-      if (t && t !== S.title) { S.title = t; saveSession(); refreshPrompt(); }
-    } catch {}
+    const messages = await resumeChatById(chatId);
     stdioSend('transcript', { title: S.title || '', model: modelName(), messages: messages.slice(-40), older: Math.max(0, messages.length - 40) });
   });
   input.on('mcpAction', async (action, name) => {                    // boutons de la fenêtre « Serveurs MCP »

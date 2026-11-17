@@ -95,7 +95,18 @@
       tip.onclick = () => { ta.value = t; autosize(); ta.focus(); };
       tips.append(tip);
     }
-    welcome.append(tips); log.append(welcome);
+    welcome.append(tips);
+    if (S.whatsNew && S.whatsNew.length) {                              // « Quoi de neuf », comme l'accueil de Claude Code
+      const news = h('div', 'news');
+      news.append(h('div', 'nh', 'Quoi de neuf' + (S.version ? ' · v' + S.version : '')));
+      const ul = h('ul');
+      for (const n of S.whatsNew.slice(0, 3)) ul.append(h('li', null, String(n.text || '')));
+      news.append(ul);
+      const more = h('div', 'nmore', '/nouveautes pour tout voir'); more.onclick = () => post({ type: 'command', text: '/nouveautes' });
+      news.append(more);
+      welcome.append(news);
+    }
+    log.append(welcome);
   }
   function welcomeOff() { if (welcome) { welcome.remove(); welcome = null; } }
 
@@ -1233,7 +1244,7 @@
     const ev = m.ev;
     switch (ev.type) {
       case 'thinking': thinking(ev.delta || ''); break;
-      case 'ready': S.shell = ev.shell || ''; S.models = ev.models || []; S.modes = ev.modes || []; S.commands = ev.commands || []; S.started = true; if (!log.querySelector('.msg-user, .msg-ai')) showWelcome(); break;
+      case 'ready': S.shell = ev.shell || ''; S.models = ev.models || []; S.modes = ev.modes || []; S.commands = ev.commands || []; S.whatsNew = Array.isArray(ev.whatsNew) ? ev.whatsNew : []; S.version = ev.version || ''; S.started = true; if (!log.querySelector('.msg-user, .msg-ai')) showWelcome(); break;
       case 'status': Object.assign(S.status, ev); renderStatus(); break;
       case 'busy': setBusy(!!ev.busy); if (!ev.busy) agSettle(); break;
       case 'spinner': spinner(ev.label); break;

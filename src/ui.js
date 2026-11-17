@@ -562,6 +562,30 @@ export function box(rows, { title = '', width } = {}) {
   println(c.accent(`╰${'─'.repeat(W - 2)}╯`));
 }
 
+/**
+ * Cadre d'accueil en deux colonnes, comme Claude Code : titre dans la bordure, colonne gauche centrée, séparateur, colonne droite.
+ * Lignes = { text, style?, center? } : le texte est coupé AVANT d'être coloré (pas de couleur cassée).
+ */
+export function splitBox(left, right, { title = '', width, leftWidth = 32 } = {}) {
+  const W = Math.min(width || cols() - 2, 118);
+  const lw = leftWidth, rw = W - lw - 7;
+  const cell = (r, w) => {
+    if (!r) return ' '.repeat(w);
+    const t = clip(String(r.text ?? ''), w), vis = t.length;
+    const pad = w - vis, pl = r.center ? Math.floor(pad / 2) : 0;
+    return ' '.repeat(pl) + (r.style ? r.style(t) : t) + ' '.repeat(pad - pl);
+  };
+  const t = title ? ` ${title} ` : '';
+  println(c.accent('╭─') + (t ? c.accent(t) : '') + c.accent('─'.repeat(Math.max(0, W - 3 - t.length)) + '╮'));
+  const n = Math.max(left.length, right.length);
+  for (let i = 0; i < n; i++) {
+    const r = right[i];
+    const rightCell = r && r.rule ? c.accent('─'.repeat(rw)) : cell(r, rw);
+    println(`${c.accent('│')} ${cell(left[i], lw)} ${c.accent('│')} ${rightCell} ${c.accent('│')}`);
+  }
+  println(c.accent(`╰${'─'.repeat(W - 2)}╯`));
+}
+
 export function shortPath(p, max = 52) {
   return p.length > max ? '…' + p.slice(-(max - 1)) : p;
 }
