@@ -880,7 +880,6 @@
       { label: 'Effort de réflexion (GPT)', kind: 'effort' },
       { label: 'Recherche web', kind: 'toggle', key: 'webSearch' },
       { label: 'Autre modèle si le modèle refuse', kind: 'toggle', key: 'refusalRecover' },
-      { label: 'Afficher la réflexion du modèle', kind: 'toggle', key: 'showThinking' },
       { label: 'Compte & consommation…', act: () => cmd('/usage') },
       { sec: 'Travail' },
       { label: 'Mode…', desc: MODE_UI[st?.mode || S.status.mode] || '', act: () => modeMenu() },
