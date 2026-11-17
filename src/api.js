@@ -252,10 +252,13 @@ export async function attachChatToProject(projectId, chatId) {
 }
 
 /** Rangement automatique : projet « FS-CLI » par défaut, /fr-project <nom> pour un autre, /fr-project off pour désactiver. Ne lève jamais. */
-let projectPromise = null, projectOverride;
+let projectPromise = null, projectOverride, projectOnce;
+/** projet de la PROCHAINE conversation créée seulement (onglet « Projets » du panneau) : { id, name } · false = hors projet · undefined = réglage par défaut */
+export function setProjectOnce(p) { projectOnce = p; }
 /** serveur MCP : projet propre (undefined = comme FS-CLI · false = aucun · { id, name }) */
 export function setProjectOverride(p) { projectOverride = p; projectPromise = null; }
 function attachToFsProject(chatId) {
+  if (projectOnce !== undefined) { const p = projectOnce; projectOnce = undefined; if (p?.id) attachChatToProject(p.id, chatId).catch?.(() => {}); return; }
   const proj = projectOverride !== undefined ? projectOverride : cfg.fsProject;
   if (!proj) return;                                                // pas de projet choisi : conversation normale, visible dans ta liste du site
   if (proj.id) { attachChatToProject(proj.id, chatId).catch?.(() => {}); return; }

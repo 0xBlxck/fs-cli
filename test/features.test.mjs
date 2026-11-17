@@ -348,3 +348,12 @@ test('horloge : la croix « ✕ » supprime une conversation seulement après co
   assert.match(h, /if \(idx !== 0\) return/);
   assert.match(panel, /type: 'deleteChat', chatId: s\.chatId/);
 });
+
+test('onglet « Projets » : « Nouvelle conversation dans ce projet » ne vaut que pour cette conversation (le défaut ne change pas)', () => {
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..');
+  const cli = fs.readFileSync(path.join(root, 'cli.js'), 'utf8'), api = fs.readFileSync(path.join(root, 'src', 'api.js'), 'utf8');
+  const h = cli.slice(cli.indexOf("input.on('projectUse'"), cli.indexOf("input.on('resumeChat'"));
+  assert.doesNotMatch(h, /cfg\.fsProject\s*=/, 'le projet par défaut n\'est pas modifié');
+  assert.match(h, /setProjectOnce\(/);
+  assert.match(api, /if \(projectOnce !== undefined\) \{ const p = projectOnce; projectOnce = undefined;/, 'utilisé une seule fois');
+});

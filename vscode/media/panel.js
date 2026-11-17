@@ -823,7 +823,7 @@
       for (const p of rows) {
         const row = h('div', 'prow' + (p.current ? ' cur' : ''));
         const n = convs(p.id).length;
-        row.append(h('span', 'pt', (p.id ? '▣ ' : '') + p.name), h('span', 'pa', (p.current ? 'actuel · ' : '') + n + ' conv.'));
+        row.append(h('span', 'pt', (p.id ? '▣ ' : '') + p.name), h('span', 'pa', (p.current ? 'par défaut · ' : '') + n + ' conv.'));
         row.title = p.current ? 'Les nouvelles conversations vont ici' : 'Ouvrir';
         row.onclick = () => { HIST.proj = p.id; histRender(); };
         list.append(row);
@@ -834,8 +834,8 @@
     const p = HIST.proj ? P.find(x => x.id === HIST.proj) : { id: '', name: 'Conversations normales', current: HIST.normal };
     if (!p) { HIST.proj = undefined; return histRender(); }
     const back = h('div', 'prow'); back.append(h('span', 'pt', '← ' + p.name), h('span', 'pa', 'projets')); back.onclick = () => { HIST.proj = undefined; histRender(); };
-    const use = h('div', 'prow'); use.append(h('span', 'pt', p.id ? '＋ Nouvelle conversation dans ce projet' : '＋ Nouvelle conversation hors projet'), h('span', 'pa', p.current ? 'projet actuel' : ''));
-    use.title = 'Les conversations suivantes iront aussi ' + (p.id ? 'dans ce projet' : 'hors projet');
+    const use = h('div', 'prow'); use.append(h('span', 'pt', p.id ? '＋ Nouvelle conversation dans ce projet' : '＋ Nouvelle conversation hors projet'), h('span', 'pa', p.current ? 'projet par défaut' : ''));
+    use.title = 'Seulement cette nouvelle conversation ' + (p.id ? 'est rangée dans ce projet' : 'est hors projet') + ' ; les suivantes reprennent le réglage par défaut (/projet)';
     use.onclick = () => { histClose(); post({ type: 'projectUse', id: p.id }); };
     list.append(back, use);
     const items = convs(p.id);

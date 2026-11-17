@@ -11,7 +11,7 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 
 import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
-import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat } from './src/api.js';
+import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
@@ -343,7 +343,7 @@ const input = opts.stdio ? new StdioInput() : createInput({
 
 let busy = false, turnAbort = null;
 const ask = query => input.askLine(query);
-const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : '', target: S.targetDir || '' } : {}) });
+const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
 
 function banner() {
@@ -597,6 +597,7 @@ async function command(line) {
     case '/id': return println(c.dim('  ' + (S.chatId || 'aucune conversation')));
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
+      setProjectOnce(undefined); S.projectName = undefined;
       S.chatId = null; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
@@ -1253,12 +1254,12 @@ if (opts.stdio) {                                                    // commande
     stdioSend('flash', { text: `${SETTING_KEYS[key]} : ${cfg[key] ? 'activé' : 'désactivé'}` });
     sendSettings();
   });
-  input.on('projectUse', async id => {                              // onglet « Projets » : les nouvelles conversations vont dans ce projet (ou hors projet)
+  input.on('projectUse', async id => {                              // onglet « Projets » : CETTE nouvelle conversation va dans ce projet (ou hors projet) ; le défaut ne change pas
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de projet' });
     const p = lastProjects.find(x => x.id === id);
     if (id && !p) return;
-    cfg.fsProject = p ? { id: p.id, name: p.name } : false; cfg.fsProjectChosen = true; saveCfg();
     await runInput('/new');
+    setProjectOnce(p ? { id: p.id, name: p.name } : false); S.projectName = p ? p.name : '';
     refreshPrompt();
     stdioSend('flash', { text: p ? `nouvelle conversation dans le projet « ${p.name} »` : 'nouvelle conversation hors projet' });
   });
