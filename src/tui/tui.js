@@ -166,8 +166,13 @@ export class Tui {
     }
 
     // ligne du haut : spinner à gauche, modèle · contexte à droite (toujours présente : la zone ne change pas de hauteur)
-    const right = st.model || '';                                    // le contexte restant est affiché en bas à droite
+    // dossier de travail EN DIRECT (/cd, 📁, chemin tapé…) : l'accueil, lui, reste tel qu'il a été affiché
     const left = this.spinnerText ? '  ' + this.spinnerText : '';
+    const room = W - 2 - strWidth(left) - strWidth(st.model || '') - 4;
+    let dir = String(st.cwd || '');
+    if (dir && room < 12) dir = '';
+    else if (dir && strWidth(dir) > room) { const base = dir.split(/[\\/]/).filter(Boolean).pop() || dir; dir = strWidth(base) + 2 <= room ? '…' + (dir.includes('\\') ? '\\' : '/') + base : ''; }
+    const right = [dir && '📁 ' + dir, st.model || ''].filter(Boolean).join(' · ');   // le contexte restant est affiché en bas à droite
     const gap = W - 1 - strWidth(left) - strWidth(right) - 1;
     lines.push(gap >= 1 && right ? left + ' '.repeat(gap) + c.dim(right) : left);
 

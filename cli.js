@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync, spawn } from 'node:child_process';
 
-import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
+import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
 import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
@@ -317,11 +317,16 @@ function suggest(buf, cur) {
   let m = /^\/(\S*)$/.exec(upto);
   if (m && cur === buf.length) {
     const q = m[1].toLowerCase();
-    // commandes perso (.fs-cli/commands, .claude/commands…) proposées en premier
-    const custom = loadCustomCommands(S.cwd).filter(x => x.name.startsWith(q) || (q.length > 1 && x.name.includes(q)))
-      .map(x => ({ label: '/' + x.name + (x.argumentHint ? ' ' + x.argumentHint : ''), insert: '/' + x.name + ' ', desc: `${x.description} ${c.dim('(' + x.source + ')')}` }));
-    const items = custom.concat(COMMANDS.filter(x => x.name.slice(1).startsWith(q)).concat(q.length > 1 ? COMMANDS.filter(x => !x.name.slice(1).startsWith(q) && x.name.includes(q)) : [])
-      .map(x => ({ label: x.usage.length > 30 ? x.name : x.usage, insert: x.name + (/[<\[]/.test(x.usage) ? ' ' : ''), desc: x.desc })));
+    // ordre (comme Claude Code) : commandes de FS-CLI qui commencent par la saisie, puis les commandes perso (.fs-cli/commands,
+    // .claude/commands…) qui commencent par la saisie, puis celles qui la contiennent seulement ; les perso sont marquées par leur source
+    const cmdItem = x => ({ label: x.usage.length > 30 ? x.name : x.usage, insert: x.name + (/[<\[]/.test(x.usage) ? ' ' : ''), desc: x.desc });
+    const customItem = x => ({ label: '/' + x.name + (x.argumentHint ? ' ' + x.argumentHint : ''), insert: '/' + x.name + ' ', desc: `${x.description} ${c.dim('(' + x.source + ')')}` });
+    const custom = loadCustomCommands(S.cwd);
+    const items = [
+      ...COMMANDS.filter(x => x.name.slice(1).startsWith(q)).map(cmdItem),
+      ...custom.filter(x => x.name.startsWith(q)).map(customItem),
+      ...(q.length > 1 ? [...COMMANDS.filter(x => !x.name.slice(1).startsWith(q) && x.name.includes(q)).map(cmdItem), ...custom.filter(x => !x.name.startsWith(q) && x.name.includes(q)).map(customItem)] : []),
+    ];
     return { start: 0, items };
   }
   if ((m = /^(\/cd |\/read |\/project |\/tree )(.*)$/.exec(upto))) {
@@ -1122,6 +1127,24 @@ async function naturalIntent(t) {
   return true;
 }
 
+/**
+ * Message qui n'est QU'UN chemin de dossier existant (« C:\…\mon-projet », entre guillemets ou non) : ce n'est pas une demande pour le modèle.
+ * Choix : y travailler (dossier de travail), y écrire les fichiers (dossier cible), ou l'envoyer quand même. → true si traité ici.
+ */
+async function onlyAFolder(t) {
+  const raw = t.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
+  if (!raw || /[\r\n]/.test(raw) || !(path.isAbsolute(raw) || /^~[\\/]/.test(raw) || /^\.{1,2}[\\/]/.test(raw))) return false;
+  let dir; try { dir = resolveP(raw, S.cwd); if (!fs.statSync(dir).isDirectory()) return false; } catch { return false; }
+  if (samePathCI(dir, S.cwd)) { println(c.dim(`  c'est déjà ton dossier de travail : ${dir}`)); return true; }
+  if (!(input.select && interactive)) return false;
+  const idx = await input.select({ title: `Dossier ${dir}`, detail: 'Tu as envoyé seulement un chemin de dossier. Que veux-tu en faire ?',
+    options: ['Travailler dans ce dossier (dossier de travail)', 'Garder le dossier actuel, mais écrire les fichiers dans celui-ci', 'L\'envoyer au modèle comme message', 'Annuler'], defaultIndex: 0 });
+  if (idx === 0) { await changeCwd(dir); return true; }
+  if (idx === 1) { S.targetDir = dir; refreshPrompt(); println(c.dim('  → dossier cible : ' + dir + '  (/target clear pour l\'oublier)')); return true; }
+  if (idx === 2) return false;
+  println(c.dim('  rien n\'a été envoyé')); return true;
+}
+
 async function handleInput(text) {
   busy = true; input.setBusy(true);
   try {
@@ -1130,6 +1153,7 @@ async function handleInput(text) {
     if (!t.includes('\n') && t.startsWith('/')) await command(t);
     else if (!t.includes('\n') && t.startsWith('!')) await direct(t.slice(1));
     else if (!t.includes('\n') && /^#\s*\S/.test(t) && !/^##/.test(t)) await command('/remember ' + t.replace(/^#\s*/, ''));   // « # info » : retenue en mémoire (comme Claude Code)
+    else if (!opts.print && await onlyAFolder(t)) return;            // message = juste un chemin de dossier : on demande ce qu'il faut en faire
     else if ((cfg.intents !== false || /PLAYWRIGHT_MCP_EXTENSION_TOKEN/.test(t)) && await naturalIntent(t)) return;   // un jeton collé ne part jamais au modèle
     else {
       if (cfg.intents !== false && cfg.engine === 'native') {     // le modèle n'a pas d'accès web : une URL citée est lue et jointe
@@ -1441,7 +1465,7 @@ async function sendSettings(fetchEffort = false) {
 
 /** dossier de travail changé (commande /cd ou sélecteur du panneau) ; la confiance peut mener à un autre dossier */
 async function changeCwd(dir) {
-  const ok = await ensureFolderTrust(dir);
+  const ok = await ensureFolderTrust(dir, { picked: true });            // /cd ou 📁 du panneau : choisi par toi, pas de 2e question (sauf dossier très large)
   if (!ok) return println(c.dim('  dossier inchangé'));
   S.cwd = ok; S.targetDir = null; S.notes.push(`Dossier courant changé : ${ok}`); refreshPrompt();
   return println(c.dim('  → dossier de travail : ' + ok));
@@ -1456,29 +1480,38 @@ async function pickFolder(title) {
   return a ? resolveP(a, S.cwd) : '';
 }
 
-async function ensureFolderTrust(dir) {
-  if (isFolderTrusted(dir)) return dir;
+async function ensureFolderTrust(dir, { picked = false } = {}) {
+  if (isFolderTrusted(dir)) { if (picked) rememberWorkDir(dir); return dir; }
   const broad = isBroadFolder(dir);
+  if (picked && !broad) { trustFolder(dir, { remember: false }); rememberWorkDir(dir); return dir; }   // dossier que tu viens de choisir toi-même : pas de 2e question
   const detail = `Le modèle pourra lire et modifier les fichiers de ce dossier et y lancer des commandes (avec confirmation pour les actions sensibles).` +
     (broad ? `\n⚠ C'est un dossier très large (racine du disque ou dossier personnel) : préfère le dossier précis d'un projet.` : '\nLa confiance vaut aussi pour ses sous-dossiers.');
-  const options = broad ? ['Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'] : ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'];
+  // lancé depuis un dossier large (ex. le dossier personnel) : le dernier dossier choisi est proposé en premier
+  const last = broad && cfg.lastWorkDir && !samePathCI(cfg.lastWorkDir, dir) && fs.existsSync(cfg.lastWorkDir) && fs.statSync(cfg.lastWorkDir).isDirectory() ? cfg.lastWorkDir : '';
+  const RESUME = last ? `Travailler dans ${ui.shortPath(last, 50)} (dernier dossier choisi)` : '';
+  const options = broad ? [...(last ? [RESUME] : []), 'Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'] : ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'];
   let idx;
   if (input.select && interactive) idx = await input.select({ title: `Faire confiance à ce dossier ? ${dir}`, detail, options, defaultIndex: 0 });
   else {
     println(c.yellow(`  ? Faire confiance à ce dossier ? ${dir}`)); println(c.dim('    ' + detail.replace(/\n/g, '\n    ')));
-    const a = ((await ask(`  [o]ui / [s]ession seulement / [N]on `)) || '').trim().toLowerCase();
-    idx = /^(o|oui|y|yes)$/.test(a) ? 0 : /^s/.test(a) ? (broad ? 0 : 1) : /^(a|autre|c|choisir)$/.test(a) ? options.indexOf('Choisir un autre dossier…') : options.length - 1;
+    const a = ((await ask(`  [o]ui / [s]ession seulement / [a]utre dossier / [N]on `)) || '').trim().toLowerCase();
+    const yes = options.findIndex(o => o.startsWith('Oui'));
+    idx = /^(o|oui|y|yes)$/.test(a) ? yes : /^s/.test(a) ? options.indexOf('Oui, pour cette session seulement') : /^(a|autre|c|choisir)$/.test(a) ? options.indexOf('Choisir un autre dossier…') : options.length - 1;
   }
-  if (idx === null || idx === undefined || options[idx] === 'Non') return false;
+  if (idx === null || idx === undefined || idx < 0 || options[idx] === 'Non') return false;
+  if (RESUME && options[idx] === RESUME) return ensureFolderTrust(path.resolve(last), { picked: true });
   if (options[idx] === 'Choisir un autre dossier…') {
     const other = await pickFolder('Dossier de travail de FS-CLI');
     if (!other) return false;
     if (!fs.existsSync(other) || !fs.statSync(other).isDirectory()) { println(c.red('  dossier introuvable : ' + other)); return false; }
-    return ensureFolderTrust(path.resolve(other));
+    return ensureFolderTrust(path.resolve(other), { picked: true });
   }
   trustFolder(dir, { remember: options[idx].startsWith('Oui, je') });
   return dir;
 }
+const samePathCI = (a, b) => path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase();
+/** dossier de travail choisi explicitement : proposé en premier au prochain lancement depuis un dossier large */
+function rememberWorkDir(dir) { if (!isBroadFolder(dir)) saveCfgKeys({ lastWorkDir: path.resolve(dir) }); }
 
 /** Sortie propre : on ferme d'abord les serveurs MCP (sinon Node peut planter sous Windows en fermant leurs connexions). */
 let stopping = false;
@@ -1514,7 +1547,7 @@ if (interactive) {
   input.start();
 }
 refreshPrompt();
-banner();
+if (opts.stdio) banner();                                              // panneau : « ready » tout de suite (le terminal affiche l'accueil APRÈS le choix du dossier)
 requestJson('GET', '/chats/agents').then(r => {                      // fournisseur + taille de contexte : seuil de résumé adapté au modèle, sélecteur du panneau
   if (!Array.isArray(r?.data)) return;
   S.ctxWindows = Object.fromEntries(r.data.map(a => [String(a.id), Number(a.contextWindow) || 0]));
@@ -1523,11 +1556,12 @@ requestJson('GET', '/chats/agents').then(r => {                      // fourniss
 }).catch(() => {});
 if (opts.stdio) input.setBusy(true);                                 // panneau : rien ne part au modèle tant que la confiance n'est pas décidée
 const trustedCwd = await ensureFolderTrust(S.cwd);
-if (trustedCwd && trustedCwd !== S.cwd) { S.cwd = trustedCwd; refreshPrompt(); }
+if (trustedCwd && trustedCwd !== S.cwd) { S.cwd = trustedCwd; S.targetDir = null; refreshPrompt(); }
 if (!trustedCwd) {
   println(c.dim('  Dossier non approuvé : relance FS-CLI depuis le dossier de ton projet (ou --cwd <dossier>).'));
   saveSession(); input.stop(); process.exit(0);
 }
+if (!opts.stdio) banner();                                             // comme Claude Code : confiance d'abord, puis l'accueil avec le VRAI dossier de travail
 if (opts.stdio) { input.setBusy(false); const q = input.takeQueued(); if (q) runInput(q); }
 if (!opts.stdio && !cfg.vscodeTip) {                                 // une seule fois : le panneau de chat existe aussi pour l'éditeur
   try { const eds = findEditors(); if (eds.length) println(c.dim('  💡 FS-CLI existe aussi en panneau de chat dans ' + eds.map(e => e.name).join(', ') + ' : tape ') + c.accent('/vscode')); } catch {}
