@@ -11,7 +11,7 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 
 import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
-import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce } from './src/api.js';
+import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
@@ -36,7 +36,7 @@ import { discoverMcpServers, discoverSkills, autoSkills, skillCatalog } from './
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
 import { stripEditorContext } from './src/editor-context.js';
-import { extraCommand, maybeAutoCompact, notifyWebhook } from './src/extra-commands.js';
+import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow } from './src/extra-commands.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
 import { fetchChat, isBrokenHistory, isLockedChat } from './src/api.js';
@@ -58,6 +58,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--dangerously-skip-permissions') opts.bypass = true;   // comme Claude Code : « tout autoriser » pour cette exécution
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--cwd') opts.cwd = argv[++i];
+  else if (a === '--projet' || a === '--project') opts.project = argv[++i];   // conversations de CETTE exécution rangées dans ce projet du site (nom exact ou id)
   else if (a === '--web') opts.web = true;
   else if (a === '--classic') opts.classic = true;
   else if (a === '--stdio') opts.stdio = true;
@@ -394,7 +395,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/projet', 'travailler dans un projet France Student (ses instructions sont suivies)'], ['/vscode', 'installer le panneau de chat FS-CLI dans VS Code, Cursor, Windsurf, Antigravity'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/projet', 'travailler dans un projet France Student (ses instructions sont suivies) · /projet supprimer <nom>'], ['/vscode', 'installer le panneau de chat FS-CLI dans VS Code, Cursor, Windsurf, Antigravity'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/effort [niveau]', 'effort de raisonnement des modèles GPT : none, minimal, low, medium, high, xhigh (réglage du compte, aussi sur le site)'],
@@ -1285,6 +1286,13 @@ if (opts.stdio) {                                                    // commande
     refreshPrompt();
     stdioSend('flash', { text: p ? `nouvelle conversation dans le projet « ${p.name} »` : 'nouvelle conversation hors projet' });
   });
+  input.on('deleteProject', async id => {                           // croix « ✕ » d'un projet (onglet Projets) : toujours confirmé, conversations protégées
+    if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour supprimer un projet' });
+    const p = lastProjects.find(x => x.id === id);
+    if (!p) return;
+    const done = await deleteProjectFlow(p, extraEnv());
+    if (done) { lastProjects = lastProjects.filter(x => x.id !== id); remoteCache = remoteCache.map(r => (r.projectId === id ? { ...r, projectId: null } : r)); stdioSend('flash', { text: `projet « ${p.name} » supprimé` }); }
+  });
   input.on('resumeChat', async chatId => {
     if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour changer de conversation' });
     const s = loadSessions().find(x => x.chatId === chatId) || { chatId, title: '', agentId: S.agentId, ctxSent: true };   // conversation du compte (autre PC, site)
@@ -1487,6 +1495,13 @@ async function shutdown(code = 0, { quiet = false } = {}) {
 
 // ── Lancement ─────────────────────────────────────────────────────────────────
 if (opts.bypass) await enableBypass({ silent: true });                   // --dangerously-skip-permissions (choisi explicitement à la ligne de commande)
+if (opts.project) {                                                    // --projet <nom|id> : pour cette exécution seulement (le réglage /projet ne change pas)
+  const want = String(opts.project).trim(), low = want.toLocaleLowerCase('fr-FR');
+  const list = await listFsProjects().catch(() => null);
+  const p = list && (list.find(x => x.id === want) || list.find(x => String(x.name || '').trim().toLocaleLowerCase('fr-FR') === low));
+  if (!p) { console.error(c.red(`  ✗ projet France Student introuvable : « ${want} »`) + c.dim('  (nom exact ou id ; /projet pour la liste)')); process.exit(1); }
+  setProjectOverride({ id: p.id, name: p.name }); S.projectName = p.name; refreshPrompt();
+}
 if (opts.print) {
   if (!initial) { console.log(c.red('  -p nécessite une demande')); process.exit(1); }
   await handleInput(initial);

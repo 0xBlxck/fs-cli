@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cfg, saveCfg, saveCfgKeys, upsertSession } from './config.js';
 import { fetchChat } from './api.js';
-import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject, requestJson, listFsProjects } from './api.js';
+import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject, requestJson, listFsProjects, projectChats, deleteFsProjectSafely } from './api.js';
 import { fetchChatUsage, fetchUserUsage, contextPercent, describeChatUsage, describeUserUsage } from './account.js';
 import * as mem from './memory.js';
 import { PRESETS, loadMcpConfig, saveMcpConfig, trustProject } from './mcp.js';
@@ -354,6 +354,49 @@ async function mcpCommand(arg, env) {
   }
 }
 
+/**
+ * Supprimer un projet du site (/projet supprimer, croix « ✕ » de l'onglet Projets). Toujours confirmé, « Annuler » par défaut.
+ * Sur le site, supprimer un projet rend ses conversations inaccessibles (vérifié le 17/11/2026) : ici, elles sont d'abord
+ * sorties du projet (par défaut) ou supprimées si l'utilisateur le choisit ; si une seule échoue, le projet n'est pas supprimé.
+ */
+export async function deleteProjectFlow(p, env) {
+  const { S } = env;
+  if (!p?.id) return false;
+  if (!env.select) { println(c.yellow('  La suppression d\'un projet se confirme dans une session interactive (FS-CLI ou panneau de l\'éditeur).')); return false; }
+  ui.spinner.start('conversations du projet…');
+  const chats = await projectChats(p.id).catch(() => null);
+  ui.spinner.stop();
+  if (!chats) { println(c.red(`  ✗ impossible de lire les conversations du projet « ${p.name} » : rien n'a été supprimé`)); return false; }
+  const n = chats.length, s = n > 1 ? 's' : '';
+  const options = n
+    ? [`Supprimer le projet, garder ses ${n} conversation${s} (elles redeviennent normales)`, `Supprimer le projet ET ses ${n} conversation${s} (définitif)`, 'Annuler']
+    : ['Supprimer le projet', 'Annuler'];
+  const idx = await env.select({
+    title: `Supprimer le projet « ${p.name} » ?`,
+    detail: (n ? `Il contient ${n} conversation${s}. Sur le site, supprimer un projet rend ses conversations inaccessibles : ici, elles sont d'abord sorties du projet, ou supprimées si tu le choisis.\n` : 'Le projet est vide.\n')
+      + 'Le projet et ses instructions sont supprimés définitivement de ton compte France Student.',
+    options, defaultIndex: options.length - 1,
+  });
+  if (idx == null || idx < 0 || idx === options.length - 1) { println(c.dim('  suppression annulée')); return false; }
+  const keep = n === 0 || idx === 0;
+  ui.spinner.start(n ? (keep ? 'conversations sorties du projet…' : 'suppression des conversations…') : 'suppression du projet…');
+  const r = await deleteFsProjectSafely(p.id, { keep, chats });
+  ui.spinner.stop();
+  if (!r.ok) {
+    println(c.red(`  ✗ projet « ${p.name} » non supprimé : ${r.reason}`) + (r.kept ? c.dim(` · ${r.kept} conversation${r.kept > 1 ? 's' : ''} déjà sortie${r.kept > 1 ? 's' : ''} du projet, intacte${r.kept > 1 ? 's' : ''}`) : ''));
+    return false;
+  }
+  const changes = {};
+  if (cfg.fsProject?.id === p.id) { changes.fsProject = false; S.fsProjInstr = null; }   // c'était le projet par défaut : conversations normales
+  if (cfg.mcpProject?.id === p.id) changes.mcpProject = false;
+  if (Object.keys(changes).length) saveCfgKeys(changes);
+  if (S.projectName === p.name) S.projectName = '';
+  if (!keep && chats.some(x => x.id === S.chatId)) { S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.title = ''; S.sid = newSid(); }
+  env.refreshPrompt?.();
+  println(c.green('  ✓ ') + `projet « ${p.name} » supprimé` + c.dim(n ? (keep ? ` · ${r.kept} conversation${r.kept > 1 ? 's' : ''} gardée${r.kept > 1 ? 's' : ''}, maintenant hors projet` : ` · ${r.deleted} conversation${r.deleted > 1 ? 's' : ''} supprimée${r.deleted > 1 ? 's' : ''}`) : ''));
+  return true;
+}
+
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 /** Renvoie true si la commande a été traitée */
 export async function extraCommand(cmd, arg, env) {
@@ -575,6 +618,17 @@ export async function extraCommand(cmd, arg, env) {
         catch (e) { ui.spinner.stop(); println(c.red('  ✗ ' + e.message)); }
       };
       if (/^(nouveau|new|cr[ée]er|\+)$/i.test(arg)) { await createNew(); return true; }
+      const delM = arg.match(/^(?:supprimer|suppr|delete|rm|effacer)(?:\s+(.+))?$/i);
+      if (delM) {                                                      // /projet supprimer [nom] : toujours confirmé
+        const list = await listFsProjects().catch(() => null);
+        if (!list) { println(c.red('  ✗ projets illisibles')); return true; }
+        let p = null;
+        if (delM[1]) { const w = delM[1].trim().toLocaleLowerCase('fr-FR'); p = list.find(x => String(x.name || '').trim().toLocaleLowerCase('fr-FR') === w) || list.find(x => x.id === delM[1].trim()); }
+        else if (env.select && list.length) { const shown = list.slice(0, 20); const i = await env.select({ title: 'Supprimer quel projet France Student ?', options: [...shown.map(x => x.name || '(sans nom)'), 'Annuler'], defaultIndex: shown.length }); p = i >= 0 && i < shown.length ? shown[i] : null; if (!p) { println(c.dim('  rien supprimé')); return true; } }
+        if (!p) { println(c.red(`  ✗ aucun projet ne s'appelle exactement « ${delM[1] || ''} »`) + c.dim('  (/projet pour voir la liste ; le nom doit être exact pour une suppression)')); return true; }
+        await deleteProjectFlow(p, env);
+        return true;
+      }
       if (/^(off|non|aucun|none)$/i.test(arg)) { cfg.fsProject = false; saveCfg(); S.fsProjInstr = null; env.refreshPrompt?.(); println(c.dim('  → plus de projet : les conversations ne sont plus rangées, aucune instruction de projet')); return true; }
       try {
         ui.spinner.start('projets France Student…');

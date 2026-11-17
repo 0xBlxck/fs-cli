@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-native-'));
 process.env.FS_CLI_HOME = path.join(tmp, 'home');
-const { runNative, mapCall } = await import('../src/native.js');
+const { runNative, mapCall, documentFileName } = await import('../src/native.js');
 const { detectEnv } = await import('../src/tools.js');
 const { cfg } = await import('../src/config.js');
 await detectEnv();
@@ -20,7 +20,7 @@ function fakeFs(turns) {
     if (!o.chatId) o.onChat?.('chat-1');
     const t = turns[st.i++] || { text: 'fin' };
     if (t.text) o.onText?.(t.text);
-    return { text: t.text || '', usage: null, toolCalls: t.calls || [] };
+    return { text: t.text || '', usage: null, toolCalls: t.calls || [], documents: t.documents || [] };
   };
   return { st, stream };
 }
@@ -180,4 +180,43 @@ test('--max-turns : S.maxSteps limite les étapes de cette exécution (sans touc
   assert.equal(f.st.reqs.length, 2);
   assert.equal(r.hitLimit, true);
   assert.equal(cfg.maxSteps, before);
+});
+
+// ── « panneau de code » du site (outil serveur createDocument, nov. 2026) : le modèle y met parfois le fichier au lieu d'appeler write_file ──
+test('documents du site : un titre de fichier devient un chemin du dossier de travail, le reste non', () => {
+  assert.equal(documentFileName({ title: 'carla_env.py' }), 'carla_env.py');
+  assert.equal(documentFileName({ title: 'src/app.js' }), 'src/app.js');
+  assert.equal(documentFileName({ title: 'Rapport de sécurité' }), null);          // pas un fichier
+  assert.equal(documentFileName({ title: '../evil.js' }), null);                    // jamais hors du dossier par ce chemin
+  assert.equal(documentFileName({ title: 'C:\\Windows\\x.dll' }), null);
+  assert.equal(documentFileName({ title: '/etc/passwd.txt' }), null);
+});
+
+test('documents du site : le fichier est écrit À L\'IDENTIQUE (indentation comprise) et le modèle est prévenu ; un document « texte » est seulement montré', async () => {
+  const { dir, S } = mk();
+  const py = 'class A:\n    def tick(self):\n        while True:\n            try:\n                if self.x:\n                    break\n            except RuntimeError:\n                raise\n';
+  const f = fakeFs([{ text: '`carla_env.py` est disponible dans le panneau de code.', documents: [
+    { id: 'file-1', title: 'carla_env.py', kind: 'code', content: py },
+    { id: 'file-2', title: 'Notes de conception', kind: 'text', content: '# Notes\nrien' },
+  ] }]);
+  await runNative(S, 'crée carla_env.py', { ...io(), stream: f.stream });
+  assert.equal(fs.readFileSync(path.join(dir, 'carla_env.py'), 'utf8'), py);
+  assert.ok(!fs.existsSync(path.join(dir, 'Notes de conception')));
+  assert.ok(S.undo.length >= 1, 'annulable avec /rewind comme un write_file');
+  assert.ok(S.notes.some(n => /carla_env\.py/.test(n) && /write_file/.test(n)));
+  assert.ok(S.notes.some(n => /Notes de conception/.test(n)));
+});
+
+test('documentsOf : forme réelle renvoyée par France Student (parts « tool-createDocument »)', async () => {
+  const { documentsOf } = await import('../src/api.js');
+  const parts = [
+    { type: 'text', text: 'ok' },
+    { type: 'tool-createDocument', toolCallId: 'call_1', state: 'output-available', input: { title: 'a.py', kind: 'code', content: 'if x:\n    y()\n' }, output: { id: 'file-9', title: 'a.py', kind: 'code', content: 'if x:\n    y()\n' } },
+    { type: 'tool-updateDocument', toolCallId: 'call_2', state: 'output-available', input: { id: 'file-9', description: 'ajoute z' }, output: { id: 'file-9', title: 'a.py', kind: 'code', content: 'The document has been updated successfully.' } },
+    { type: 'tool-createDocument', state: 'output-error', input: { title: 'b.py', content: 'x' } },
+  ];
+  const d = documentsOf(parts);
+  assert.equal(d.length, 2);
+  assert.deepEqual(d[0], { id: 'file-9', title: 'a.py', kind: 'code', content: 'if x:\n    y()\n', update: false });
+  assert.equal(d[1].update, true); assert.equal(d[1].content, null, 'mise à jour sans contenu : rien d\'écrit au hasard');
 });

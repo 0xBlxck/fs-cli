@@ -55,6 +55,44 @@ async function execNative(S, call, io) {
   return { callId, output: clipMiddle(out, MAX_RESULT), isError: !r.ok };
 }
 
+/** titre d'un document du site utilisable comme fichier du dossier de travail (« carla_env.py », « src/app.js ») ; sinon null */
+export function documentFileName(d) {
+  const t = String(d?.title || '').trim().replace(/^[`"'«\s]+|[`"'»\s]+$/g, '');
+  if (!t || t.length > 200 || path.isAbsolute(t) || /^[A-Za-z]:/.test(t)) return null;
+  const parts = t.split(/[\\/]+/);
+  if (parts.some(p => !p || p === '..' || p === '.' || /[<>:"|?*\x00-\x1f]/.test(p))) return null;
+  return /\.[A-Za-z0-9]{1,10}$/.test(parts.at(-1)) ? parts.join('/') : null;
+}
+
+/** document qui n'est pas un fichier (« Rapport », mise à jour sans contenu…) : montré dans le terminal, sinon l'utilisateur ne le voit nulle part */
+function showDocument(d) {
+  ui.println(c.dim(`  ⓘ document « ${d.title || 'sans titre'} »${d.update ? ' modifié' : ''} dans le panneau du site`));
+  if (typeof d.content !== 'string' || !d.content.trim()) return;
+  const md = new ui.MdStream({ collapse: false });
+  md.push(d.kind === 'code' ? '```\n' + d.content.replace(/\n?$/, '\n') + '```\n' : d.content.replace(/\n?$/, '\n'));
+  md.finish();
+}
+
+/**
+ * Le modèle a mis un fichier dans le « panneau de code » du site (outil serveur createDocument) au lieu d'appeler write_file :
+ * le fichier est écrit sur le PC par le MÊME chemin que write_file (politique, confirmation, diff, /rewind), puis le modèle est prévenu.
+ */
+async function takeDocuments(S, docs, io) {
+  for (const d of docs) {
+    const name = documentFileName(d);
+    if (!name || typeof d.content !== 'string') {
+      showDocument(d);
+      S.notes.push(`Le document « ${d.title || 'sans titre'} » est resté dans le panneau de documents du site, que l'utilisateur ne voit pas ici. Pour un fichier, utilise write_file ou edit_file dans le dossier de travail.`);
+      continue;
+    }
+    ui.println(c.dim(`  ↳ « ${d.title} » créé dans le panneau du site : écrit dans le dossier de travail`));
+    const r = await execCall(S, { name: 'write_file', args: { path: name, content: d.content } }, io);
+    S.notes.push(r.ok
+      ? `Ton document « ${d.title} » (panneau de documents du site) a été écrit sur le PC de l'utilisateur dans ${name}. Pour les fichiers, utilise directement write_file et edit_file : l'utilisateur ne voit pas ce panneau.`
+      : `Ton document « ${d.title} » n'a pas été écrit sur le PC (${String(r.output || '').slice(0, 200)}). Pour les fichiers, utilise write_file et edit_file.`);
+  }
+}
+
 /** Tour complet : message → (appels d'outils → résultats)* → réponse finale */
 export async function runNative(S, userText, opts) {
   const { signal, ask, stream = streamChat, ctxPct = contextPercent } = opts;
@@ -114,6 +152,8 @@ export async function runNative(S, userText, opts) {
         } catch (e) { ui.println(c.yellow(`  image générée, mais récupération impossible : ${e.message}`)); }
       }
     }
+    if (res.documents?.length && !(cfg.mode === 'plan')) await takeDocuments(S, res.documents, { signal, ask, root });
+    else if (res.documents?.length) for (const d of res.documents) showDocument(d);   // mode plan : rien n'est écrit, le document est seulement montré
     const calls = res.toolCalls || [];
     if (!calls.length) break;
 

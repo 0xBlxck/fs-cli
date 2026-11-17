@@ -826,6 +826,11 @@
         const row = h('div', 'prow' + (p.current ? ' cur' : ''));
         const n = convs(p.id).length;
         row.append(h('span', 'pt', (p.id ? '▣ ' : '') + p.name), h('span', 'pa', (p.current ? 'par défaut · ' : '') + n + ' conv.'));
+        if (p.id) {                                                     // croix au survol : FS-CLI demande toujours confirmation et protège les conversations
+          const b = h('button', 'pdel', '✕'); b.title = 'Supprimer ce projet (confirmation demandée ; ses conversations peuvent être gardées)';
+          b.onclick = e => { e.stopPropagation(); if (S.busy) return showFlash('attends la fin de la réponse'); histClose(); post({ type: 'deleteProject', id: p.id }); };
+          row.append(b);
+        }
         row.title = p.current ? 'Les nouvelles conversations vont ici' : 'Ouvrir';
         row.onclick = () => { HIST.proj = p.id; histRender(); };
         list.append(row);

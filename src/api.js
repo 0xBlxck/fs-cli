@@ -68,7 +68,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
       };
     }
     const payload = JSON.stringify(body);
-    let images = [], sawImage = false;
+    let images = [], sawImage = false, documents = [];
     let text = '', usage = null, toolCalls = [], opened = false, settled = false, stopped = false, sawCompleted = false, streamError = null, seenChatId = chatId || null;
     const finish = (fn, v) => { if (settled) return; settled = true; fn(v); };
 
@@ -137,7 +137,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
           sawCompleted = true;
           usage = d.message?.tokenUsage || null;
           if (Array.isArray(d.message?.toolCalls)) toolCalls = d.message.toolCalls;      // seule source de vérité des appels à exécuter
-          if (Array.isArray(d.message?.parts)) images = imagesOf(d.message.parts);
+          if (Array.isArray(d.message?.parts)) { images = imagesOf(d.message.parts); documents = documentsOf(d.message.parts); }
         } else if (type === 'error' || type === 'response.failed' || type === 'response.error') {
           streamError = d.message || d.error?.message || d.error || JSON.stringify(d).slice(0, 200);
         }
@@ -152,7 +152,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
         if (stopped) return;
         if (streamError) return finish(reject, new ApiError(`Erreur du serveur: ${streamError}`));
         if (!sawCompleted && !text) return finish(reject, new ApiError('Réponse vide / flux interrompu', { retry: !opened }));
-        finish(resolve, { text, usage, toolCalls, stopped: false, images, sawImage: sawImage || images.length > 0, chatId: seenChatId });
+        finish(resolve, { text, usage, toolCalls, stopped: false, images, documents, sawImage: sawImage || images.length > 0, chatId: seenChatId });
       });
       res.on('error', e => { if (!stopped) finish(reject, e); });
     });
@@ -250,6 +250,68 @@ export async function attachChatToProject(projectId, chatId) {
   const r = await requestJson('PUT', `/projects/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`);
   return r.status >= 200 && r.status < 300;
 }
+/** sort une conversation de son projet (elle redevient une conversation normale) : DELETE /projects/{p}/chats/{c} → 204 */
+export async function detachChatFromProject(projectId, chatId) {
+  const r = await requestJson('DELETE', `/projects/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`);
+  return r.status >= 200 && r.status < 300;
+}
+/** conversations d'un projet (toutes les pages) → [{ id, title, … }] ; null si illisible */
+export async function projectChats(projectId) {
+  const out = [];
+  for (let page = 0, before = ''; page < 20; page++) {
+    const r = await requestJson('GET', `/projects/${encodeURIComponent(projectId)}/chats?limit=50${before ? '&before=' + encodeURIComponent(before) : ''}`);
+    if (r.status !== 200) return page ? out : null;
+    const chats = r.data?.chats || [];
+    const fresh = chats.filter(c => !out.some(o => o.id === c.id)); out.push(...fresh);
+    if (!r.data?.hasMore || !fresh.length) break;
+    before = chats.at(-1)?.id || '';
+  }
+  return out;
+}
+/**
+ * Supprime un projet du site. ATTENTION (vérifié en vrai le 17/11/2026) : France Student ne déplace PAS les conversations du projet ;
+ * elles deviennent inaccessibles pour toujours (404 « Project not found »). Donc, avant : chaque conversation est soit sortie du projet
+ * (keep), soit supprimée (!keep), et vérifiée une par une ; s'il en reste une qui pointe encore vers le projet, rien n'est supprimé.
+ * → { ok, kept, deleted, failed: [ids], reason }
+ */
+export async function deleteFsProjectSafely(projectId, { keep = true, chats = null, onProgress, settle = 2000 } = {}) {
+  // La liste GET /projects/{p}/chats a ~1 s de retard (mesuré le 17/11/2026, dans les deux sens, sans cache contournable) :
+  // une conversation rangée à l'instant n'y figure pas encore. Donc on relit TOUJOURS la liste après une pause avant de supprimer.
+  const pause = () => (settle > 0 ? new Promise(r => setTimeout(r, settle)) : Promise.resolve());
+  chats ||= await projectChats(projectId);
+  if (!chats) return { ok: false, kept: 0, deleted: 0, failed: [], reason: 'liste des conversations du projet illisible' };
+  chats = [...chats];
+  let kept = 0, deleted = 0; const failed = [], done = new Set();
+  const total = () => chats.length;
+  let pending = 0;
+  for (let pass = 0; pass < 4; pass++) {                              // jusqu'à ce qu'une relecture après pause ne montre plus rien de nouveau
+    for (const ch of chats.filter(x => !done.has(x.id))) {
+      done.add(ch.id); onProgress?.(done.size, total());
+      if (keep) {
+        await detachChatFromProject(projectId, ch.id);
+        const r = await requestJson('GET', `/chats/${encodeURIComponent(ch.id)}`);
+        if (r.status === 200 && r.data?.projectId !== projectId) kept++; else failed.push(ch.id);
+      } else if (await deleteChat(ch.id)) deleted++; else failed.push(ch.id);
+    }
+    if (failed.length) break;
+    await pause();
+    const again = await projectChats(projectId);
+    if (!again) return { ok: false, kept, deleted, failed, reason: 'liste des conversations du projet illisible' };
+    const left = [];
+    for (const ch of again) {                                         // déjà traitée mais encore listée : on demande à la conversation elle-même
+      if (!done.has(ch.id)) { left.push(ch); continue; }
+      const r = await requestJson('GET', `/chats/${encodeURIComponent(ch.id)}`);
+      if (keep && r.status === 200 && r.data?.projectId === projectId) failed.push(ch.id);
+    }
+    pending = left.length;
+    if (failed.length || !left.length) break;
+    chats = [...chats, ...left];
+  }
+  if (pending && !failed.length) return { ok: false, kept, deleted, failed, reason: 'de nouvelles conversations apparaissent encore dans le projet : réessaie dans un instant' };
+  if (failed.length) return { ok: false, kept, deleted, failed, reason: `${failed.length} conversation(s) n'ont pas pu être ${keep ? 'sorties du projet' : 'supprimées'}` };
+  const r = await requestJson('DELETE', `/projects/${encodeURIComponent(projectId)}`);
+  return { ok: r.status >= 200 && r.status < 300, kept, deleted, failed, reason: r.status >= 300 || !r.status ? `France Student a répondu ${r.status || 'sans réponse'}` : '' };
+}
 
 /** Rangement automatique : projet « FS-CLI » par défaut, /fr-project <nom> pour un autre, /fr-project off pour désactiver. Ne lève jamais. */
 let projectPromise = null, projectOverride, projectOnce;
@@ -288,6 +350,20 @@ export function deleteChat(chatId) {
 export function imagesOf(parts) {
   return (parts || []).map(p => p?.output).filter(o => o && o.kind === 'image' && (o.contentUrl || o.url) && o.status !== 'FAILED')
     .map(o => ({ id: o.id || o.generationId, url: o.contentUrl || o.url, contentType: o.contentType || 'image/png', ext: o.fileExtension || 'png', prompt: o.revisedPrompt || '' }));
+}
+/**
+ * Documents du « panneau de code » du site (outil serveur createDocument / updateDocument, apparu en novembre 2026) :
+ * le modèle y met parfois un fichier au lieu d'appeler write_file → [{ id, title, kind, content, update }].
+ * content = ce que le modèle a écrit (input), sinon le contenu renvoyé (output) ; null si inconnu (ex. mise à jour décrite seulement).
+ */
+export function documentsOf(parts) {
+  return (parts || []).filter(p => /^tool-(create|update)Document$/i.test(String(p?.type || '')) && !/error/i.test(String(p.state || '')))
+    .map(p => {
+      const i = p.input || {}, o = p.output || {}, update = /update/i.test(p.type);
+      const content = typeof i.content === 'string' ? i.content : (!update && typeof o.content === 'string' ? o.content : null);
+      return { id: o.id || i.id || null, title: String(o.title || i.title || '').trim(), kind: String(o.kind || i.kind || ''), content, update };
+    })
+    .filter(d => d.title || d.content);
 }
 /** images générées dans le dernier message de l'assistant (si le flux ne les a pas données) */
 export async function lastMessageImages(chatId) {
