@@ -623,44 +623,50 @@ const agoText = t => {
 };
 
 /**
- * Sélecteur de conversations du TERMINAL, comme la fenêtre de l'horloge du panneau : toutes · ce dossier · projets.
- * Choisir une conversation la reprend (avec ses derniers messages) ; « Nouvelle conversation » dans un projet ne vaut que pour celle-là.
+ * Sélecteur de conversations du TERMINAL, avec les MÊMES onglets que la fenêtre de l'horloge de l'IDE : Ce dossier · Tous · Projets.
+ * ← → change d'onglet. Choisir une conversation la reprend (avec ses derniers messages) ;
+ * dans Projets, on choisit d'abord un projet, puis une de ses conversations ou « Nouvelle conversation dans ce projet » (pour celle-là seulement).
  */
 async function pickConversation() {
   ui.spinner.start('conversations…');
   const list = await liveSessions(80).finally(() => ui.spinner.stop());
   const here = list.filter(s => s.cwd && samePathCI(s.cwd, S.cwd));
-  const label = s => `${ui.clip(s.title || '(sans titre)', 52)}${s.chatId === S.chatId ? '  ● en cours' : ''}${s.updatedAt ? '  · ' + agoText(s.updatedAt) : ''}`;
+  const label = s => `💬 ${ui.clip(s.title || '(sans titre)', 52)}${s.chatId === S.chatId ? '  ● en cours' : ''}${s.updatedAt ? '  · ' + agoText(s.updatedAt) : ''}`;
   const count = pid => list.filter(s => (pid ? s.projectId === pid : !s.projectId)).length;
-  let view = 'all';
+  const TABS = ['Ce dossier', 'Tous', 'Projets'];
+  let tab = here.length ? 0 : 1, proj;                                // proj : projet ouvert dans l'onglet Projets (undefined = liste des projets)
   for (;;) {
     const opts = [], acts = [];
     const push = (l, a) => { opts.push(l); acts.push(a); };
-    let title = 'Reprendre une conversation';
-    if (view === 'all' || view === 'here') {
+    let title, detail;
+    if (tab === 0 || tab === 1) {
+      const items = tab === 0 ? here : list;
+      title = 'Conversations';
+      detail = tab === 0
+        ? (here.length ? `Tes conversations dans ce dossier (${ui.shortPath(S.cwd, 50)}). Entrée = reprendre.` : `Aucune conversation faite dans ce dossier (${ui.shortPath(S.cwd, 50)}) : → pour voir toutes tes conversations.`)
+        : 'Toutes tes conversations, la plus récente en haut. Entrée = reprendre.';
       push('＋ Nouvelle conversation', { new: true });
-      if (view === 'here') push('↔ Toutes les conversations', { view: 'all' }); else if (here.length) push(`📁 Seulement ce dossier (${here.length})`, { view: 'here' });
-      push(`▣ Projets (${lastProjects.length})`, { view: 'projects' });
-      if (view === 'here') title = `Conversations de ce dossier · ${ui.shortPath(S.cwd, 40)}`;
-      for (const s of (view === 'here' ? here : list).slice(0, 12)) push(label(s), { chat: s });
-    } else if (view === 'projects') {
-      title = 'Projets France Student';
-      push('← Retour', { view: 'all' });
-      push(`Conversations normales (aucun projet) · ${count('')} conv.`, { view: 'proj:' });
-      for (const p of lastProjects) push(`▣ ${p.name} · ${count(p.id)} conv.${cfg.fsProject?.id === p.id ? ' · par défaut' : ''}`, { view: 'proj:' + p.id });
+      for (const s of items.slice(0, 14)) push(label(s), { chat: s });
+    } else if (proj === undefined) {
+      title = 'Projets';
+      detail = 'Choisis un projet du site pour voir ses conversations ou en commencer une dedans.';
+      push(`○ Conversations normales (hors projet) · ${count('')} conv.`, { proj: '' });
+      for (const p of lastProjects) push(`▣ ${p.name} · ${count(p.id)} conv.${cfg.fsProject?.id === p.id ? ' · par défaut' : ''}`, { proj: p.id });
     } else {
-      const pid = view.slice(5), p = lastProjects.find(x => x.id === pid);
-      title = pid ? `Projet « ${p?.name || '?'} »` : 'Conversations normales';
-      push('← Projets', { view: 'projects' });
-      push(pid ? `＋ Nouvelle conversation dans « ${p?.name} »` : '＋ Nouvelle conversation hors projet', { newIn: pid ? p : false });
-      for (const s of list.filter(x => (pid ? x.projectId === pid : !x.projectId)).slice(0, 12)) push(label(s), { chat: s });
+      const p = lastProjects.find(x => x.id === proj);
+      title = proj ? `Projets › ${p?.name || '?'}` : 'Projets › Conversations normales';
+      detail = proj ? `Conversations du projet « ${p?.name || '?'} ». Entrée = reprendre.` : 'Conversations rangées dans aucun projet. Entrée = reprendre.';
+      push('← Revenir à la liste des projets', { back: true });
+      push(proj ? `＋ Nouvelle conversation dans le projet « ${p?.name} »` : '＋ Nouvelle conversation hors projet', { newIn: proj ? p : false });
+      for (const s of list.filter(x => (proj ? x.projectId === proj : !x.projectId)).slice(0, 14)) push(label(s), { chat: s });
     }
-    push('Annuler', { cancel: true });
-    const first = acts.findIndex(a => a.chat);
-    const idx = await input.select({ title, options: opts, defaultIndex: first >= 0 ? first : 0 });
-    const a = idx == null || idx < 0 ? null : acts[idx];
-    if (!a || a.cancel) return println(c.dim('  conversation inchangée'));
-    if (a.view) { view = a.view; continue; }
+    const first = acts.findIndex(a => a.chat && a.chat.chatId !== S.chatId);
+    const r = await input.select({ title, detail, options: opts, defaultIndex: first >= 0 ? first : 0, tabs: TABS, tab });
+    if (r && typeof r === 'object' && 'tab' in r) { tab = r.tab; proj = undefined; continue; }   // ← → : autre onglet
+    const a = r == null || r < 0 ? null : acts[r];
+    if (!a) return println(c.dim('  conversation inchangée'));
+    if (a.back) { proj = undefined; continue; }
+    if ('proj' in a) { proj = a.proj; continue; }
     if (a.new) return command('/new');
     if ('newIn' in a) {
       await command('/new');

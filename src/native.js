@@ -4,7 +4,7 @@
 // Documentation FS : « Outils client (mode avancé) », flag 2026_11_client_tools.
 import fs from 'node:fs';
 import path from 'node:path';
-import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile } from './api.js';
+import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents } from './api.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent } from './account.js';
@@ -57,7 +57,9 @@ async function execNative(S, call, io) {
 
 /** titre d'un document du site utilisable comme fichier du dossier de travail (« carla_env.py », « src/app.js ») ; sinon null */
 export function documentFileName(d) {
-  const t = String(d?.title || '').trim().replace(/^[`"'«\s]+|[`"'»\s]+$/g, '');
+  let t = String(d?.title || '').trim().replace(/^[`"'«\s]+|[`"'»\s]+$/g, '');
+  const head = t.match(/^(\S+\.[A-Za-z0-9]{1,10})\s+[—–\-:|·]\s+\S/);   // « index.html — Nébula » → index.html
+  if (head) t = head[1];
   if (!t || t.length > 200 || path.isAbsolute(t) || /^[A-Za-z]:/.test(t)) return null;
   const parts = t.split(/[\\/]+/);
   if (parts.some(p => !p || p === '..' || p === '.' || /[<>:"|?*\x00-\x1f]/.test(p))) return null;
@@ -152,6 +154,7 @@ export async function runNative(S, userText, opts) {
         } catch (e) { ui.println(c.yellow(`  image générée, mais récupération impossible : ${e.message}`)); }
       }
     }
+    if (res.documents?.length) await (opts.readDocument ? withDocumentContents(res.documents, opts.readDocument) : withDocumentContents(res.documents));   // document mis à jour : sa version actuelle, lue sur le site
     if (res.documents?.length && !(cfg.mode === 'plan')) await takeDocuments(S, res.documents, { signal, ask, root });
     else if (res.documents?.length) for (const d of res.documents) showDocument(d);   // mode plan : rien n'est écrit, le document est seulement montré
     const calls = res.toolCalls || [];

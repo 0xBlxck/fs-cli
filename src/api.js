@@ -365,6 +365,19 @@ export function documentsOf(parts) {
     })
     .filter(d => d.title || d.content);
 }
+/** contenu ACTUEL d'un document du panneau du site (c'est un fichier Files v2 : GET /filesv2/{id}/content, vu dans le site) → texte */
+export async function fetchDocumentContent(id) {
+  if (!/^file-[\w-]+$/.test(String(id || ''))) throw new Error('identifiant de document inattendu');
+  return (await fetchApiFile(`/filesv2/${id}/content`)).toString('utf8');
+}
+/** documents mis à jour (sans contenu dans la réponse) ou sans texte : leur version actuelle est lue sur le site */
+export async function withDocumentContents(docs, read = fetchDocumentContent) {
+  for (const d of docs || []) {
+    if (!d.id || (!d.update && typeof d.content === 'string')) continue;
+    try { d.content = await read(d.id); } catch {}
+  }
+  return docs || [];
+}
 /** images générées dans le dernier message de l'assistant (si le flux ne les a pas données) */
 export async function lastMessageImages(chatId) {
   const d = await fetchChat(chatId).catch(() => null);

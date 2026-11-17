@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.44.0', items: [
+    '/resume : onglets Ce dossier · Tous · Projets (← →), comme dans l\'IDE',
+    'MCP : le code que le modèle met dans le panneau du site est renvoyé en entier',
+    'Documents du site mis à jour par le modèle : relus et écrits dans ton dossier',
+  ] },
   { version: '3.43.0', items: [
     '/resume : conversations et projets au clavier, comme dans l\'IDE',
     'Quoi de neuf à l\'accueil (terminal et IDE), /nouveautes pour tout voir',

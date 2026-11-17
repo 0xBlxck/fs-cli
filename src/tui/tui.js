@@ -104,10 +104,13 @@ export class Tui {
     this.render(); a.resolve(value);
   }
 
-  /** menu à flèches ; renvoie l'index choisi ou null (Échap) */
-  select({ title, detail = '', options, defaultIndex = 0 }) {
+  /**
+   * menu à flèches ; renvoie l'index choisi ou null (Échap).
+   * Avec tabs (ex. ['Ce dossier', 'Tous', 'Projets']) : une barre d'onglets, ← → change d'onglet et renvoie { tab: n }.
+   */
+  select({ title, detail = '', options, defaultIndex = 0, tabs = null, tab = 0 }) {
     return new Promise(resolve => {
-      this.select_ = { title, detail, options, idx: defaultIndex, resolve };
+      this.select_ = { title, detail, options, idx: defaultIndex, tabs, tab, resolve };
       this.render();
       this.attention(true);
     });
@@ -179,11 +182,15 @@ export class Tui {
     if (this.select_) {
       const s = this.select_;
       lines.push(this.rule(c.bold(s.title), c.accent, W));
+      if (s.tabs?.length) {                                            // onglets, comme la fenêtre de l'horloge de l'IDE
+        const bar = s.tabs.map((t, i) => (i === s.tab ? c.accent(c.bold(`▌ ${t} ▐`)) : c.dim(`  ${t}  `))).join('  ');
+        lines.push('  ' + bar + c.dim('     ← → changer d\'onglet'));
+      }
       for (const l of String(s.detail || '').split('\n').slice(0, 8)) if (l.trim()) lines.push('  ' + c.dim(l));
       lines.push('');
       s.options.forEach((o, i) => lines.push(i === s.idx ? '  ' + c.accent(`❯ ${i + 1}. ${o}`) : `    ${i + 1}. ${o}`));
       lines.push(this.rule('', c.accent, W));
-      lines.push('  ' + c.dim('↑↓ choisir · 1-' + s.options.length + ' · Entrée valider · Échap = refuser'));
+      lines.push('  ' + c.dim((s.tabs?.length ? '←→ onglet · ' : '') + '↑↓ choisir · 1-' + s.options.length + ' · Entrée valider · Échap = ' + (s.tabs?.length ? 'fermer' : 'refuser')));
       return { lines, caret: { row: lines.length - 1, col: 0 }, hideCursor: true };
     }
 
@@ -327,6 +334,10 @@ export class Tui {
     const s = this.select_;
     if (k.name === 'up' || (k.ctrl && k.name === 'p')) { s.idx = (s.idx + s.options.length - 1) % s.options.length; return this.render(); }
     if (k.name === 'down' || k.name === 'tab' || (k.ctrl && k.name === 'n')) { s.idx = (s.idx + 1) % s.options.length; return this.render(); }
+    if (s.tabs?.length && (k.name === 'left' || k.name === 'right')) {
+      const t = (s.tab + (k.name === 'right' ? 1 : s.tabs.length - 1)) % s.tabs.length;
+      return this.finishSelect({ tab: t });
+    }
     if (k.name === 'enter') return this.finishSelect(s.idx);
     if (k.name === 'escape') return this.finishSelect(null);
     if (k.ctrl && k.name === 'c') { this.finishSelect(null); this.emit('interrupt'); return; }

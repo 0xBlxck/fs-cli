@@ -220,3 +220,13 @@ test('documentsOf : forme réelle renvoyée par France Student (parts « tool-cr
   assert.deepEqual(d[0], { id: 'file-9', title: 'a.py', kind: 'code', content: 'if x:\n    y()\n', update: false });
   assert.equal(d[1].update, true); assert.equal(d[1].content, null, 'mise à jour sans contenu : rien d\'écrit au hasard');
 });
+
+test('documents du site : « index.html — Nébula » devient index.html ; un document MIS À JOUR est relu sur le site puis écrit', async () => {
+  assert.equal(documentFileName({ title: 'index.html — Nébula' }), 'index.html');
+  assert.equal(documentFileName({ title: 'app.js : serveur' }), 'app.js');
+  assert.equal(documentFileName({ title: 'Plan — étape 1' }), null);
+  const { dir, S } = mk();
+  const f = fakeFs([{ text: 'Mis à jour.', documents: [{ id: 'file-7', title: 'page.html — Accueil', kind: 'code', content: null, update: true }] }]);
+  await runNative(S, 'modifie la page', { ...io(), stream: f.stream, readDocument: async id => (id === 'file-7' ? '<p>v2</p>\n' : '') });
+  assert.equal(fs.readFileSync(path.join(dir, 'page.html'), 'utf8'), '<p>v2</p>\n');
+});

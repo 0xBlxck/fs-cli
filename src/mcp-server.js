@@ -8,7 +8,7 @@ import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys, FILES, ROOT } from './config.js';
-import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat, isBrokenHistory, isLockedChat } from './api.js';
+import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat, isBrokenHistory, isLockedChat, withDocumentContents } from './api.js';
 import { fetchUserUsage } from './account.js';
 import { sensitivePathReason } from './permissions.js';
 import { newSid, tag, lastReset, createdToday, DAILY_LIMIT } from './chats.js';
@@ -398,8 +398,15 @@ export function createMcpServer(deps = {}) {
         const list = res.images?.length ? res.images : await lastMessageImages(usedChat).catch(() => []);
         for (const im of list) { try { imgs.push({ data: await d.fetchApiFile(im.url), mime: im.contentType, prompt: im.prompt, name: `image-${String(im.id || Date.now()).slice(0, 8)}.${im.ext}` }); } catch {} }
       }
-      if (!text && !imgs.length) return textResult(`${nameOf(m.id)} n'a renvoyé aucune réponse.`, true);
-      return withImages(textResult(text || '(image seule)'), imgs, typeof args.save_dir === 'string' && path.isAbsolute(args.save_dir) ? args.save_dir : '');
+      // documents du « panneau » du site (le modèle y met souvent le code au lieu de l'écrire dans sa réponse) : renvoyés EN ENTIER à l'appelant
+      const docs = (await withDocumentContents(res?.documents || [], d.readDocument)).filter(x => typeof x.content === 'string' && x.content.trim());
+      const docText = docs.map(x => {
+        const ext = (String(x.title).match(/\.([A-Za-z0-9]{1,10})(?:\s|$)/) || [])[1] || (x.kind === 'code' ? '' : 'md');
+        return `--- Document « ${x.title || 'sans titre'} »${x.update ? ' (mis à jour)' : ''} — contenu complet ---\n\`\`\`${ext.toLowerCase()}\n${x.content.replace(/\n?$/, '\n')}\`\`\``;
+      }).join('\n\n');
+      if (!text && !imgs.length && !docText) return textResult(`${nameOf(m.id)} n'a renvoyé aucune réponse.`, true);
+      const body = [text, docText].filter(Boolean).join('\n\n') || '(image seule)';
+      return withImages(textResult(body), imgs, typeof args.save_dir === 'string' && path.isAbsolute(args.save_dir) ? args.save_dir : '');
     } catch (e) {
       if (e?.name === 'AbortError') return textResult('Demande annulée.', true);
       return textResult(`Erreur France Student : ${e?.message || e}`, true);

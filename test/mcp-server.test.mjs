@@ -402,3 +402,22 @@ test('IDE sans fenêtre (Antigravity) : "new" et "mcp" sont compris, le choix va
   assert.equal(reqs.at(-1), 'neuve-xyz');
   cfg.mcpAskWhere = false; cfg.mcpChat = null;
 });
+
+test('fs_ask : le code mis par le modèle dans le panneau de documents du site est renvoyé EN ENTIER (création et mise à jour)', async () => {
+  const { createMcpServer } = await import('../src/mcp-server.js');
+  const html = '<!doctype html>\n<html>\n  <body>\n    <h1>Nébula</h1>\n  </body>\n</html>\n';
+  const srv = createMcpServer({
+    hasToken: () => true, fetchAgents: async () => ({ '-1004': 'GPT-6 Astra' }),
+    stream: async o => { o.onChat?.('chat-doc'); return { text: 'Le fichier index.html est prêt.', toolCalls: [], documents: [
+      { id: 'file-1', title: 'index.html — Nébula', kind: 'code', content: html, update: false },
+      { id: 'file-2', title: 'style.css', kind: 'code', content: null, update: true },
+    ] }; },
+    readDocument: async id => (id === 'file-2' ? 'body {\n  color: red;\n}\n' : ''),
+  });
+  const r = await srv.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_ask', arguments: { prompt: 'crée un site', model: '-1004', new_conversation: true } } });
+  const t = r.result.content.find(c => c.type === 'text').text;
+  assert.match(t, /Le fichier index\.html est prêt\./);
+  assert.ok(t.includes('```html\n' + html + '```'), 'contenu complet, indentation comprise');
+  assert.match(t, /style\.css » \(mis à jour\)/);
+  assert.ok(t.includes('```css\nbody {\n  color: red;\n}\n```'), 'document mis à jour : version actuelle lue sur le site');
+});
