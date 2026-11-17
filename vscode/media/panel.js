@@ -375,7 +375,7 @@
       if (S.ask !== card) return;
       S.ask = null;
       if (!fromEditor) post({ type: 'select', id: ev.id, index: i == null ? -1 : i });
-      el.className = 'tl answered'; el.textContent = i == null || !ev.options[i] ? '✗ refusé' : `${/^(Refuser|Non)\b/.test(ev.options[i]) ? '✗' : '✓'} ${ev.options[i]}`;   // « Non, et dire quoi faire… » = refus
+      el.className = 'tl answered'; el.textContent = i == null || !ev.options[i] ? '✗ refusé' : `${/^(Refuser|Non|Annuler|Plus tard)\b/.test(ev.options[i]) ? '✗' : '✓'} ${ev.options[i]}`;   // « Non, et dire quoi faire… », « Annuler » = refus
       ta.focus();
     };
     const card = { el, id: ev.id, answer, key: e => {
