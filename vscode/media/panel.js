@@ -807,6 +807,7 @@
       row.append(h('span', 'pt', s.title || '(sans titre)'), h('span', 'pa', ago(s.updatedAt)));
       row.title = [s.model, s.here ? '' : dir].filter(Boolean).join(' · ');
       row.onclick = () => { histClose(); if (!s.current) post({ type: 'resumeChat', chatId: s.chatId }); };
+      row.append(delBtn(s));
       list.append(row);
     }
     if (HIST.partial) list.append(h('div', 'pnote', 'Mise à jour…'));
@@ -841,10 +842,16 @@
     if (!items.length) list.append(h('div', 'pnote', 'Aucune conversation dans ce projet.'));
     for (const s of items) {
       const row = h('div', 'prow' + (s.current ? ' cur' : ''));
-      row.append(h('span', 'pt', s.title || '(sans titre)'), h('span', 'pa', ago(s.updatedAt)));
+      row.append(h('span', 'pt', s.title || '(sans titre)'), h('span', 'pa', ago(s.updatedAt)), delBtn(s));
       row.onclick = () => { histClose(); if (!s.current) post({ type: 'resumeChat', chatId: s.chatId }); };
       list.append(row);
     }
+  }
+  /** croix « ✕ » au survol : suppression (FS-CLI demande toujours confirmation) */
+  function delBtn(s) {
+    const b = h('button', 'pdel', '✕'); b.title = 'Supprimer cette conversation (définitif, aussi sur le site)';
+    b.onclick = e => { e.stopPropagation(); if (S.busy) return showFlash('attends la fin de la réponse'); histClose(); post({ type: 'deleteChat', chatId: s.chatId, title: s.title }); };
+    return b;
   }
   document.addEventListener('keydown', e => { if (HIST.el && e.key === 'Escape') { e.preventDefault(); histClose(); } });
 

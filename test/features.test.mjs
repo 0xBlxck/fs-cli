@@ -338,3 +338,13 @@ test('contexte de l\'éditeur retiré du message (repère « Revenir ici », mes
   assert.equal(stripEditorContext('[Contexte VS Code : dans a.md, lignes 1-2 sélectionnées par l\'utilisateur]\n~~~~md\n```x```\n~~~~\n\nRésume'), 'Résume');
   assert.equal(stripEditorContext('Message normal'), 'Message normal');
 });
+
+test('horloge : la croix « ✕ » supprime une conversation seulement après confirmation (« Annuler » par défaut)', () => {
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..');
+  const cli = fs.readFileSync(path.join(root, 'cli.js'), 'utf8'), panel = fs.readFileSync(path.join(root, 'vscode', 'media', 'panel.js'), 'utf8');
+  const h = cli.slice(cli.indexOf("input.on('deleteChat'"), cli.indexOf("input.on('folderPicked'"));
+  assert.match(h, /options: \['Supprimer définitivement', 'Annuler'\], defaultIndex: 1/);
+  assert.ok(h.indexOf('input.select(') < h.indexOf('deleteChat(chatId)'), 'confirmation avant la suppression');
+  assert.match(h, /if \(idx !== 0\) return/);
+  assert.match(panel, /type: 'deleteChat', chatId: s\.chatId/);
+});

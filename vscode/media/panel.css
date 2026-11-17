@@ -405,3 +405,8 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .msg-user .rw { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--border); background: var(--box); color: var(--dim); cursor: pointer; opacity: 0; transition: opacity .12s; }
 .msg-user:hover .rw { opacity: 1; }
 .msg-user .rw:hover { color: var(--fg); }
+
+/* horloge : croix de suppression au survol d'une conversation */
+.prow .pdel { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--dim); cursor: pointer; opacity: 0; font-size: 11px; line-height: 18px; }
+.prow:hover .pdel { opacity: 1; }
+.prow .pdel:hover { color: var(--vscode-errorForeground, #f14c4c); background: var(--hover); }

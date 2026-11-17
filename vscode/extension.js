@@ -171,6 +171,7 @@ class Chat {
       case 'resumeChat': return this.toCli({ type: 'resumeChat', chatId: String(m.chatId || '') });
       case 'projectUse': return this.toCli({ type: 'projectUse', id: String(m.id || '') });
       case 'settingsOpen': return this.toCli({ type: 'settingsOpen' });
+      case 'deleteChat': return this.toCli({ type: 'deleteChat', chatId: String(m.chatId || ''), title: String(m.title || '') });
       case 'setting': return this.toCli({ type: 'setting', key: String(m.key || ''), value: typeof m.value === 'boolean' ? m.value : String(m.value ?? '') });
       case 'pickFolder': return this.pickFolder(m.purpose === 'target' ? 'target' : 'cwd');
       case 'ask': return this.toCli({ type: 'ask', id: m.id, text: String(m.text ?? '') });

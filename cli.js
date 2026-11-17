@@ -11,7 +11,7 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 
 import { cfg, saveCfg, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
-import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat } from './src/api.js';
+import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
@@ -1212,6 +1212,23 @@ if (opts.stdio) {                                                    // commande
     })) });
     // liste immédiate (panneau récent seulement : un ancien panneau rouvrirait sa fenêtre à la 2e liste), puis la liste vérifiée
     send(await liveSessions(80, panelAtLeast('0.10.1') ? quick => send(quick, true) : null), false);
+  });
+  input.on('deleteChat', async (chatId, title) => {                 // croix « ✕ » de l'horloge : suppression définitive, toujours confirmée
+    if (!/^[\w-]{8,64}$/.test(chatId)) return;
+    if (busy) return stdioSend('flash', { text: 'attends la fin de la réponse pour supprimer une conversation' });
+    const name = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'cette conversation';
+    const idx = await input.select({ title: `Supprimer « ${name} » ?`,
+      detail: 'Elle est supprimée de ton compte France Student, y compris sur le site. C\'est définitif : impossible de la récupérer ensuite.',
+      options: ['Supprimer définitivement', 'Annuler'], defaultIndex: 1 });
+    if (idx !== 0) return stdioSend('flash', { text: 'suppression annulée' });
+    if (!(await deleteChat(chatId))) return stdioSend('flash', { text: 'France Student n\'a pas supprimé la conversation' });
+    markSessionsGone([chatId]);
+    remoteCache = remoteCache.filter(r => r.chatId !== chatId);
+    if (S.chatId === chatId) {                                         // c'était la conversation ouverte : page vierge
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.title = ''; S.sid = newSid();
+      stdioSend('clear'); refreshPrompt();
+    }
+    stdioSend('flash', { text: `conversation « ${name} » supprimée` });
   });
   input.on('folderPicked', async (purpose, p) => {                  // sélecteur de dossiers de l'éditeur
     if (purpose === 'trust') { const w = folderWaiter; folderWaiter = null; return w?.(p || ''); }
