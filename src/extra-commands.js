@@ -43,7 +43,7 @@ export async function compactSession(S, { instruction = '', signal } = {}) {
     if (!summary) throw new Error('résumé vide : la session n\'a pas été compactée');
     // comme Claude Code : pas de requête « Compris. » ; le résumé part avec le prochain vrai message, qui ouvre la nouvelle conversation
     S.compactedFrom = prev; S.pendingSummary = summary;
-    S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
+    S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
     S.ctxPercent = null; S.lastPromptTokens = 0;
     return { chars: summary.length, previous: prev, chatId: null, percent: null };
   } finally { ui.spinner.stop(); }

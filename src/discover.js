@@ -97,20 +97,30 @@ export function discoverMcpServers(cwd) {
 
 // ── Skills (SKILL.md avec en-tête name / description) ──
 function frontmatter(text) {
-  const m = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const m = String(text).replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return {};
   const o = {}; const lines = m[1].split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const kv = lines[i].match(/^([\w-]+):\s*(.*)$/);
     if (!kv) continue;
     let v = kv[2].trim();
-    if (/^[|>][-+]?$/.test(v)) {                                        // valeur sur plusieurs lignes
+    if (v === '' || /^[|>][-+]?$/.test(v)) {                            // valeur sur plusieurs lignes (bloc « | » / « > », ou texte simple sur les lignes suivantes)
       const parts = []; while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) parts.push(lines[++i].trim());
       v = parts.join(' ');
     }
     o[kv[1]] = v.replace(/^["']|["']$/g, '');
   }
   return o;
+}
+
+const isDirLink = p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+/** Description de secours pour un SKILL.md sans en-tête : son titre et sa première phrase. */
+function bodyDescription(text) {
+  const body = String(text || '').replace(/^\uFEFF/, '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+  const lines = body.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const title = (lines.find(l => /^#{1,3}\s/.test(l)) || '').replace(/^#+\s*/, '');
+  const first = (lines.find(l => !/^(#|```|---|\||!\[|<)/.test(l)) || '').replace(/^[>*\-\d.\s]+/, '').replace(/[*_`]/g, '');
+  return [title, first].filter(Boolean).join(' — ').slice(0, 400);
 }
 
 function findSkillFiles(root, maxDepth, limit = 3000) {
@@ -120,19 +130,14 @@ function findSkillFiles(root, maxDepth, limit = 3000) {
     let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
     for (const e of ents) {
       if (e.isFile() && e.name === 'SKILL.md') found.push(path.join(dir, e.name));
-      else if (e.isDirectory() && d < maxDepth && !/^(node_modules|\.git|__pycache__|venv|\.venv)$/.test(e.name)) stack.push([path.join(dir, e.name), d + 1]);
+      else if ((e.isDirectory() || (e.isSymbolicLink() && isDirLink(path.join(dir, e.name)))) && d < maxDepth && !/^(node_modules|\.git|__pycache__|venv|\.venv)$/.test(e.name)) stack.push([path.join(dir, e.name), d + 1]);
     }
   }
   return found;
 }
 
-let skillCache = null;
-/** Skills trouvés : [{ name, description, file, dir, source }]. Mis en cache pour la session. */
-export function discoverSkills(cwd, { refresh = false, all = false } = {}) {
-  const off = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase()));
-  const keep = list => (all || !off.size ? list : list.filter(s => !off.has(s.name.toLowerCase())));
-  const key = `${importHome()}|${cwd}`;
-  if (skillCache && skillCache.key === key && !refresh) return keep(skillCache.list);
+/** Dossiers où chercher des skills : [dossier, source, profondeur]. */
+export function skillRoots(cwd) {
   const home = importHome();
   const roots = [];
   if (cwd) roots.push([path.join(cwd, '.claude', 'skills'), 'projet', 3], [path.join(cwd, '.agents', 'skills'), 'projet', 3]);
@@ -142,14 +147,26 @@ export function discoverSkills(cwd, { refresh = false, all = false } = {}) {
     [path.join(home, '.codex', 'skills'), 'Codex', 3],
     [path.join(home, '.claude', 'plugins', 'cache'), 'plugin Claude Code', 7],   // plugins installés (pas les catalogues « marketplaces »)
   );
+  return roots;
+}
+
+let skillCache = null;
+/** Skills trouvés : [{ name, description, file, dir, source }]. Mis en cache pour la session. */
+export function discoverSkills(cwd, { refresh = false, all = false } = {}) {
+  const off = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase()));
+  const keep = list => (all || !off.size ? list : list.filter(s => !off.has(s.name.toLowerCase())));
+  const key = `${importHome()}|${cwd}`;
+  if (skillCache && skillCache.key === key && !refresh) return keep(skillCache.list);
+  const roots = skillRoots(cwd);
   const byName = new Map();
   for (const [root, source, depth] of roots) {
     for (const file of findSkillFiles(root, depth)) {
       if (/[\\/]\.codex[\\/]skills[\\/]\.system[\\/]/i.test(file)) continue;   // skills internes de Codex (outils propres à Codex, ex. image_gen) : inutiles ici
-      const fm = frontmatter(readText(file) || '');
+      const raw = readText(file) || '';
+      const fm = frontmatter(raw);
       const name = (fm.name || path.basename(path.dirname(file))).trim();
       if (!name || byName.has(name.toLowerCase())) continue;
-      byName.set(name.toLowerCase(), { name, description: (fm.description || '').slice(0, 400), file, dir: path.dirname(file), source });
+      byName.set(name.toLowerCase(), { name, description: (fm.description || bodyDescription(raw)).slice(0, 400), file, dir: path.dirname(file), root, source });
     }
   }
   const list = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -181,7 +198,7 @@ const FR_EN = {
   animation: 'animation motion', logo: 'logo brand design', document: 'document docx', word: 'docx document', pdf: 'pdf', mail: 'email', email: 'email',
   boutique: 'shop shopify ecommerce', serveur: 'server backend', bdd: 'database sql', test: 'test testing', tests: 'test testing', mobile: 'mobile app',
 };
-const GENERIC = new Set(['code', 'fichier', 'fichiers', 'dossier', 'dossiers', 'test', 'tests', 'liste', 'affiche', 'courant', 'projet', 'script', 'programme', 'application', 'app', 'truc', 'chose', 'faire', 'cree', 'creer', 'ecris', 'ecrire', 'corrige', 'aide', 'help']);
+const GENERIC = new Set(['skill', 'skills', 'acces', 'access', 'code', 'fichier', 'fichiers', 'dossier', 'dossiers', 'test', 'tests', 'liste', 'affiche', 'courant', 'projet', 'script', 'programme', 'application', 'app', 'truc', 'chose', 'faire', 'cree', 'creer', 'ecris', 'ecrire', 'corrige', 'aide', 'help']);
 
 /**
  * Skills à joindre AUTOMATIQUEMENT à une demande : seulement en cas de correspondance nette
@@ -225,8 +242,44 @@ export function autoSkills(list, query, max = 2) {
 // fragments techniques qui ne disent rien de la nature de la demande
 const TECH = new Set(['src', 'json', 'package', 'index', 'html', 'css', 'node', 'npm', 'calc', 'etape', 'etapes', 'mini', 'lance', 'lancer', 'fichier', 'courts', 'court', 'bouton', 'ajoute']);
 
-/** Un chemin est-il dans un dossier de skill découvert ? (lecture autorisée sans question) */
+/** Un chemin est-il dans un dossier de skills (un skill découvert, ou un dossier racine comme ~/.claude/skills) ? (lecture autorisée sans question) */
 export function isSkillPath(p, cwd) {
   const r = path.resolve(p).toLowerCase();
-  return discoverSkills(cwd, { all: true }).some(s => { const d = s.dir.toLowerCase(); return r === d || r.startsWith(d + path.sep); });
+  const inside = d => { d = path.resolve(d).toLowerCase(); return r === d || r.startsWith(d + path.sep); };
+  return discoverSkills(cwd, { all: true }).some(s => inside(s.dir)) || skillRoots(cwd).some(([d]) => inside(d) && fs.existsSync(d));
+}
+
+/**
+ * Catalogue de TOUS les skills actifs, envoyé une fois par conversation (comme la liste des skills de Claude Code) :
+ * le modèle choisit lui-même le guide utile et lit son SKILL.md avec read_file. Taille bornée (budget en caractères) :
+ * descriptions raccourcies, puis noms seuls si la liste est très longue.
+ */
+export function skillCatalog(list, { budget = 24000 } = {}) {
+  if (!list?.length) return null;
+  const cut = (t, n) => { t = String(t || '').replace(/\s+/g, ' ').trim(); if (!n) return ''; if (t.length <= n) return t; const s = t.slice(0, n); const i = s.lastIndexOf(' '); return (i > n * 0.6 ? s.slice(0, i) : s).replace(/[\s,;:.—-]+$/, '') + '…'; };
+  // regroupés par dossier : « <dossier>\<nom>\SKILL.md » n'est écrit qu'une fois ; les autres emplacements sont donnés en entier
+  const groups = new Map(), others = [];
+  for (const s of list) {
+    const std = s.root && samePath(path.dirname(s.dir), s.root) && path.basename(s.dir).toLowerCase() === s.name.toLowerCase();
+    if (std) { if (!groups.has(s.root)) groups.set(s.root, []); groups.get(s.root).push(s); } else others.push(s);
+  }
+  const build = (n, max = Infinity) => {
+    let shown = 0;
+    const line = s => (shown++ < max ? [`- ${s.name}${n ? (s.description ? ' — ' + cut(s.description, n) : '') : ''}`] : []);
+    const out = [];
+    for (const [root, items] of groups) { const l = items.flatMap(line); if (l.length) out.push(`Dans ${root}${path.sep}<nom>${path.sep}SKILL.md :`, ...l); }
+    const o = others.flatMap(s => (shown++ < max ? [`- ${s.name} (${s.file})${n && s.description ? ' — ' + cut(s.description, n) : ''}`] : []));
+    if (o.length) out.push('Autres emplacements :', ...o);
+    if (list.length > max) out.push(`[… et ${list.length - max} autres]`);
+    return out.join('\n');
+  };
+  const head = `[Guides (skills) de l'utilisateur sur ce PC : ${list.length} fichiers SKILL.md, chacun décrit une méthode pour un type de tâche. `
+    + `Quand l'un d'eux correspond à une demande, lis son SKILL.md avec read_file avant de commencer et applique-le (ses autres fichiers sont dans le même dossier) ; `
+    + `sinon ignore cette liste. Ces dossiers se lisent sans demander d'accord.`;
+  let body = '';
+  for (const n of [110, 80, 50, 0]) { body = build(n); if (head.length + body.length <= budget) break; }
+  if (head.length + body.length > budget) { let max = list.length; while (max > 10 && head.length + body.length > budget) { max = Math.floor(max * 0.8); body = build(0, max); } }
+  const text = `${head}\n${body}]`;
+  let h = 0; for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0;
+  return { text, count: list.length, sig: 'cat-' + (h >>> 0).toString(36) };
 }

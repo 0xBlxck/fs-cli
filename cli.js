@@ -32,7 +32,7 @@ import { checkUpdate, INSTALL_CMD } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
 import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
-import { discoverMcpServers, discoverSkills, autoSkills } from './src/discover.js';
+import { discoverMcpServers, discoverSkills, autoSkills, skillCatalog } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
 import { stripEditorContext } from './src/editor-context.js';
@@ -599,7 +599,7 @@ async function command(line) {
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
       setProjectOnce(undefined); S.projectName = undefined;
-      S.chatId = null; S.toolsHintSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      S.chatId = null; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
@@ -976,6 +976,8 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (cfg.engine === 'native') {                                     // MCP et skills du PC : annoncés à toute conversation qui ne les a pas encore vus (y compris après /resume)
       const prefs = workPreferences();                                // préférences de forme seulement (pas de protocole d'outils dans le texte)
       if (prefs.sig !== S.toolsHintSig) { message += '\n\n' + prefs.text; S.toolsHintSig = prefs.sig; }
+      const cat = skillCatalog(discoverSkills(S.cwd));            // tous les skills actifs, annoncés une fois par conversation : le modèle choisit et lit le SKILL.md utile
+      if (cat && cat.sig !== S.skillsCatSig) { message += '\n\n' + cat.text; S.skillsCatSig = cat.sig; println(c.dim(`  ＋ ${cat.count} skills disponibles`)); }
       for (const name of mentionedServers(S.cwd, text)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
@@ -1040,7 +1042,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
   } catch (e) {
     if (/Chat not found/i.test(e.message || '') && S.chatId) {        // conversation supprimée du site entre-temps : on repart sur une neuve
       markSessionsGone([S.chatId]);
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
       println(c.yellow('  cette conversation a été supprimée du site : ton message part dans une nouvelle conversation'));
       turnAbort = null;
       return chatTurn(text, { keepLast: true });
@@ -1050,7 +1052,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
       println(c.yellow('\n  ⚠ France Student a verrouillé cette conversation : le filtre de sécurité du fournisseur du modèle l\'a signalée. Elle ne peut plus être utilisée.'));
       println(c.dim('    Ton prochain message partira dans une nouvelle conversation (rien n\'y est recopié).'));
       if (isBroadFolder(S.cwd)) println(c.dim('    Conseil : ton dossier de travail est ton dossier personnel ; choisis plutôt le dossier du projet (📁 en bas du panneau, ou /cd) : le modèle y voit moins de fichiers sans rapport.'));
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.pendingSummary = null; S.compactedFrom = null;
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.pendingSummary = null; S.compactedFrom = null;
       turnAbort = null;
       return;
     }
@@ -1060,7 +1062,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
       println(c.dim('    Ton message repart dans une nouvelle conversation, avec la fin de celle-ci comme contexte.'));
       let recap = '';
       try { recap = transcriptOf(await fetchChat(old)).slice(-10).map(m => `${m.role === 'user' ? 'Utilisateur' : 'Assistant'} : ${m.text.slice(0, 1500)}`).join('\n\n'); } catch {}
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
       S.pendingSummary = recap ? `Derniers échanges de la conversation précédente (devenue inutilisable à cause d'une erreur du serveur) :\n${recap}` : null;
       S.compactedFrom = null;
       turnAbort = null;
@@ -1221,7 +1223,7 @@ if (opts.stdio) {                                                    // commande
   input.on('skillsOpen', () => stdioSend('skills', skillsPayload()));
   input.on('skillToggle', (kind, name) => {
     if (kind === 'fs') { const set = new Set(cfg.skills); if (set.has(name)) set.delete(name); else set.add(name); cfg.skills = [...set]; }
-    else { const n = name.toLowerCase(), set = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase())); if (set.has(n)) set.delete(n); else set.add(n); cfg.disabledSkills = [...set]; S.toolsHintSig = ''; }
+    else { const n = name.toLowerCase(), set = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase())); if (set.has(n)) set.delete(n); else set.add(n); cfg.disabledSkills = [...set]; S.toolsHintSig = ''; S.skillsCatSig = ''; }
     saveCfg(); stdioSend('skills', skillsPayload());
   });
   input.on('historyOpen', async () => {
@@ -1246,7 +1248,7 @@ if (opts.stdio) {                                                    // commande
     markSessionsGone([chatId]);
     remoteCache = remoteCache.filter(r => r.chatId !== chatId);
     if (S.chatId === chatId) {                                         // c'était la conversation ouverte : page vierge
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.title = ''; S.sid = newSid();
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.title = ''; S.sid = newSid();
       stdioSend('clear'); refreshPrompt();
     }
     stdioSend('flash', { text: `conversation « ${name} » supprimée` });
