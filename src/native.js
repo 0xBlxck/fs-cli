@@ -96,8 +96,15 @@ async function takeDocuments(S, docs, io) {
 }
 
 /** Tour complet : message → (appels d'outils → résultats)* → réponse finale */
+/** modèle OpenAI (GPT) ? fournisseur connu via /chats/agents (S.providers), sinon d'après l'identifiant (Claude = -2xxx) */
+export const isOpenAiModel = (S, id = S.agentId) => {
+  const p = S.providers?.[String(id)];
+  return p ? p === 'openai' : !(Number(id) <= -2000 && Number(id) > -3000);
+};
+
 export async function runNative(S, userText, opts) {
   const { signal, ask, stream = streamChat, ctxPct = contextPercent } = opts;
+  const firstTurn = !S.chatId;                                         // 1er message d'une conversation (pour la récupération des refus)
   let content = userText;
   if (S.notes.length) { content = `[${S.notes.join(' ')}]\n${content}`; S.notes = []; }
   S.sid ||= newSid();
@@ -212,6 +219,14 @@ export async function runNative(S, userText, opts) {
   if (cfg.sound && secs > 3) process.stdout.write('\x07');
   if (hitLimit) ui.println(c.yellow(`  ⚠ limite de ${maxSteps} étapes atteinte — tape /continue pour poursuivre`));
   if (recover && stage === 0) {
+    // GPT qui refuse dès le 1er message : la précision dans la même conversation échoue souvent (le refus reste dans l'historique).
+    // Testé en vrai : la MÊME demande, seule, dans une conversation neuve, passe. Coût : 1 conversation (limite de 50 par jour).
+    const bare = typeof opts.bare === 'string' ? opts.bare.trim() : '';
+    if (firstTurn && bare && bare !== String(userText).trim() && isOpenAiModel(S)) {
+      ui.println(c.dim('  ↻ le modèle a refusé dès le 1er message : nouvel essai dans une conversation neuve, avec ta demande seule (sans les infos ajoutées par FS-CLI)'));
+      S.chatId = null; S.ctxSent = true; S.toolsHintSig = 'bare'; S.skillsCatSig = 'bare';   // cette conversation-là ne reçoit rien d'autre que tes messages
+      return runNative(S, bare, { ...opts, bare: null, _recover: 1, _orig: bare });
+    }
     ui.println(c.dim('  ↻ le modèle a cru ne pas avoir le droit d\'utiliser les outils : FS-CLI lui précise que ce sont les outils officiels de France Student'));
     return runNative(S, CLARIFY, { ...opts, _recover: 1, _orig: userText });
   }

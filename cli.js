@@ -32,12 +32,13 @@ import { checkUpdate, INSTALL_CMD } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
 import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
-import { discoverMcpServers, discoverSkills, autoSkills, skillCatalog } from './src/discover.js';
+import { discoverMcpServers, discoverSkills, autoSkills, skillIndex } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
 import { stripEditorContext } from './src/editor-context.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow } from './src/extra-commands.js';
 import { WHATS_NEW, latestNews } from './src/whatsnew.js';
+import { isOpenAiModel } from './src/native.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
 import { fetchChat, isBrokenHistory, isLockedChat } from './src/api.js';
@@ -1107,8 +1108,13 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (cfg.engine === 'native') {                                     // MCP et skills du PC : annoncés à toute conversation qui ne les a pas encore vus (y compris après /resume)
       const prefs = workPreferences();                                // préférences de forme seulement (pas de protocole d'outils dans le texte)
       if (prefs.sig !== S.toolsHintSig) { message += '\n\n' + prefs.text; S.toolsHintSig = prefs.sig; }
-      const cat = skillCatalog(discoverSkills(S.cwd));            // tous les skills actifs, annoncés une fois par conversation : le modèle choisit et lit le SKILL.md utile
-      if (cat && cat.sig !== S.skillsCatSig) { message += '\n\n' + cat.text; S.skillsCatSig = cat.sig; println(c.dim(`  ＋ ${cat.count} skills disponibles`)); }
+      // skills : UNE ligne qui renvoie à l'index des skills actifs (fichier sur le PC), une fois par conversation et quand la liste change.
+      // La liste complète dans la conversation faisait refuser GPT (« moteur d'un agent externe ») et coûtait ≈ 6 500 tokens rejoués à chaque message.
+      // GPT (testé en vrai le 17/11) refuse encore parfois avec la seule ligne : pour GPT, elle ne part que si tu parles toi-même de skills/guides
+      // (/nom-du-skill marche toujours). Claude s'en sert sans problème (il ouvre l'index puis le bon guide).
+      const skillsOk = !isOpenAiModel(S) || /\b(skills?|guides?)\b/i.test(text);
+      const cat = skillsOk ? skillIndex(discoverSkills(S.cwd), S.cwd) : null;
+      if (cat && cat.sig !== S.skillsCatSig) { message += '\n\n' + cat.text; S.skillsCatSig = cat.sig; println(c.dim(`  ＋ ${cat.count} skills disponibles (liste ouverte par le modèle si besoin)`)); }
       for (const name of mentionedServers(S.cwd, text)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
@@ -1145,7 +1151,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);   // provisoire : remplacé par le titre de France Student dès qu'il est connu
     try {
       const agentBefore = S.agentId, turnT0 = Date.now();
-      await runAgent(S, message, { signal: turnAbort.signal, ask });
+      await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text });   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
       if (cfg.webhook) {                                               // fin de demande → webhook (CI, notifications) : jamais de jeton ni de contenu de fichier
         const mark = (S.turnMarks || []).at(-1);
         const files = mark && S.undo.length > mark.at ? summarizeChanges(S.undo, mark.at).map(f => ({ file: path.relative(S.cwd, f.path), added: f.added, removed: f.removed, created: !!f.created, deleted: !!f.deleted })) : [];
@@ -1671,6 +1677,7 @@ if (opts.stdio) banner();                                              // pannea
 requestJson('GET', '/chats/agents').then(r => {                      // fournisseur + taille de contexte : seuil de résumé adapté au modèle, sélecteur du panneau
   if (!Array.isArray(r?.data)) return;
   S.ctxWindows = Object.fromEntries(r.data.map(a => [String(a.id), Number(a.contextWindow) || 0]));
+  S.providers = Object.fromEntries(r.data.map(a => [String(a.id), String(a.modelProvider || '').toLowerCase()]));   // openai / anthropic : certains réglages dépendent du fournisseur (refus de GPT)
   if (!opts.stdio) return;
   stdioSend('models', { models: r.data.filter(a => a && a.isActive !== false).map(a => ({ id: String(a.id), name: a.name, provider: String(a.modelProvider || ''), contextWindow: Number(a.contextWindow) || null })) });
 }).catch(() => {});

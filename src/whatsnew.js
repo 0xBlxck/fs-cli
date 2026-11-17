@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.45.0', items: [
+    'GPT ne refuse plus de travailler (« moteur d\'un agent externe ») : 1er message allégé',
+    'Skills : la liste est ouverte par le modèle quand il en a besoin (≈ 6 500 tokens de moins)',
+    'Si GPT refuse quand même : nouvel essai tout seul dans une conversation neuve',
+  ] },
   { version: '3.44.1', items: [
     'Skills : plus de skill hors sujet joint par mot-clé, le modèle choisit d\'après les descriptions',
   ] },

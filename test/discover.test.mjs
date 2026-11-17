@@ -132,3 +132,20 @@ test('skills automatiques : chemins ignorés, skill d\'audit seulement si on dem
   assert.ok(!names('C:\Users\moi\Downloads\HTML SITE team ameliore un peu mon site').includes('web-design-guidelines'));
   assert.ok(names('audit l\'accessibilité de mon site web').includes('web-design-guidelines'));
 });
+
+test('index des skills (v3.45) : UNE ligne dans la conversation (sans nom d\'outil), la liste complète dans un fichier lisible sans confirmation', () => {
+  const list = d.discoverSkills(proj, { refresh: true });
+  const idx = d.skillIndex(list, proj);
+  assert.ok(idx && idx.count === 2);
+  assert.ok(!idx.text.includes('\n') && idx.text.length < 400, 'une seule ligne courte');
+  assert.doesNotMatch(idx.text, /read_file|run_command|sans demander|outil/i, 'rien qui ressemble à un protocole d\'outils (refus de GPT)');
+  assert.ok(idx.text.includes(idx.file));
+  const content = fs.readFileSync(idx.file, 'utf8');
+  assert.match(content, /site-web — Créer un beau site web/);
+  assert.match(content, /excel — Tableurs et formules avancées/);
+  assert.ok(d.isSkillPath(idx.file, proj), 'l\'index se lit sans confirmation');
+  const again = d.skillIndex(list, proj);
+  assert.equal(again.sig, idx.sig, 'même liste → même signature (pas de nouvel envoi)');
+  assert.notEqual(d.skillIndex(list, path.join(tmp, 'autre-projet')).file, idx.file, 'un index par dossier de travail');
+  assert.equal(d.skillIndex([], proj), null);
+});

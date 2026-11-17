@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { cfg } from './config.js';
+import { cfg, HOME_DIR } from './config.js';
 
 /** Dossier personnel exploré (désactivé dans les tests, sauf FS_IMPORT_HOME explicite). */
 export function importHome() {
@@ -246,7 +246,32 @@ const TECH = new Set(['src', 'json', 'package', 'index', 'html', 'css', 'node', 
 export function isSkillPath(p, cwd) {
   const r = path.resolve(p).toLowerCase();
   const inside = d => { d = path.resolve(d).toLowerCase(); return r === d || r.startsWith(d + path.sep); };
-  return discoverSkills(cwd, { all: true }).some(s => inside(s.dir)) || skillRoots(cwd).some(([d]) => inside(d) && fs.existsSync(d));
+  return inside(SKILL_INDEX_DIR()) || discoverSkills(cwd, { all: true }).some(s => inside(s.dir)) || skillRoots(cwd).some(([d]) => inside(d) && fs.existsSync(d));
+}
+
+const SKILL_INDEX_DIR = () => path.join(HOME_DIR, 'skills-index');
+const hash36 = text => { let h = 0; for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+
+/**
+ * Liste des skills À LA DEMANDE (v3.45) : la liste complète est écrite dans un fichier d'index sur le PC, et la conversation
+ * ne reçoit qu'UNE ligne qui y renvoie (≈ 90 tokens au lieu de ≈ 6 500, rejoués à chaque message par France Student).
+ * Testé en vrai le 17/11/2026 : avec la liste complète dans la conversation, GPT-6 Astra refusait de travailler
+ * (« ne peut pas servir de moteur à un agent externe », 3 essais sur 3, même reformulée) ; avec cette ligne, aucun refus
+ * (Astra, Luna, Terra, Sonnet) et le modèle ouvre l'index quand la demande peut en avoir besoin.
+ * Un index par dossier de travail (les skills du projet en font partie) ; fichier réécrit seulement s'il change ;
+ * lisible sans confirmation (isSkillPath). → { text, count, file, sig } ou null s'il n'y a aucun skill.
+ */
+export function skillIndex(list, cwd = '') {
+  const cat = skillCatalog(list, { budget: Infinity, bodyOnly: true });
+  if (!cat) return null;
+  const file = path.join(SKILL_INDEX_DIR(), `${hash36(path.resolve(cwd || '.').toLowerCase())}.md`);
+  const content = `# Mes guides (skills)\n\n${cat.text}\n`;
+  try {
+    let cur = null; try { cur = fs.readFileSync(file, 'utf8'); } catch {}
+    if (cur !== content) { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, content, { mode: 0o600 }); }
+  } catch { return null; }                                            // index impossible à écrire : rien n'est annoncé (pas de lien mort)
+  const text = `Mes guides de travail (skills, un SKILL.md par type de tâche) sont listés dans ${file} : si ma demande pourrait en avoir besoin, ouvre cette liste pour choisir le bon guide.`;
+  return { text, count: cat.count, file, sig: 'idx-' + hash36(text + '|' + hash36(content)) };
 }
 
 /**
@@ -254,7 +279,7 @@ export function isSkillPath(p, cwd) {
  * le modèle choisit lui-même le guide utile et lit son SKILL.md avec read_file. Taille bornée (budget en caractères) :
  * descriptions raccourcies, puis noms seuls si la liste est très longue.
  */
-export function skillCatalog(list, { budget = 24000 } = {}) {
+export function skillCatalog(list, { budget = 24000, bodyOnly = false } = {}) {
   if (!list?.length) return null;
   const cut = (t, n) => { t = String(t || '').replace(/\s+/g, ' ').trim(); if (!n) return ''; if (t.length <= n) return t; const s = t.slice(0, n); const i = s.lastIndexOf(' '); return (i > n * 0.6 ? s.slice(0, i) : s).replace(/[\s,;:.—-]+$/, '') + '…'; };
   // regroupés par dossier : « <dossier>\<nom>\SKILL.md » n'est écrit qu'une fois ; les autres emplacements sont donnés en entier
@@ -276,6 +301,7 @@ export function skillCatalog(list, { budget = 24000 } = {}) {
   const head = `[Guides (skills) de l'utilisateur sur ce PC : ${list.length} fichiers SKILL.md, chacun décrit une méthode pour un type de tâche. `
     + `Quand l'un d'eux correspond vraiment au SUJET d'une demande (pas seulement un mot en commun), lis son SKILL.md avec read_file avant de commencer et applique-le (ses autres fichiers sont dans le même dossier) ; `
     + `sinon ignore cette liste. Ces dossiers se lisent sans demander d'accord.`;
+  if (bodyOnly) { const text = build(110); return { text, count: list.length, sig: 'cat-' + hash36(text) }; }   // contenu du fichier d'index (skillIndex)
   let body = '';
   for (const n of [110, 80, 50, 0]) { body = build(n); if (head.length + body.length <= budget) break; }
   if (head.length + body.length > budget) { let max = list.length; while (max > 10 && head.length + body.length > budget) { max = Math.floor(max * 0.8); body = build(0, max); } }

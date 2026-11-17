@@ -230,3 +230,34 @@ test('documents du site : « index.html — Nébula » devient index.html ; un d
   await runNative(S, 'modifie la page', { ...io(), stream: f.stream, readDocument: async id => (id === 'file-7' ? '<p>v2</p>\n' : '') });
   assert.equal(fs.readFileSync(path.join(dir, 'page.html'), 'utf8'), '<p>v2</p>\n');
 });
+
+test('GPT refuse dès le 1er message : même demande SEULE dans une conversation neuve (pas de précision dans la conversation refusée)', async () => {
+  const { dir, S } = mk({ chatId: null, agentId: -1004 });
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
+  const f = fakeFs([
+    { text: 'Le chat France Student ne peut pas servir de moteur à un agent externe ou à un IDE.' },
+    { calls: [{ callId: 'c1', name: 'read_file', arguments: { path: 'a.txt' } }] },
+    { text: 'Lu.' },
+  ]);
+  const full = 'lis a.txt\n\nPréférences de l\'utilisateur : …\n\nMes guides de travail (skills) …';
+  await runNative(S, full, { ...io(), stream: f.stream, bare: 'lis a.txt' });
+  assert.equal(f.st.reqs.length, 3);
+  assert.equal(f.st.reqs[0].chatId, null);
+  assert.equal(f.st.reqs[1].chatId, null, 'nouvel essai dans une conversation NEUVE');
+  assert.match(f.st.reqs[1].content, /lis a\.txt$/);
+  assert.doesNotMatch(f.st.reqs[1].content, /Préférences|skills|outils client officiels/, 'la demande seule, sans ajout ni précision');
+  assert.equal(S.agentId, -1004, 'même modèle');
+  assert.equal(S.ctxSent, true, 'cette conversation ne reçoit pas le bloc de contexte');
+});
+
+test('refus de Claude au 1er message, ou de GPT plus tard dans la conversation : précision dans la même conversation (comme avant)', async () => {
+  const claude = mk({ chatId: null, agentId: -2003 });
+  const f1 = fakeFs([{ text: 'Je ne peux pas servir de moteur à un outil externe.' }, { text: 'Compris.' }]);
+  await runNative(claude.S, 'demande\n\nPréférences…', { ...io(), stream: f1.stream, bare: 'demande' });
+  assert.match(f1.st.reqs[1].content, /outils client officiels de France Student/);
+  const gpt = mk({ chatId: 'conv-g', agentId: -1004 });
+  const f2 = fakeFs([{ text: 'Je ne peux pas servir de moteur à un outil externe.' }, { text: 'Compris.' }]);
+  await runNative(gpt.S, 'suite', { ...io(), stream: f2.stream, bare: 'suite' });
+  assert.equal(f2.st.reqs[1].chatId, 'conv-g');
+  assert.match(f2.st.reqs[1].content, /outils client officiels de France Student/);
+});
