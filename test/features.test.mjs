@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fakeStreams } from './term-sim.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-feat-'));
@@ -314,7 +315,7 @@ test('modèles rangés du plus puissant au moins puissant, groupés par fourniss
     '-2001': 'Claude Opus 5.5', '-2002': 'Claude Haiku 5.5', '-2003': 'Claude Sonnet 5.5', '-2005': 'Claude Fable 5.2' };
   assert.deepEqual(sortedModelIds(agents).map(id => agents[id]), ['Claude Fable 5.2', 'Claude Opus 5.5', 'Claude Sonnet 5.5', 'Claude Haiku 5.5',
     'GPT-6 Astra', 'GPT 6.1 Sol', 'GPT-6.1 Terra', 'GPT 6 Sol', 'GPT 6 Luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
-  const panel = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'vscode', 'media', 'panel.js'), 'utf8');
+  const panel = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'vscode', 'media', 'panel.js'), 'utf8');
   assert.match(panel, /\['fable', 'opus', 'sonnet', 'haiku'\]/, 'le panneau suit la même règle');
   assert.match(panel, /\['astra', 'sol', 'terra', 'luna'\]/);
 });
@@ -327,7 +328,7 @@ test('conversation bloquée par France Student (élément de l\'historique refus
   assert.equal(isBrokenHistory(new Error('Erreur du serveur: 429 Too Many Requests')), false);
   assert.equal(isBrokenHistory(new Error('Chat not found with id x')), false);
   assert.equal(isBrokenHistory(null), false);
-  const cli = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'cli.js'), 'utf8');
+  const cli = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli.js'), 'utf8');
   assert.match(cli, /isBrokenHistory\(e\) && S\.chatId && !S\.recovering/, 'une seule reprise automatique (pas de boucle)');
 });
 
@@ -340,7 +341,7 @@ test('contexte de l\'éditeur retiré du message (repère « Revenir ici », mes
 });
 
 test('horloge : la croix « ✕ » supprime une conversation seulement après confirmation (« Annuler » par défaut)', () => {
-  const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..');
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const cli = fs.readFileSync(path.join(root, 'cli.js'), 'utf8'), panel = fs.readFileSync(path.join(root, 'vscode', 'media', 'panel.js'), 'utf8');
   const h = cli.slice(cli.indexOf("input.on('deleteChat'"), cli.indexOf("input.on('folderPicked'"));
   assert.match(h, /options: \['Supprimer définitivement', 'Annuler'\], defaultIndex: 1/);
@@ -350,7 +351,7 @@ test('horloge : la croix « ✕ » supprime une conversation seulement après co
 });
 
 test('onglet « Projets » : « Nouvelle conversation dans ce projet » ne vaut que pour cette conversation (le défaut ne change pas)', () => {
-  const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..');
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const cli = fs.readFileSync(path.join(root, 'cli.js'), 'utf8'), api = fs.readFileSync(path.join(root, 'src', 'api.js'), 'utf8');
   const h = cli.slice(cli.indexOf("input.on('projectUse'"), cli.indexOf("input.on('resumeChat'"));
   assert.doesNotMatch(h, /cfg\.fsProject\s*=/, 'le projet par défaut n\'est pas modifié');
@@ -377,7 +378,7 @@ test('mode « tout autoriser » : plus aucune confirmation, mais les commandes c
   const cfgUrl = new URL('../src/config.js', import.meta.url).href;
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const { cfg } = await import(${JSON.stringify(cfgUrl)}); console.log(cfg.mode);`], { env: { ...process.env, FS_CLI_HOME: home }, encoding: 'utf8' });
   assert.equal(r.stdout.trim(), 'auto', 'au redémarrage, retour en auto');
-  const panel = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'vscode', 'media', 'panel.js'), 'utf8');
+  const panel = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'vscode', 'media', 'panel.js'), 'utf8');
   assert.match(panel, /label: '⚠ Tout autoriser…'/);
   assert.match(panel, /text: '\/mode tout'/, 'activation par la commande (avec confirmation), jamais directement');
 });

@@ -3,6 +3,7 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -142,7 +143,7 @@ test('sans sink à événements (terminal) : aucun événement, rien ne casse', 
 });
 
 test('panneau : chaque événement d\'équipe est traité, l\'extension annonce la vue « Agents »', () => {
-  const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..');
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const panel = fs.readFileSync(path.join(root, 'vscode/media/panel.js'), 'utf8');
   for (const t of AGENT_EV) assert.ok(panel.includes(`case '${t}'`), `le panneau ne traite pas « ${t} »`);
   assert.match(fs.readFileSync(path.join(root, 'vscode/extension.js'), 'utf8'), /FS_CLI_PANEL_FEATURES: 'agents'/);

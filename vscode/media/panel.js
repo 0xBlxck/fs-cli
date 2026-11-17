@@ -1016,7 +1016,7 @@
     if (!d) { list.append(h('div', 'mnote', 'Chargement…')); return; }
     const q = SK.filter.value.trim().toLowerCase();
     const items = (d[SK.tab] || []).filter(x => !q || x.name.toLowerCase().includes(q) || String(x.label || '').toLowerCase().includes(q) || String(x.description || '').toLowerCase().includes(q));
-    if (SK.tab === 'skills') list.append(h('div', 'mnote', 'Tous les skills actifs sont annoncés au modèle, qui lit celui qu'il lui faut ; ou appelle-les avec /nom. Désactivé = jamais envoyé.'));
+    if (SK.tab === 'skills') list.append(h('div', 'mnote', 'Tous les skills actifs sont annoncés au modèle, qui lit celui qu\'il lui faut ; ou appelle-les avec /nom. Désactivé = jamais envoyé.'));
     if (SK.tab === 'commands' && !items.length && !q) list.append(h('div', 'mnote', 'Aucune commande perso. Crée un fichier ma-commande.md dans .fs-cli/commands/ (ou ~/.fs-cli/commands/) : il devient /ma-commande. Tes commandes de Claude Code (.claude/commands/) marchent aussi.'));
     if (SK.tab === 'fs') list.append(h('div', 'mnote', 'Compétences de France Student : celles activées sont jointes au début de chaque conversation.'));
     if (!items.length && q) list.append(h('div', 'mnote', 'Rien ne correspond.'));
