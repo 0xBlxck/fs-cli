@@ -10,6 +10,7 @@ import { c, taskLine } from '../ui.js';
 const TIPS = ['fais-moi un site de café avec plusieurs agents', 'corrige le bug dans script.js', 'ouvre quick.fr dans le navigateur', 'retiens que je code en TypeScript', 'explique ce projet', 'ajoute des tests', 'refais le design de index.html', 'combien de conversations il me reste ?'];
 
 const MODE_LABEL = {
+  bypass: ['⚠ tout autoriser', 'aucune confirmation (session)'],
   auto: ['⏵⏵ auto', 'exécution automatique'],
   edits: ['⏵ modifs auto', 'fichiers modifiés sans demander, commandes confirmées'],
   ask: ['⏸ confirmer', 'confirmation à chaque action'],

@@ -133,6 +133,7 @@ export async function confirm(ask, { title, detail, danger, allowAlways = false,
 }
 
 export function needsConfirm(risk, S) {
+  if (cfg.mode === 'bypass') return false;                         // « tout autoriser » (session seulement) : aucune confirmation ; les commandes catastrophiques restent refusées plus haut
   if (risk.danger || risk.protectedPath || risk.secrets) return true;
   if (risk.kind === 'read' || risk.kind === 'net') return false;
   if (cfg.mode === 'auto') return false;

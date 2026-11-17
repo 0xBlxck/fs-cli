@@ -17,7 +17,7 @@
     neu: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M13.5 8.5V13a1 1 0 01-1 1H3a1 1 0 01-1-1V3.5a1 1 0 011-1h4.5"/><path d="M11 2.5l2.5 2.5L8 10.5H5.5V8z"/></svg>',
     ctx: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" width="12" height="12"><rect x="2.5" y="4.5" width="8" height="9" rx="1"/><path d="M5.5 4.5V3a.5.5 0 01.5-.5h7a.5.5 0 01.5.5v8a.5.5 0 01-.5.5h-2.5"/></svg>',
   };
-  const MODE_UI = { auto: '⚡ Auto', edits: '✎ Modifs auto', ask: '✋ Confirmer', plan: '◇ Plan' };
+  const MODE_UI = { auto: '⚡ Auto', edits: '✎ Modifs auto', ask: '✋ Confirmer', plan: '◇ Plan', bypass: '⚠ Tout autoriser' };
   const CMD_DESC = {
     '/new': 'nouvelle conversation', '/resume': 'reprendre une conversation', '/model': 'changer de modèle', '/mode': 'changer de mode',
     '/plan': 'une demande en lecture seule', '/changes': 'fichiers modifiés : diff, annuler', '/rewind': 'revenir avant une demande', '/undo': 'annuler la dernière modification',
@@ -530,7 +530,9 @@
   function modeMenu() {
     if (S.menu && !S.menu.filter) return closeMenu();
     const modes = S.modes.length ? S.modes : Object.keys(MODE_UI).map(id => ({ id }));
-    openMenu(modes.map(m => ({ label: MODE_UI[m.id] || m.id, desc: (m.desc || '').replace(/^mode [^:]+:\s*/, ''), id: m.id, cur: m.id === S.status.mode })), it => post({ type: 'setMode', mode: it.id }));
+    const items = modes.map(m => ({ label: MODE_UI[m.id] || m.id, desc: (m.desc || '').replace(/^mode [^:]+:\s*/, ''), id: m.id, cur: m.id === S.status.mode }));
+    items.push({ label: '⚠ Tout autoriser…', desc: 'aucune confirmation, pour cette session (risqué)', id: 'bypass', cur: S.status.mode === 'bypass' });
+    openMenu(items, it => it.id === 'bypass' ? (S.status.mode !== 'bypass' && post({ type: 'command', text: '/mode tout' })) : post({ type: 'setMode', mode: it.id }));
   }
   function cycleMode() {
     const ids = (S.modes.length ? S.modes.map(m => m.id) : Object.keys(MODE_UI));

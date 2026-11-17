@@ -357,3 +357,27 @@ test('onglet « Projets » : « Nouvelle conversation dans ce projet » ne vaut 
   assert.match(h, /setProjectOnce\(/);
   assert.match(api, /if \(projectOnce !== undefined\) \{ const p = projectOnce; projectOnce = undefined;/, 'utilisé une seule fois');
 });
+
+test('mode « tout autoriser » : plus aucune confirmation, mais les commandes catastrophiques restent refusées ; jamais conservé au redémarrage', async () => {
+  const { needsConfirm } = await import('../src/agent.js');
+  const { judgeCommand, decide } = await import('../src/permissions.js');
+  const { cfg } = await import('../src/config.js');
+  const prev = cfg.mode;
+  try {
+    cfg.mode = 'bypass';
+    assert.equal(needsConfirm({ kind: 'exec', danger: 'suppression récursive' }, { allow: {} }), false);
+    assert.equal(needsConfirm({ kind: 'write', protectedPath: '.env' }, { allow: {} }), false);
+    assert.equal(decide(judgeCommand('format C: /q /y', { cwd: process.cwd() }), process.cwd()).action, 'refuse', 'formater un disque : toujours refusé');
+    cfg.mode = 'auto';
+    assert.equal(needsConfirm({ kind: 'exec', danger: 'suppression récursive' }, { allow: {} }), true);
+  } finally { cfg.mode = prev; }
+  const { spawnSync } = await import('node:child_process');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-bypass-'));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ mode: 'bypass' }));
+  const cfgUrl = new URL('../src/config.js', import.meta.url).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const { cfg } = await import(${JSON.stringify(cfgUrl)}); console.log(cfg.mode);`], { env: { ...process.env, FS_CLI_HOME: home }, encoding: 'utf8' });
+  assert.equal(r.stdout.trim(), 'auto', 'au redémarrage, retour en auto');
+  const panel = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'vscode', 'media', 'panel.js'), 'utf8');
+  assert.match(panel, /label: '⚠ Tout autoriser…'/);
+  assert.match(panel, /text: '\/mode tout'/, 'activation par la commande (avec confirmation), jamais directement');
+});

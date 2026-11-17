@@ -55,6 +55,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '-c' || a === '--continue') opts.cont = true;
   else if (a === '-m' || a === '--model') opts.model = argv[++i];
   else if (a === '--max-turns') opts.maxTurns = parseInt(argv[++i], 10);   // -p : nombre d'étapes max pour cette exécution
+  else if (a === '--dangerously-skip-permissions') opts.bypass = true;   // comme Claude Code : « tout autoriser » pour cette exécution
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--cwd') opts.cwd = argv[++i];
   else if (a === '--web') opts.web = true;
@@ -616,7 +617,8 @@ async function command(line) {
     }
     case '/mode': {
       const m = arg || (cfg.mode === 'auto' ? 'ask' : 'auto');
-      if (!MODES.includes(m)) return println(c.red('  usage: /mode auto|edits|ask|plan'));
+      if (/^(tout|bypass|yolo|tout-autoriser)$/i.test(m)) { await enableBypass(); return; }
+      if (!MODES.includes(m)) return println(c.red('  usage: /mode auto|edits|ask|plan|tout'));
       cfg.mode = m; saveCfg(); S.allow = {}; refreshPrompt();
       return println(c.dim(`  → ${MODE_DESC[m]}  ·  Maj+Tab pour changer`));
     }
@@ -1155,13 +1157,31 @@ async function runInput(text) {
 }
 
 const MODES = ['auto', 'edits', 'ask', 'plan'];
-const MODE_NAME = { auto: 'auto', edits: 'modifs auto', ask: 'confirmer', plan: 'plan' };
+const MODE_NAME = { auto: 'auto', edits: 'modifs auto', ask: 'confirmer', plan: 'plan', bypass: 'tout autoriser' };
 const MODE_DESC = {
   auto: "mode auto : tout s'exécute (confirmation seulement pour les actions dangereuses)",
   edits: 'mode modifs auto : fichiers modifiés sans demander, commandes confirmées',
   ask: 'mode confirmer : demande avant chaque écriture ou commande',
   plan: "mode plan : lecture seule, rien n'est exécuté",
+  bypass: "mode tout autoriser : rien n'est demandé, même les actions sensibles (les commandes catastrophiques restent bloquées) — jusqu'à la fermeture de FS-CLI",
 };
+/** « Tout autoriser » (comme le mode bypass de Claude Code) : jamais par erreur — confirmation explicite, pas dans un dossier trop large, session seulement */
+async function enableBypass({ silent = false } = {}) {
+  if (isBroadFolder(S.cwd)) { println(c.yellow(`  « Tout autoriser » est refusé dans ${S.cwd} : c'est un dossier trop large (disque entier ou dossier personnel). Choisis d'abord le dossier du projet (/cd, ou 📁 en bas du panneau).`)); return false; }
+  if (!silent) {
+    const detail = [
+      'Le modèle pourra lancer n\'importe quelle commande, et créer, modifier ou supprimer des fichiers — même hors du dossier de travail et les fichiers sensibles (.env, clés…) — sans rien te demander.',
+      'Restent toujours bloquées : les commandes catastrophiques (formater un disque, effacer le système…).',
+      'Valable jusqu\'à la fermeture de FS-CLI. À utiliser seulement dans le dossier d\'un projet sauvegardé (git) : /rewind annule les modifications de fichiers, pas les effets des commandes.',
+    ].join('\n');
+    if (!(input.select && interactive)) { println(c.yellow('  « Tout autoriser » se confirme dans une session interactive (ou avec --dangerously-skip-permissions).')); return false; }
+    const idx = await input.select({ title: '⚠ Activer « Tout autoriser » pour cette session ?', detail, options: ['Activer pour cette session', 'Annuler'], defaultIndex: 1 });
+    if (idx !== 0) { println(c.dim('  mode inchangé')); return false; }
+  }
+  cfg.mode = 'bypass'; S.allow = {}; refreshPrompt();                 // pas de saveCfg : rien n'est conservé pour la prochaine session
+  println(c.red('  ⚠ mode tout autoriser : aucune confirmation jusqu\'à la fermeture de FS-CLI') + c.dim(' · Maj+Tab ou /mode auto pour en sortir'));
+  return true;
+}
 function cycleMode() {
   cfg.mode = MODES[(MODES.indexOf(cfg.mode) + 1) % MODES.length]; saveCfg(); S.allow = {};
   input.flash?.(MODE_DESC[cfg.mode]);
@@ -1464,6 +1484,7 @@ async function shutdown(code = 0, { quiet = false } = {}) {
 }
 
 // ── Lancement ─────────────────────────────────────────────────────────────────
+if (opts.bypass) await enableBypass({ silent: true });                   // --dangerously-skip-permissions (choisi explicitement à la ligne de commande)
 if (opts.print) {
   if (!initial) { console.log(c.red('  -p nécessite une demande')); process.exit(1); }
   await handleInput(initial);

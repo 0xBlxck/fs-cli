@@ -106,6 +106,7 @@ for (const k of ['FS_SESSION_TOKEN', 'FS_PASSWORD', 'FS_EMAIL', 'FS_SEARCH_API_K
 
 export const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '0.0.0'; } })();
 if (process.env.FS_AGENT_ID && !isNaN(parseInt(process.env.FS_AGENT_ID))) cfg.agentId = parseInt(process.env.FS_AGENT_ID);
+if (cfg.mode === 'bypass') cfg.mode = 'auto';                       // « tout autoriser » ne vaut que pour la session où il a été activé
 
 // ── Sessions ───────────────────────────────────────────────────────────────────
 export function loadSessions() {

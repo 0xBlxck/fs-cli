@@ -410,3 +410,6 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .prow .pdel { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--dim); cursor: pointer; opacity: 0; font-size: 11px; line-height: 18px; }
 .prow:hover .pdel { opacity: 1; }
 .prow .pdel:hover { color: var(--vscode-errorForeground, #f14c4c); background: var(--hover); }
+
+/* mode « tout autoriser » : bien visible */
+.pill.mode-bypass { color: var(--vscode-errorForeground, #f14c4c); font-weight: 600; }
