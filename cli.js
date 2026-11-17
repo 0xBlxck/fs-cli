@@ -1119,11 +1119,14 @@ async function chatTurn(text, { keepLast = false } = {}) {
         else if (pw.playwright?.args?.includes('--extension') && !chromeExtensionInstalled()) println(c.yellow('  ⚠ Mode « ton Chrome » sans l\'extension Playwright MCP Bridge : installe-la, ou tape /navigateur separe'));
       }
     }
-    if (!keepLast) {                                                   // skills choisis automatiquement pour cette demande (correspondance nette seulement)
+    if (!keepLast) {                                                   // skills joints à cette demande
       S.skillsSent ||= new Set();
       let budget = 20000;
       const forced = S.forceSkills || []; S.forceSkills = null;        // /nom-du-skill : joint en premier, même sans correspondance
-      for (const sk of [...forced, ...autoSkills(discoverSkills(S.cwd), text).filter(s => !forced.some(f => f.name === s.name))].filter(s => !S.skillsSent.has(s.name))) {
+      // moteur natif : le modèle a la liste de TOUS les skills avec leur description (catalogue) et choisit lui-même, comme Claude Code.
+      // La recherche par mots-clés n'y sert plus (faux positifs : « dev moi le site » → gmgn-dev-score) ; elle reste pour le moteur « chat » (secours).
+      const auto = cfg.engine === 'native' ? [] : autoSkills(discoverSkills(S.cwd), text);
+      for (const sk of [...forced, ...auto.filter(s => !forced.some(f => f.name === s.name))].filter(s => !S.skillsSent.has(s.name))) {
         if (!forced.some(f => f.name === sk.name)) {                    // choisi automatiquement : simple référence (le modèle le lit avec read_file s'il en a besoin)
           message += `\n\nGuide disponible pour cette demande : « ${sk.name} » — ${String(sk.description || '').replace(/\s+/g, ' ').slice(0, 240)} (fichier : ${sk.file} ; lis-le avec read_file seulement s'il t'aide).`;
           S.skillsSent.add(sk.name); println(c.dim(`  ＋ skill : ${sk.name}`)); continue;

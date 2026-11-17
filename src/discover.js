@@ -274,7 +274,7 @@ export function skillCatalog(list, { budget = 24000 } = {}) {
     return out.join('\n');
   };
   const head = `[Guides (skills) de l'utilisateur sur ce PC : ${list.length} fichiers SKILL.md, chacun décrit une méthode pour un type de tâche. `
-    + `Quand l'un d'eux correspond à une demande, lis son SKILL.md avec read_file avant de commencer et applique-le (ses autres fichiers sont dans le même dossier) ; `
+    + `Quand l'un d'eux correspond vraiment au SUJET d'une demande (pas seulement un mot en commun), lis son SKILL.md avec read_file avant de commencer et applique-le (ses autres fichiers sont dans le même dossier) ; `
     + `sinon ignore cette liste. Ces dossiers se lisent sans demander d'accord.`;
   let body = '';
   for (const n of [110, 80, 50, 0]) { body = build(n); if (head.length + body.length <= budget) break; }
