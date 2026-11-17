@@ -753,6 +753,26 @@ export function mcpTargets(home) {
   if (exists(claude)) t.push({ label: 'Claude Code', file: claude, kind: 'json', extra: { type: 'stdio' } });
   const codex = path.join(home, '.codex', 'config.toml');
   if (exists(codex) || exists(path.dirname(codex))) t.push({ label: 'Codex', file: codex, kind: 'toml' });
+  // formats vérifiés dans les documentations officielles (17/11/2026)
+  const cursor = path.join(home, '.cursor', 'mcp.json');                // Cursor : ~/.cursor/mcp.json → mcpServers
+  if (exists(path.dirname(cursor))) t.push({ label: 'Cursor', file: cursor, kind: 'json' });
+  const windsurf = path.join(home, '.codeium', 'windsurf', 'mcp_config.json');   // Windsurf → mcpServers
+  if (exists(path.dirname(windsurf))) t.push({ label: 'Windsurf', file: windsurf, kind: 'json' });
+  const gemini = path.join(g, 'settings.json');                       // Gemini CLI : seulement si sa config existe déjà
+  if (exists(gemini)) t.push({ label: 'Gemini CLI', file: gemini, kind: 'json' });
+  // Claude Desktop : chemin calculé depuis le dossier personnel visé (jamais %APPDATA% : les tests ne touchent jamais la vraie config)
+  const desk = process.platform === 'win32' ? path.join(home, 'AppData', 'Roaming', 'Claude')
+    : process.platform === 'darwin' ? path.join(home, 'Library', 'Application Support', 'Claude') : path.join(home, '.config', 'Claude');
+  if (exists(desk)) t.push({ label: 'Claude Desktop', file: path.join(desk, 'claude_desktop_config.json'), kind: 'json' });
+  // VS Code (Copilot, mode agent) : ~/.copilot/mcp-config.json → mcpServers { type: 'stdio', command, args, tools: ['*'] } (aussi lu par Copilot CLI)
+  const copilot = path.join(home, '.copilot');
+  if (exists(copilot) || exists(path.join(home, '.vscode'))) t.push({ label: 'VS Code (Copilot)', file: path.join(copilot, 'mcp-config.json'), kind: 'json', extra: { type: 'stdio' }, tail: { tools: ['*'] } });
+  // opencode : ~/.config/opencode/opencode.json(c) → mcp.servers.<nom> { type: 'local', command: [...] }
+  const oc = path.join(home, '.config', 'opencode');
+  if (exists(oc)) {
+    const jsonc = path.join(oc, 'opencode.jsonc'), json = path.join(oc, 'opencode.json');
+    t.push({ label: 'opencode', file: exists(json) || !exists(jsonc) ? json : jsonc, kind: 'opencode' });
+  }
   return t;
 }
 
@@ -786,13 +806,36 @@ function installJson(t, entry) {
     if (!j || typeof j !== 'object' || Array.isArray(j)) return { status: 'erreur', error: 'contenu inattendu (pas un objet JSON) : laissé tel quel' };
   }
   if (j.mcpServers !== undefined && (typeof j.mcpServers !== 'object' || j.mcpServers === null || Array.isArray(j.mcpServers))) return { status: 'erreur', error: '« mcpServers » n\'est pas un objet : laissé tel quel' };
-  const want = { ...(t.extra || {}), ...entry };
+  const want = { ...(t.extra || {}), ...entry, ...(t.tail || {}) };
   const had = j.mcpServers?.[SERVER_NAME];
   if (had && JSON.stringify(had) === JSON.stringify(want)) return { status: 'déjà à jour' };
   j.mcpServers = { ...(j.mcpServers || {}), [SERVER_NAME]: want };
   const bak = text !== null ? backup(t.file) : null;
   const out = JSON.stringify(j, null, text ? indentOf(text) : 2) + (text === null || /\n\s*$/.test(text) ? '\n' : '');
   atomicWrite(t.file, out);
+  return { status: had ? 'mis à jour' : 'ajouté', bak };
+}
+
+/** opencode : « mcp.servers.<nom> » (format actuel) ; ancien format (serveurs directement sous « mcp ») respecté s'il est déjà utilisé */
+function installOpencode(t, entry) {
+  if (/\.jsonc$/i.test(t.file)) return { status: 'erreur', error: `fichier .jsonc (avec commentaires) laissé tel quel : ajoute dans « mcp » → « servers » : "${SERVER_NAME}": { "type": "local", "command": ${JSON.stringify([entry.command, ...entry.args])} }` };
+  let text = null, j = {};
+  if (exists(t.file)) {
+    text = fs.readFileSync(t.file, 'utf8');
+    const clean = text.replace(/^﻿/, '');
+    if (clean.trim()) { try { j = JSON.parse(clean); } catch { return { status: 'erreur', error: 'fichier JSON illisible (commentaires ?) : laissé tel quel' }; } }
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return { status: 'erreur', error: 'contenu inattendu (pas un objet JSON) : laissé tel quel' };
+  }
+  if (j.mcp !== undefined && (typeof j.mcp !== 'object' || j.mcp === null || Array.isArray(j.mcp))) return { status: 'erreur', error: '« mcp » n\'est pas un objet : laissé tel quel' };
+  const mcp = j.mcp || {};
+  const legacy = !mcp.servers && Object.values(mcp).some(v => v && typeof v === 'object' && ('command' in v || 'type' in v || 'url' in v));
+  const want = { type: 'local', command: [entry.command, ...entry.args], ...(legacy ? { enabled: true } : {}) };
+  const had = legacy ? mcp[SERVER_NAME] : mcp.servers?.[SERVER_NAME];
+  if (had && JSON.stringify(had) === JSON.stringify(want)) return { status: 'déjà à jour' };
+  if (!text) j.$schema = 'https://opencode.ai/config.json';
+  j.mcp = legacy ? { ...mcp, [SERVER_NAME]: want } : { ...mcp, servers: { ...(mcp.servers || {}), [SERVER_NAME]: want } };
+  const bak = text !== null ? backup(t.file) : null;
+  atomicWrite(t.file, JSON.stringify(j, null, text ? indentOf(text) : 2) + '\n');
   return { status: had ? 'mis à jour' : 'ajouté', bak };
 }
 
@@ -813,7 +856,7 @@ export function installMcp({ home = installHome(), cliPath = path.join(ROOT, 'cl
   if (!home) return [];
   const entry = { command, args: [path.resolve(cliPath), '--mcp'] };
   return mcpTargets(home).map(t => {
-    try { return { label: t.label, file: t.file, ...(t.kind === 'toml' ? installToml(t, entry) : installJson(t, entry)) }; }
+    try { return { label: t.label, file: t.file, ...(t.kind === 'toml' ? installToml(t, entry) : t.kind === 'opencode' ? installOpencode(t, entry) : installJson(t, entry)) }; }
     catch (e) { return { label: t.label, file: t.file, status: 'erreur', error: e.message }; }
   });
 }
@@ -824,7 +867,7 @@ export function installMcpCli(log = s => console.log(s)) {
   if (!home) { log('  Aucun dossier personnel à modifier (FS_CLI_HOME est défini : définis FS_IMPORT_HOME pour choisir le dossier).'); return 1; }
   const res = installMcp({ home });
   if (!res.length) {
-    log('  Aucun agent compatible trouvé (Antigravity, Claude Code, Codex).');
+    log('  Aucun agent compatible trouvé (Claude Code, Claude Desktop, Codex, Antigravity, Cursor, Windsurf, VS Code Copilot, opencode, Gemini CLI).');
     log(`  Ajoute toi-même ce serveur MCP dans ton agent : commande « node », arguments [« ${path.join(ROOT, 'cli.js')} », « --mcp »].`);
     return 1;
   }
@@ -835,8 +878,8 @@ export function installMcpCli(log = s => console.log(s)) {
     log(`  ${good ? '✓' : '✗'} ${r.label} : ${r.status}${r.error ? ` — ${r.error}` : ''}  (${r.file})${r.bak ? `\n      sauvegarde : ${r.bak}` : ''}`);
   }
   if (ok) {
-    log(`\n  Serveur MCP « ${SERVER_NAME} » : outils fs_models, fs_ask, fs_agent.`);
-    log('  → Redémarre l\'application de l\'agent (Antigravity, Claude Code, Codex) pour qu\'elle le voie.');
+    log(`\n  Serveur MCP « ${SERVER_NAME} » : outils fs_models, fs_ask, fs_agent, fs_image, fs_web, fs_files, fs_conversations, fs_usage.`);
+    log('  → Redémarre les applications ci-dessus pour qu\'elles le voient.');
     log('  → fs_agent ne travaille que dans les dossiers déjà approuvés : ouvre-les une fois avec « fs-cli ».');
     if (!TOKEN) log('  ⚠ Aucune clé de session France Student : lance « fs-cli » une fois pour te connecter.');
   }

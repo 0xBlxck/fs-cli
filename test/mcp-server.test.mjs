@@ -421,3 +421,45 @@ test('fs_ask : le code mis par le modèle dans le panneau de documents du site e
   assert.match(t, /style\.css » \(mis à jour\)/);
   assert.ok(t.includes('```css\nbody {\n  color: red;\n}\n```'), 'document mis à jour : version actuelle lue sur le site');
 });
+
+test('--install-mcp : Cursor, Windsurf, Gemini CLI, Claude Desktop, VS Code (Copilot) et opencode (2 formats), sans rien perdre', () => {
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-inst2-'));
+  const w = (f, s) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, s); };
+  w(path.join(h, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { autre: { command: 'x' } } }));
+  fs.mkdirSync(path.join(h, '.codeium', 'windsurf'), { recursive: true });
+  w(path.join(h, '.gemini', 'settings.json'), JSON.stringify({ theme: 'Dracula' }));
+  const desk = process.platform === 'win32' ? path.join(h, 'AppData', 'Roaming', 'Claude')
+    : process.platform === 'darwin' ? path.join(h, 'Library', 'Application Support', 'Claude') : path.join(h, '.config', 'Claude');
+  fs.mkdirSync(desk, { recursive: true });
+  fs.mkdirSync(path.join(h, '.vscode'), { recursive: true });
+  const oc = path.join(h, '.config', 'opencode', 'opencode.json');
+  w(oc, JSON.stringify({ $schema: 'https://opencode.ai/config.json', model: 'x', mcp: { vieux: { type: 'local', command: ['a'], enabled: true } } }, null, 2));
+  const res = srv.installMcp({ home: h, cliPath: '/chemin/cli.js', command: 'node' });
+  const by = Object.fromEntries(res.map(r => [r.label, r]));
+  for (const l of ['Cursor', 'Windsurf', 'Gemini CLI', 'Claude Desktop', 'VS Code (Copilot)', 'opencode']) assert.ok(by[l] && by[l].status !== 'erreur', `${l} : ${JSON.stringify(by[l])}`);
+  const entry = { command: 'node', args: [path.resolve('/chemin/cli.js'), '--mcp'] };
+  const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
+  assert.deepEqual(read(path.join(h, '.cursor', 'mcp.json')).mcpServers, { autre: { command: 'x' }, 'france-student': entry });
+  assert.deepEqual(read(path.join(h, '.codeium', 'windsurf', 'mcp_config.json')).mcpServers['france-student'], entry);
+  const gem = read(path.join(h, '.gemini', 'settings.json')); assert.equal(gem.theme, 'Dracula'); assert.deepEqual(gem.mcpServers['france-student'], entry);
+  assert.deepEqual(read(path.join(desk, 'claude_desktop_config.json')).mcpServers['france-student'], entry);
+  assert.deepEqual(read(path.join(h, '.copilot', 'mcp-config.json')).mcpServers['france-student'], { type: 'stdio', ...entry, tools: ['*'] });
+  const o = read(oc);                                                  // ancien format déjà utilisé → respecté (serveurs sous « mcp »)
+  assert.equal(o.model, 'x'); assert.ok(o.mcp.vieux);
+  assert.deepEqual(o.mcp['france-student'], { type: 'local', command: ['node', entry.args[0], '--mcp'], enabled: true });
+  // opencode neuf → format actuel « mcp.servers »
+  const h2 = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-inst3-'));
+  fs.mkdirSync(path.join(h2, '.config', 'opencode'), { recursive: true });
+  srv.installMcp({ home: h2, cliPath: '/chemin/cli.js', command: 'node' });
+  const o2 = read(path.join(h2, '.config', 'opencode', 'opencode.json'));
+  assert.equal(o2.$schema, 'https://opencode.ai/config.json');
+  assert.deepEqual(o2.mcp.servers['france-student'], { type: 'local', command: ['node', entry.args[0], '--mcp'] });
+  // .jsonc (commentaires) : jamais modifié, consigne à la place
+  const h3 = fs.mkdtempSync(path.join(os.tmpdir(), 'fscli-inst4-'));
+  w(path.join(h3, '.config', 'opencode', 'opencode.jsonc'), '{ // mes réglages\n}');
+  const r3 = srv.installMcp({ home: h3, cliPath: '/chemin/cli.js', command: 'node' }).find(r => r.label === 'opencode');
+  assert.equal(r3.status, 'erreur'); assert.match(r3.error, /jsonc/);
+  assert.equal(fs.readFileSync(path.join(h3, '.config', 'opencode', 'opencode.jsonc'), 'utf8'), '{ // mes réglages\n}');
+  // 2e passage : déjà à jour partout, rien de réécrit
+  assert.ok(srv.installMcp({ home: h, cliPath: '/chemin/cli.js', command: 'node' }).every(r => r.status === 'déjà à jour'));
+});

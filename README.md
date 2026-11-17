@@ -112,9 +112,9 @@ Pour l'ouvrir : l'icône ✻ dans la barre latérale, ou **Ctrl+Alt+I** pour un 
 
 ---
 
-## Utiliser France Student depuis un autre agent (Antigravity, Claude Code, Codex)
+## Utiliser France Student depuis un autre agent (Claude Code, VS Code, opencode, Cursor, Antigravity…)
 
-FS-CLI peut servir de **serveur MCP** : un autre agent (l'application Antigravity de Google, Claude Code, Codex…) peut alors interroger les modèles France Student ou leur confier une tâche de code.
+FS-CLI peut servir de **serveur MCP** : un autre agent (Claude Code, Claude Desktop, VS Code avec Copilot, opencode, Cursor, Windsurf, Codex, Gemini CLI, Antigravity…) peut alors interroger les modèles France Student ou leur confier une tâche de code. Les modèles FS y apparaissent comme des **outils** (pas comme le modèle principal de l'agent).
 
 ```bash
 fs-cli --install-mcp
@@ -127,7 +127,13 @@ Cette commande ajoute le serveur **`france-student`** (`node <chemin>/cli.js --m
 | Antigravity (application) | `~/.gemini/config/mcp_config.json` |
 | Antigravity (éditeur) | `~/.gemini/antigravity-ide/mcp_config.json` |
 | Claude Code | `~/.claude.json` |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` (Windows) · `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac) |
 | Codex | `~/.codex/config.toml` |
+| VS Code (Copilot, mode agent) | `~/.copilot/mcp-config.json` |
+| opencode | `~/.config/opencode/opencode.json` (`mcp` › `servers`) — un `opencode.jsonc` à commentaires n'est jamais modifié : la commande t'indique quoi ajouter |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Gemini CLI | `~/.gemini/settings.json` (seulement s'il existe déjà) |
 
 Seule l'entrée `france-student` est ajoutée ou mise à jour : tes autres serveurs ne bougent pas, une copie `.bak` est faite avant chaque modification, et un fichier illisible n'est jamais touché. **Redémarre ensuite l'application de l'agent.** Pour Claude Code, ferme-le avant de lancer la commande, sinon il risque de réécrire son fichier par-dessus.
 
