@@ -19,6 +19,13 @@ const SEEN = new Map();
 export const keyOf = fp => { const p = path.resolve(fp).normalize('NFC'); return IS_WIN || process.platform === 'darwin' ? p.toLowerCase() : p; };
 const stampOf = fp => { try { const s = fs.statSync(fp); return `${s.size}:${s.mtimeMs}`; } catch { return null; } };
 export function noteSeen(fp) { const s = stampOf(fp); if (s) SEEN.set(keyOf(fp), s); else SEEN.delete(keyOf(fp)); }
+/** fichier lu (ou écrit) par le CLI depuis le lancement ? */
+export const wasSeen = fp => SEEN.has(keyOf(fp));
+/** write_file sur un fichier existant jamais lu : refusé (il écraserait une version que le modèle n'a pas vue) */
+export const unreadOverwrite = fp => {
+  try { if (!fs.statSync(fp).isFile()) return null; } catch { return null; }
+  return wasSeen(fp) ? null : `${fp} existe déjà et tu ne l'as pas lu : lis-le avec read_file (ou modifie-le avec edit_file) avant de l'écraser.`;
+};
 export function staleReason(fp) {
   const before = SEEN.get(keyOf(fp));
   if (!before) return null;
@@ -86,6 +93,8 @@ export function clipMiddle(text, max = 12000) {
   const head = Math.floor(max * 0.6), tail = max - head;
   return `${text.slice(0, head)}\n\n… [${text.length - max} caractères omis] …\n\n${text.slice(-tail)}`;
 }
+/** taille max d'une lecture read_file (France Student coupe chaque résultat à 40 000 caractères) */
+export const READ_MAX = 38000;
 const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 const human = n => n < 1024 ? `${n}B` : n < 1048576 ? `${(n / 1024).toFixed(1)}K` : `${(n / 1048576).toFixed(1)}M`;
 const IGNORE_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.next', '.cache', '$RECYCLE.BIN', 'System Volume Information']);
@@ -105,6 +114,79 @@ function descendOk(full, name, root, allow) {
   if (lc(path.resolve(root)) === lc(home) && lc(path.dirname(full)) === lc(home)
     && MAC_PRIVATE.some(n => lc(n) === lc(name)) && !allow?.has(lc(name))) return false;
   return true;
+}
+// ── Recherche (grep, glob) : dossiers générés et fichiers sans intérêt ignorés, sauf s'ils sont visés directement par path ou le motif ──
+// (list_dir et /index ne sont pas concernés : ils montrent toujours ces dossiers)
+const SEARCH_SKIP_DIRS = new Set(['dist', 'build', 'out', 'coverage', 'target', '.turbo', '.gradle', '.parcel-cache', 'AppData', 'Library']);
+const SEARCH_SKIP_FILES = /^(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|.+\.min\.(?:js|css)|.+\.map)$/i;
+/** motifs simples d'un .gitignore (« dossier/ », « *.log », « /build », « src/gen/ ») ; négations « ! » : voir plus bas */
+function readGitignore(dir) {
+  let txt; try { txt = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'); } catch { return null; }
+  const lines = txt.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  // git ne peut pas ré-inclure un fichier dont le dossier est exclu : avec des « ! », seuls les motifs de dossier restent sûrs
+  const negated = lines.some(l => l.startsWith('!'));
+  const rules = [];
+  for (let l of lines) {
+    if (l.startsWith('!') || l.startsWith('\\')) continue;
+    const dirOnly = l.endsWith('/'); l = l.replace(/\/+$/, '');
+    if (!dirOnly && negated) continue;
+    if (l.startsWith('**/')) l = l.slice(3);
+    if (!l || l === '*' || l === '**') continue;
+    const anchored = l.includes('/');
+    rules.push({ re: globToRegex(l.replace(/^\//, '')), anchored, dirOnly });
+  }
+  return rules.length ? { dir, rules } : null;
+}
+/** .gitignore du dossier fouillé et de ses parents jusqu'à la racine du dépôt git (au plus 8 niveaux) ; hors dépôt : celui du dossier seul */
+function gitignoresFor(root) {
+  const out = []; let d = path.resolve(root);
+  for (let i = 0; i < 8; i++) {
+    const g = readGitignore(d); if (g) out.push(g);
+    if (fs.existsSync(path.join(d, '.git'))) return out;
+    const up = path.dirname(d); if (up === d) break; d = up;
+  }
+  return out.filter(g => g.dir === path.resolve(root));
+}
+const ignoredBy = (gis, full, isDir) => gis.some(g => {
+  const r = path.relative(g.dir, full).replace(/\\/g, '/');
+  if (!r || r.startsWith('..')) return false;
+  return g.rules.some(x => (!x.dirOnly || isDir) && (x.anchored ? x.re.test(r) : x.re.test(r.split('/').pop())));
+});
+/**
+ * filtre de parcours pour grep et glob : `allow` = noms de 1er niveau visés par le motif ; skipFiles : verrous, *.min.*, *.map (grep).
+ * `filter.skipped` : dossiers générés (build, out, target…) sautés alors qu'ils contiennent quelque chose, pour le dire au modèle.
+ */
+function searchFilter(root, allow, { skipFiles = false } = {}) {
+  const skipped = [];
+  const f = makeSearchFilter(root, allow, skipFiles, skipped);
+  f.skipped = skipped;
+  return f;
+}
+/** avis ajouté à la sortie : sans lui, le modèle conclurait à tort qu'un mot n'existe pas (ex. un vrai code source dans lib/target/) */
+function skippedNote(skipped, cwd) {
+  if (!skipped.length) return null;
+  const names = skipped.slice(0, 5).map(p => rel(p, cwd));
+  return `[dossiers ignorés : ${names.join(', ')}${skipped.length > 5 ? ` et ${skipped.length - 5} autre(s)` : ''} — vise-les avec path pour y chercher]`;
+}
+function makeSearchFilter(root, allow, skipFiles, skipped) {
+  let gis = gitignoresFor(root);
+  // dossier fouillé lui-même ignoré par git (path = « logs », « generated »…) : visé exprès → .gitignore non appliqué
+  const targeted = gis.some(g => {
+    const segs = path.relative(g.dir, root).split(/[\\/]/).filter(Boolean);
+    return segs.some((_, k) => ignoredBy([g], path.join(g.dir, ...segs.slice(0, k + 1)), true));
+  });
+  if (targeted) gis = [];
+  return (full, name, isDir) => {
+    if (isDir) {
+      if (SEARCH_SKIP_DIRS.has(name) && !(allow?.has(lc(name)) && path.dirname(full) === root)) {
+        let empty = true; try { empty = fs.readdirSync(full).length === 0; } catch {}
+        if (!empty && !ignoredBy(gis, full, true) && skipped.length < 50) skipped.push(full);   // déjà ignoré par .gitignore : rien à signaler
+        return false;
+      }
+      if (name === 'worktrees' && path.basename(path.dirname(full)) === '.claude') return false;   // copies complètes du dépôt (agents)
+    } else if (skipFiles && SEARCH_SKIP_FILES.test(name)) return false;
+    return !ignoredBy(gis, full, isDir);
+  };
 }
 /** fichiers parasites du Finder (.DS_Store, ._* des clés USB) : masqués hors Windows */
 const isJunkFile = name => !IS_WIN && (name === '.DS_Store' || name.startsWith('._'));
@@ -422,6 +504,10 @@ const procDisplay = r => r.timedOut ? 'délai dépassé — processus tué' : r.
 
 // ── Walk / glob ───────────────────────────────────────────────────────────────
 const escapeRe = s => s.replace(/[.+^$()|[\]\\]/g, '\\$&');
+/** texte exact dans une regex (tous les caractères spéciaux, y compris * ? { }) */
+const escapeLit = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** grep : au-delà de ce nombre de correspondances, sortie regroupée par fichier */
+const GREP_GROUP = 60;
 function globToRegex(g) {
   g = g.replace(/\\/g, '/');
   let re = '';
@@ -444,7 +530,8 @@ function makeGlobTest(pattern) {
   return (relPath) => hasSlash ? re.test(relPath.replace(/\\/g, '/')) : re.test(path.basename(relPath));
 }
 
-function* walk(root, { maxFiles = 60000, includeDirs = false, allow = null } = {}) {
+/** `filter(full, name, isDir)` : false = sauté ; `state.truncated` passe à true si la limite de fichiers arrête le parcours */
+function* walk(root, { maxFiles = 60000, includeDirs = false, allow = null, filter = null, state = null } = {}) {
   const stack = [root]; let n = 0;
   while (stack.length) {
     const dir = stack.pop();
@@ -453,9 +540,15 @@ function* walk(root, { maxFiles = 60000, includeDirs = false, allow = null } = {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (!descendOk(full, e.name, root, allow)) continue;
+        if (filter && !filter(full, e.name, true)) continue;
         if (includeDirs) yield { full, dir: true };
         stack.push(full);
-      } else if (e.isFile()) { if (isJunkFile(e.name)) continue; if (++n > maxFiles) return; yield { full, dir: false }; }
+      } else if (e.isFile()) {
+        if (isJunkFile(e.name)) continue;
+        if (filter && !filter(full, e.name, false)) continue;
+        if (++n > maxFiles) { if (state) state.truncated = true; return; }
+        yield { full, dir: false };
+      }
     }
   }
 }
@@ -486,8 +579,8 @@ export function encodeText(text, enc) {
  * Partagé par l'outil et par la proposition affichée dans le diff de l'éditeur (même résultat garanti).
  */
 function applyEdit(text, a) {
-  if (a.old_string === '') return { error: 'old_string est vide.' };
-  if (a.old_string === a.new_string) return { error: 'old_string et new_string sont identiques.' };
+  if (a.old_string === '') return { error: 'old_text est vide.' };                       // noms des paramètres de France Student (old_text / new_text)
+  if (a.old_string === a.new_string) return { error: 'old_text et new_text sont identiques.' };
   const crlf = text.includes('\r\n');
   const fix = s => crlf ? s.replace(/\r?\n/g, '\r\n') : s;
   const o = fix(a.old_string), n = fix(a.new_string);
@@ -642,8 +735,9 @@ export const TOOLS = {
     async run(a, ctx) {
       const fp = resolveP(a.path, ctx.cwd);
       let st; try { st = fs.statSync(fp); } catch { return err(`Fichier introuvable: ${fp}`); }
-      if (st.isDirectory()) return err(`${fp} est un dossier — utilise list_dir.`);
-      if (st.size > 8_000_000) return err(`Fichier trop gros (${human(st.size)}) — utilise grep, ou shell pour en extraire une partie.`);
+      // noms des outils de France Student dans les messages (list_directory, search_files, run_command, start_line) : ceux que le modèle connaît
+      if (st.isDirectory()) return err(`${fp} est un dossier — utilise list_directory.`);
+      if (st.size > 8_000_000) return err(`Fichier trop gros (${human(st.size)}) — utilise search_files, ou run_command pour en extraire une partie.`);
       const buf = fs.readFileSync(fp);
       noteSeen(fp);
       // Économie de contexte : même fichier, même plage, contenu identique, déjà lu DANS CETTE conversation → on ne le renvoie pas.
@@ -652,21 +746,30 @@ export const TOOLS = {
       const seen = ctx.readCache?.get(rKey);
       if (seen && seen.hash === rHash && !seen.skipped) {
         seen.skipped = true;
-        return ok(`[Fichier inchangé depuis ta lecture précédente dans cette conversation (${rel(fp, ctx.cwd)}, à partir de la ligne ${rStart}) : contenu identique à ce que tu as déjà reçu, non renvoyé pour économiser le contexte. Si tu ne l'as plus en mémoire, relance exactement la même lecture : il te sera renvoyé en entier.]`, 'inchangé depuis ta dernière lecture');
+        return { ...ok(`[Fichier inchangé depuis ta lecture précédente dans cette conversation (${rel(fp, ctx.cwd)}, à partir de la ligne ${rStart}) : contenu identique à ce que tu as déjà reçu, non renvoyé pour économiser le contexte. Si tu ne l'as plus en mémoire, relance exactement la même lecture : il te sera renvoyé en entier.]`, 'inchangé depuis ta dernière lecture'), cacheKey: rKey };
       }
-      if (ctx.readCache) { ctx.readCache.set(rKey, { hash: rHash, skipped: false }); if (ctx.readCache.size > 400) ctx.readCache.delete(ctx.readCache.keys().next().value); }
       const dec = decodeText(buf);
-      if (!dec) return err(`Fichier binaire (${human(st.size)}) — impossible de l'afficher en texte.`);
+      if (!dec) { ctx.readCache?.delete(rKey); return err(`Fichier binaire (${human(st.size)}) — impossible de l'afficher en texte.`); }   // erreur : jamais « déjà reçu »
       const text = dec.text;
       const lines = text.split(/\r?\n/);
       if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-      const start = Math.max(1, a.offset || 1), max = Math.max(1, a.limit || 2000);
-      const slice = lines.slice(start - 1, start - 1 + max);
-      const end = start - 1 + slice.length;
-      let body = slice.map((l, i) => `${String(start + i).padStart(5)}\t${l.length > 2000 ? l.slice(0, 2000) + '…' : l}`).join('\n');
-      if (!slice.length) body = `(aucune ligne à partir de ${start} ; le fichier en a ${lines.length})`;
-      if (end < lines.length) body += `\n[… ${lines.length - end} lignes restantes — offset=${end + 1} pour continuer]`;
-      return ok(clipMiddle(body, 60000), `${slice.length} ligne${slice.length > 1 ? 's' : ''} lue${slice.length > 1 ? 's' : ''} (${start}–${end} sur ${lines.length})`);
+      const start = rStart, max = rMax;
+      // au plus READ_MAX caractères : sous la limite de France Student par résultat (40 000), le modèle reçoit donc TOUT ce qui est annoncé
+      const rows = []; let size = 0;
+      for (const l of lines.slice(start - 1, start - 1 + max)) {
+        const row = `${String(start + rows.length).padStart(5)}\t${l.length > 2000 ? l.slice(0, 2000) + '…' : l}`;
+        if (rows.length && size + row.length + 1 > READ_MAX) break;
+        rows.push(row); size += row.length + 1;
+      }
+      const end = start - 1 + rows.length;
+      let body = rows.join('\n');
+      if (!rows.length) body = `(aucune ligne à partir de ${start} ; le fichier en a ${lines.length})`;
+      if (end < lines.length) body += `\n[… ${lines.length - end} lignes restantes — start_line=${end + 1} pour continuer]`;
+      if (ctx.readCache) {
+        ctx.readCache.set(rKey, { hash: rHash, skipped: false });
+        if (ctx.readCache.size > 400) ctx.readCache.delete(ctx.readCache.keys().next().value);
+      }
+      return { ...ok(body, `${rows.length} ligne${rows.length > 1 ? 's' : ''} lue${rows.length > 1 ? 's' : ''} (${start}–${end} sur ${lines.length})`), cacheKey: ctx.readCache ? rKey : undefined };
     },
   },
 
@@ -683,6 +786,8 @@ export const TOOLS = {
     async run(a, ctx) {
       const fp = resolveP(a.path, ctx.cwd);
       if (fs.existsSync(fp) && fs.statSync(fp).isDirectory()) return err(`${fp} est un dossier.`);
+      // fichier existant jamais lu : refusé, sauf si l'utilisateur vient d'accepter CET écrasement (carte de confirmation, bloc lancé par /run)
+      if (!ctx.allowOverwrite) { const unread = unreadOverwrite(fp); if (unread) return err(unread); }
       const stale = staleReason(fp); if (stale) return err(stale);
       let prev = null;
       try { prev = fs.readFileSync(fp); } catch {}
@@ -720,7 +825,7 @@ export const TOOLS = {
       if (!dec) return err('Fichier binaire.');
       const text = dec.text;
       if (dec.enc === 'latin1' && /[^\u0000-\u00ff]/.test(a.new_string)) {
-        return err(`${rel(fp, ctx.cwd)} est encodé en Windows-1252/Latin-1 : new_string contient un caractère qui n'existe pas dans cet encodage (ex. « ${(a.new_string.match(/[^\u0000-\u00ff]/) || [''])[0]} »). Utilise seulement des caractères latins simples (é, è, à, ç… marchent).`);
+        return err(`${rel(fp, ctx.cwd)} est encodé en Windows-1252/Latin-1 : new_text contient un caractère qui n'existe pas dans cet encodage (ex. « ${(a.new_string.match(/[^\u0000-\u00ff]/) || [''])[0]} »). Utilise seulement des caractères latins simples (é, è, à, ç… marchent).`);
       }
       const r = applyEdit(text, a);
       if (r.error) return err(r.error);
@@ -729,11 +834,11 @@ export const TOOLS = {
         const firstLine = a.old_string.split('\n').map(l => l.trim()).find(Boolean) || '';
         const lines = text.split(/\r?\n/);
         const near = firstLine ? lines.findIndex(l => l.includes(firstLine)) : -1;
-        return err(`old_string introuvable dans ${rel(fp, ctx.cwd)}.` + (near >= 0 ? ` Ligne proche (${near + 1}): ${lines[near].slice(0, 160)} — vérifie indentation/espaces avec read_file.` : ' Relis le fichier avec read_file : le texte a peut-être changé.'));
+        return err(`old_text introuvable dans ${rel(fp, ctx.cwd)}.` + (near >= 0 ? ` Ligne proche (${near + 1}): ${lines[near].slice(0, 160)} — vérifie indentation/espaces avec read_file.` : ' Relis le fichier avec read_file : le texte a peut-être changé.'));
       }
       if (idx.length > 1 && !a.replace_all) {
         const lineOf = pos => text.slice(0, pos).split('\n').length;
-        return err(`old_string apparaît ${idx.length} fois (lignes ${idx.slice(0, 8).map(lineOf).join(', ')}…). Ajoute du contexte pour le rendre unique, ou replace_all=true.`);
+        return err(`old_text apparaît ${idx.length} fois (lignes ${idx.slice(0, 8).map(lineOf).join(', ')}…). Ajoute du contexte pour le rendre unique, ou replace_all=true.`);
       }
       const { updated } = r;
       ctx.undo?.push({ path: fp, prev: buf });
@@ -792,13 +897,16 @@ export const TOOLS = {
       if (!fs.existsSync(root)) return err(`Dossier introuvable: ${root}`);
       const test = makeGlobTest(a.pattern);
       const found = [];
-      for (const f of walk(root, { allow: globTargets(a.pattern) })) {
+      const allow = globTargets(a.pattern);
+      const filter = searchFilter(root, allow);
+      for (const f of walk(root, { allow, filter })) {
         const r = path.relative(root, f.full);
         if (test(r)) { let m = 0; try { m = fs.statSync(f.full).mtimeMs; } catch {} found.push({ r, m }); }
       }
       found.sort((x, y) => y.m - x.m);
       const shown = found.slice(0, 200).map(f => f.r);
-      return ok(shown.length ? shown.join('\n') + (found.length > 200 ? `\n[… ${found.length - 200} autres]` : '') : '(aucun fichier)', `${found.length} fichier${found.length > 1 ? 's' : ''}`);
+      const note = skippedNote(filter.skipped, ctx.cwd);
+      return ok((shown.length ? shown.join('\n') + (found.length > 200 ? `\n[… ${found.length - 200} autres]` : '') : '(aucun fichier)') + (note ? '\n' + note : ''), `${found.length} fichier${found.length > 1 ? 's' : ''}`);
     },
   },
 
@@ -809,46 +917,83 @@ export const TOOLS = {
       { name: 'pattern', type: 'string', req: true, desc: 'expression régulière (JS)' },
       { name: 'path', type: 'string', desc: 'fichier ou dossier (défaut: dossier courant)' },
       { name: 'glob', type: 'string', desc: 'filtre de fichiers, ex: *.py' },
-      { name: 'ignore_case', type: 'bool', desc: 'insensible à la casse' },
+      { name: 'ignore_case', type: 'bool', desc: 'insensible à la casse (par défaut : oui si le motif est tout en minuscules)' },
       { name: 'context', type: 'int', desc: 'lignes de contexte avant/après (0-5)' },
       { name: 'files_only', type: 'bool', desc: 'ne lister que les fichiers qui matchent' },
+      { name: 'max_results', type: 'int', desc: 'nombre max de correspondances (défaut et maximum 250)' },
     ],
     summary: a => `${a.pattern}${a.glob ? '  ' + a.glob : ''}`,
     async run(a, ctx) {
       const root = resolveP(a.path, ctx.cwd);
       if (!fs.existsSync(root)) return err(`Introuvable: ${root}`);
+      const head = [];                                                   // avis placés avant les résultats
+      let pat = String(a.pattern), ic = a.ignore_case;
+      if (/^\(\?i\)/.test(pat)) { pat = pat.slice(4); ic = true; }        // « (?i) » (PCRE, Python) : pas compris par JavaScript → drapeau i
+      // casse « intelligente », comme ripgrep : motif sans majuscule → insensible à la casse (« login » trouve handleLogin et LoginService)
+      if (ic === undefined) ic = !/\p{Lu}/u.test(pat.replace(/\\./g, ''));
+      const flags = ic ? 'i' : '';
       let re;
-      try { re = new RegExp(a.pattern, a.ignore_case ? 'i' : ''); } catch { re = new RegExp(escapeRe(a.pattern), a.ignore_case ? 'i' : ''); }
+      try { re = new RegExp(pat, flags); }
+      catch { re = new RegExp(escapeLit(pat), flags); head.push('[regex invalide : recherche du texte exact]'); }
       const ctxN = Math.min(5, Math.max(0, a.context || 0));
+      const MAX = 250, limit = a.max_results > 0 ? Math.min(MAX, a.max_results) : MAX;
       const test = a.glob ? makeGlobTest(a.glob) : null;
-      const files = fs.statSync(root).isFile() ? [{ full: root }] : walk(root, { allow: a.glob ? globTargets(a.glob) : null });
-      const out = []; let count = 0, nfiles = 0; const MAX = 250; const skipped = [];
+      const isFile = fs.statSync(root).isFile();
+      const allow = a.glob ? globTargets(a.glob) : null, state = {};
+      // dossiers aussi renvoyés par le parcours : la boucle rend la main régulièrement même dans un arbre sans fichiers
+      const filter = isFile ? null : searchFilter(root, allow, { skipFiles: true });
+      const files = isFile ? [{ full: root }] : walk(root, { allow, includeDirs: true, filter, state });
+      const out = [], hits = [], skipped = [];
+      let count = 0, nfiles = 0, more = false, big = 0, seen = 0, stopped = '';
+      const t0 = Date.now(), budget = ctx.searchBudgetMs ?? 20000;
       outer: for (const f of files) {
-        const r = fs.statSync(root).isFile() ? path.basename(f.full) : path.relative(root, f.full);
+        // boucle coopérative : Ctrl+C et le bouton Interrompre restent actifs, et un budget de temps évite de geler FS-CLI
+        if (++seen % 200 === 0) {
+          await new Promise(r => setImmediate(r));
+          if (ctx.signal?.aborted) { stopped = '[recherche interrompue]'; break; }
+          if (Date.now() - t0 > budget) { stopped = `[recherche arrêtée après ${Math.round(budget / 1000)} s : résultats incomplets, précise path ou glob]`; break; }
+        }
+        if (f.dir) continue;
+        const r = isFile ? path.basename(f.full) : path.relative(root, f.full);
         if (test && !test(r)) continue;
         // fichiers sensibles (.env, clés, identifiants…) : jamais fouillés ici ; read_file, lui, demande confirmation (audit 17/11 : search_files renvoyait les secrets)
         if (sensitivePathReason(f.full)) { skipped.push(rel(f.full, ctx.cwd)); continue; }
         let st; try { st = fs.statSync(f.full); } catch { continue; }
-        if (st.size > 2_000_000) continue;
+        if (st.size > 2_000_000) { big++; continue; }
         let buf; try { buf = fs.readFileSync(f.full); } catch { continue; }
         if (looksBinary(buf)) continue;
         const lines = (decodeText(buf)?.text ?? '').split(/\r?\n/);
+        const name = rel(f.full, ctx.cwd);
         let hit = false;
         for (let i = 0; i < lines.length; i++) {
           if (!re.test(lines[i])) continue;
-          if (!hit) { hit = true; nfiles++; if (a.files_only) { out.push(rel(f.full, ctx.cwd)); break; } }
+          if (count >= limit) { more = true; break outer; }               // une de plus que la limite : on sait qu'il en reste
+          if (!hit) { hit = true; nfiles++; if (a.files_only) { out.push(name); break; } }
           count++;
           if (ctxN) {
-            for (let k = Math.max(0, i - ctxN); k < i; k++) out.push(`${rel(f.full, ctx.cwd)}-${k + 1}-${lines[k].slice(0, 300)}`);
-            out.push(`${rel(f.full, ctx.cwd)}:${i + 1}:${lines[i].slice(0, 300)}`);
-            for (let k = i + 1; k <= Math.min(lines.length - 1, i + ctxN); k++) out.push(`${rel(f.full, ctx.cwd)}-${k + 1}-${lines[k].slice(0, 300)}`);
+            for (let k = Math.max(0, i - ctxN); k < i; k++) out.push(`${name}-${k + 1}-${lines[k].slice(0, 300)}`);
+            out.push(`${name}:${i + 1}:${lines[i].slice(0, 300)}`);
+            for (let k = i + 1; k <= Math.min(lines.length - 1, i + ctxN); k++) out.push(`${name}-${k + 1}-${lines[k].slice(0, 300)}`);
             out.push('--');
-          } else out.push(`${rel(f.full, ctx.cwd)}:${i + 1}:${lines[i].slice(0, 300)}`);
-          if (count >= MAX) { out.push(`[… arrêt à ${MAX} correspondances]`); break outer; }
+          } else hits.push({ f: name, n: i + 1, t: lines[i] });
         }
       }
+      // beaucoup de correspondances : regroupées par fichier (numéros de ligne + 1re ligne), au lieu de centaines de lignes complètes
+      if (hits.length > GREP_GROUP) {
+        const by = new Map();
+        for (const h of hits) { let g = by.get(h.f); if (!g) by.set(h.f, g = []); g.push(h); }
+        out.push(`${hits.length} correspondances dans ${by.size} fichier${by.size > 1 ? 's' : ''}, regroupées par fichier :`);
+        for (const [f, g] of by) out.push(`${f} (${g.length}) : ${g.slice(0, 12).map(h => 'l.' + h.n).join(', ')}${g.length > 12 ? '…' : ''}\n    ${g[0].t.trim().slice(0, 160)}`);
+        out.push('[affine avec path ou glob (ou une query plus précise) pour voir les lignes]');
+      } else for (const h of hits) out.push(`${h.f}:${h.n}:${h.t.slice(0, 300)}`);
+      if (!out.length) out.push('(aucune correspondance)');
+      if (more) out.push(`[… arrêt à ${count} correspondances : il en reste d'autres ; précise query, path ou glob]`);
+      if (stopped) out.push(stopped);
+      if (state.truncated) out.push('[… arrêt après 60 000 fichiers : recherche incomplète, précise path]');
+      if (big) out.push(`[${big} fichier${big > 1 ? 's' : ''} de plus de 2 Mo non fouillé${big > 1 ? 's' : ''}]`);
+      const note = filter && skippedNote(filter.skipped, ctx.cwd); if (note) out.push(note);
       if (skipped.length) out.push(`[${skipped.length} fichier(s) sensible(s) non fouillé(s) : ${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? '…' : ''} ; lis-le avec read_file si besoin (confirmation demandée)]`);
-      return ok(out.length ? out.join('\n') : '(aucune correspondance)', a.files_only ? `${nfiles} fichiers` : `${count} correspondance${count > 1 ? 's' : ''} dans ${nfiles} fichier${nfiles > 1 ? 's' : ''}`);
+      return ok([...head, ...out].join('\n'), a.files_only ? `${nfiles} fichiers` : `${count} correspondance${count > 1 ? 's' : ''} dans ${nfiles} fichier${nfiles > 1 ? 's' : ''}`);
     },
   },
 
@@ -891,16 +1036,22 @@ export const TOOLS = {
 };
 
 // ── Normalisation des arguments ───────────────────────────────────────────────
+/** → { args, missing, invalid } ; invalid : paramètres texte reçus sous forme d'objet (jamais écrits en « [object Object] ») */
 export function normalizeArgs(tool, raw) {
-  const a = {}, missing = [];
+  const a = {}, missing = [], invalid = [];
   for (const p of tool.params) {
     let v = raw[p.name];
     if (v === undefined || v === null) { if (p.req) missing.push(p.name); continue; }
     if (p.type === 'int') { const n = parseInt(v, 10); if (!isNaN(n)) a[p.name] = n; else if (p.req) missing.push(p.name); }
     else if (p.type === 'bool') a[p.name] = typeof v === 'boolean' ? v : /^(true|1|yes|oui)$/i.test(String(v).trim());
+    else if (typeof v === 'object') {
+      // contenu d'un .json envoyé comme objet : le JSON lui-même ; ailleurs, refusé avec une explication
+      if (p.name === 'content' && typeof raw.path === 'string' && /\.json$/i.test(raw.path)) a[p.name] = JSON.stringify(v, null, 2) + '\n';
+      else invalid.push(p.name);
+    }
     else a[p.name] = typeof v === 'string' ? v : String(v);
   }
-  return { args: a, missing };
+  return { args: a, missing, invalid };
 }
 
 export function riskInfo(tool, args, ctx) {

@@ -51,6 +51,9 @@ export const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 export const cols = () => Math.max(40, process.stdout.columns || 100);
 export const clip = (s, n) => (s.length > n ? s.slice(0, Math.max(0, n - 1)) + '…' : s);
 const TTY = !!process.stdout.isTTY;
+// couleurs seulement vers un terminal (fs -p … > fichier, | autre outil : texte brut) ; FORCE_COLOR les impose, NO_COLOR les retire
+const FORCE = process.env.FORCE_COLOR != null && process.env.FORCE_COLOR !== '' && process.env.FORCE_COLOR !== '0' && process.env.FORCE_COLOR !== 'false';
+export const COLOR = FORCE || (TTY && !process.env.NO_COLOR) || process.argv.includes('--stdio');   // panneau de l'éditeur : sortie inchangée
 
 process.on('exit', () => { if (TTY) process.stdout.write('\x1b[?25h'); });
 
@@ -99,7 +102,7 @@ export function out(s) {
     if (cell && !committing) commitAction();                         // autre texte (réponse du modèle…) : l'action en cours passe d'abord dans l'historique
     sink.print(s); return;
   }
-  spinner.stop(); process.stdout.write(s);
+  spinner.stop(); process.stdout.write(COLOR ? s : stripAnsi(s));    // sans terminal ni interface (panneau --stdio = sink) : pas de codes couleur
 }
 export function println(s = '') { out(s + '\n'); }
 
@@ -315,7 +318,8 @@ const ACTIONS = {
 };
 /** Décode une commande fs-mcp (node "…mcp-cli.js" call srv outil args) pour l'afficher lisiblement. */
 export function describeAction(name, summary = '') {
-  const s = String(summary || '').replace(/\s+/g, ' ').trim();
+  name = sanitize(String(name || '')).replace(/[\r\n\t]+/g, ' ');   // le nom aussi vient du modèle (serveur MCP, outil inconnu) : il finit dans l'en-tête
+  const s = sanitize(String(summary || '')).replace(/\s+/g, ' ').trim();   // texte du modèle : aucune séquence de contrôle ne doit atteindre le terminal
   if (name === 'shell') {
     const m = s.match(/(?:mcp-cli\.js"?|fs-mcp)\s+(call|tools|list|skills?)\s*(.*)$/i);
     if (m) {
@@ -341,6 +345,24 @@ function remember(title, lines) { expandable.push({ title, lines }); if (expanda
 export function rememberThinking(d) { if (sink?.event && d) sink.event('thinking', { delta: sanitize(d) }); thinking += d; if (thinking.length > 200_000) thinking = thinking.slice(-200_000); }
 export function resetThinking() { thinking = ''; }
 export const thinkingLength = () => thinking.trim().length;
+/** Découpe une ligne en morceaux de `width` caractères au plus, de préférence sur un espace (rien n'est perdu). */
+export function wrapText(s, width) {
+  width = Math.max(10, width);
+  const parts = [];
+  let rest = String(s ?? '');
+  while (rest.length > width) {
+    let cut = rest.lastIndexOf(' ', width);
+    if (cut < width / 2) {                                             // mot très long (URL…) : coupé net, jamais au milieu d'un emoji
+      cut = width;
+      const hi = rest.charCodeAt(cut - 1);
+      if (hi >= 0xd800 && hi <= 0xdbff) cut--;
+    }
+    parts.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).replace(/^ /, '');
+  }
+  parts.push(rest);
+  return parts;
+}
 /** Affiche en entier ce qui a été résumé depuis le dernier Ctrl+O (et la pensée du modèle). */
 export function showExpanded() {
   const items = expandable.splice(0);
@@ -349,7 +371,7 @@ export function showExpanded() {
   if (!items.length) return println(c.dim('  (rien de replié à afficher)'));
   for (const it of items) {
     println(c.dim(`\n  ── ${it.title} (${it.lines.length} ligne${it.lines.length > 1 ? 's' : ''}) ──`));
-    for (const l of it.lines.slice(0, 2000)) println(c.dim('  ') + clip(sanitize(l), cols() - 4));
+    for (const l of it.lines.slice(0, 2000)) for (const part of wrapText(sanitize(l).replace(/\t/g, '  '), cols() - 4)) println(c.dim('  ') + part);   // en entier : retour à la ligne, jamais coupé
     if (it.lines.length > 2000) println(c.dim(`  … +${it.lines.length - 2000} lignes`));
   }
   println(c.dim('  ──'));
@@ -410,7 +432,7 @@ export function commitAction() {
 
 export function toolHeader(name, summary = '') {
   const { tag, label, detail } = describeAction(name, summary);
-  if (sink?.event) { lastExplore = EXPLORE.has(name); sink.event('tool', { name, tag, label, detail: sanitize(detail), raw: sanitize(String(summary || '')).slice(0, 8000), explore: lastExplore }); return; }
+  if (sink?.event) { lastExplore = EXPLORE.has(name); sink.event('tool', { name: sanitize(String(name || '')), tag, label, detail: sanitize(detail), raw: sanitize(String(summary || '')).slice(0, 8000), explore: lastExplore }); return; }
   if (!sink) { println(); println(headLine(c.green('●'), tag, label, detail)); return; }     // sans interface plein écran : direct
   const explore = EXPLORE.has(name);
   if (explore && cell?.kind === 'explore') { cell.items.push({ kind: exploreKind(name), label, detail }); showActive(); return; }
@@ -459,7 +481,7 @@ export function image({ data = null, file = '', mime = 'image/png', prompt = '',
 
 export function toolNote(text, kind = 'dim') {
   if (sink?.event) { sink.event('note', { text: stripAnsi(sanitize(text)), kind }); return; }
-  println(`  ${c.dim('⎿')}  ${(c[kind] || c.dim)(text)}`);
+  println(`  ${c.dim('⎿')}  ${(c[kind] || c.dim)(sanitize(text))}`);   // peut contenir des chemins ou bouts de commande venant du modèle
 }
 
 /** affichage en direct de la sortie d'une commande (limité) */

@@ -94,18 +94,33 @@ function notFoundMessage(missing = {}, mac = IS_MAC) {
   return what + '\n' + tip;
 }
 
-/** Mac/Linux : sortie du shell « commande introuvable » (code 127, « command not found », « env: node: No such file ») */
+/** sortie du shell « commande introuvable » : Mac/Linux (code 127, « command not found », « env: node: No such file ») ;
+ *  Windows : cmd.exe répond code 1 (ou 9009) « … n'est pas reconnu en tant que commande interne ou externe » (texte en page de code OEM, lu de travers) */
 function isNotFoundExit(code, errTail, win = IS_WIN) {
-  if (win) return false;
-  return code === 127 || /command not found|not found: (node|fs-cli)|env: '?node'?: No such file or directory/i.test(String(errTail || ''));
+  const t = String(errTail || '');
+  if (win) return code === 9009 || (code === 1 && /n.{1,3}est pas reconnu en tant que commande|is not recognized as an internal or external command/i.test(t));
+  return code === 127 || /command not found|not found: (node|fs-cli)|env: '?node'?: No such file or directory/i.test(t);
+}
+
+/** message « introuvable » pour une sortie du CLI (null si ce n'est pas ce cas) */
+function notFoundExitMessage(code, errTail, { win = IS_WIN, mac = IS_MAC, custom = false, cmd = '' } = {}) {
+  if (!isNotFoundExit(code, errTail, win)) return null;
+  // Windows : le texte de cmd.exe est illisible (accents mal décodés) → message clair seul, avec la commande du réglage fsCli.command si c'est elle
+  if (win) {
+    // le raccourci fs-cli.cmd existe mais « node » est introuvable : c'est Node.js qu'il faut installer, pas FS-CLI
+    if (/['"]node(\.exe)?['"]/i.test(String(errTail || ''))) return 'Node.js introuvable pour l\'éditeur.\nInstalle Node.js (nodejs.org), redémarre l\'éditeur puis clique sur « Réessayer ».' + (custom ? `\nCommande du réglage fsCli.command : ${cmd}` : '');
+    return notFoundMessage({ cli: true }, false) + (custom ? `\nCommande du réglage fsCli.command introuvable : ${cmd}` : '');
+  }
+  const tail = String(errTail || '').trim();
+  return notFoundMessage({ node: true, cli: true }, mac) + (tail ? '\n' + tail.split('\n').slice(-2).join('\n') : '');
 }
 
 /** Où est FS-CLI ? réglage → installation globale npm (lancée avec node) → « fs-cli » du PATH */
 async function resolveCli() {
   const custom = vscode.workspace.getConfiguration('fsCli').get('command');
   if (custom && custom.trim()) {
-    if (IS_WIN) return { cmd: custom.trim(), args: ['--stdio'], shell: true };
-    return { cmd: custom.trim(), args: ['--stdio'], shell: true, pathDirs: [...knownBinDirs(), ...String(loginInfoCache?.path || '').split(':')].filter(Boolean) };
+    if (IS_WIN) return { cmd: custom.trim(), args: ['--stdio'], shell: true, custom: true };
+    return { cmd: custom.trim(), args: ['--stdio'], shell: true, custom: true, pathDirs: [...knownBinDirs(), ...String(loginInfoCache?.path || '').split(':')].filter(Boolean) };
   }
   if (IS_WIN) {                                                     // Windows : inchangé
     if (cliPathCache === undefined) {
@@ -175,13 +190,23 @@ function editorContext() {
   return { file, rel };
 }
 
-function contextPrefix(ctx) {
+/** chemin du fichier pour le CLI : relatif à SON dossier de travail (📁, /cd, conversation reprise…), pas au workspace ; absolu s'il est en dehors */
+function pathForCli(file, base, P = path) {
+  if (!file) return '';
+  if (!base) return file;
+  const r = P.relative(base, file);
+  if (!r || r === '..' || r.startsWith('..' + P.sep) || P.isAbsolute(r)) return file;   // hors du dossier (ou autre lecteur) : chemin complet
+  return r.split(P.sep).join('/');
+}
+
+function contextPrefix(ctx, base) {
   if (!ctx) return '';
+  const shown = base ? pathForCli(ctx.file, base) : ctx.rel;
   if (ctx.text) {
     const fence = ctx.text.includes('```') ? '~~~~' : '```';
-    return `[Contexte VS Code : dans ${ctx.rel}, lignes ${ctx.start}-${ctx.end} sélectionnées par l'utilisateur]\n${fence}${ctx.lang || ''}\n${ctx.text}\n${fence}\n\n`;
+    return `[Contexte VS Code : dans ${shown}, lignes ${ctx.start}-${ctx.end} sélectionnées par l'utilisateur]\n${fence}${ctx.lang || ''}\n${ctx.text}\n${fence}\n\n`;
   }
-  return `[Contexte VS Code : fichier ouvert dans l'éditeur : ${ctx.rel}]\n\n`;
+  return `[Contexte VS Code : fichier ouvert dans l'éditeur : ${shown}]\n\n`;
 }
 
 /** Une conversation = un panneau + un processus fs-cli --stdio */
@@ -265,7 +290,8 @@ class Chat {
     p.on('exit', code => {
       if (this.proc !== p) return;
       this.proc = null;
-      if (isNotFoundExit(code, errTail)) { cliPathCache = undefined; return this.post({ type: 'exit', code, notFound: true, message: notFoundMessage({ node: true, cli: true }) + (errTail.trim() ? '\n' + errTail.trim().split('\n').slice(-2).join('\n') : '') }); }
+      const nf = notFoundExitMessage(code, errTail, { custom: !!r.custom, cmd });
+      if (nf) { cliPathCache = undefined; return this.post({ type: 'exit', code, notFound: true, message: nf }); }
       this.post({ type: 'exit', code, needLogin: code === 2, message: code && code !== 2 ? errTail.trim().split('\n').slice(-4).join('\n') : '' });
     });
   }
@@ -290,6 +316,7 @@ class Chat {
       }
       if (ev.type === 'ready' && this.pendingFlash) { const t = this.pendingFlash; this.pendingFlash = null; setTimeout(() => this.post({ type: 'event', ev: { type: 'flash', text: t } }), 300); }
       if (ev.type === 'busy' && !ev.busy) this.closeProposals();          // tour terminé (ou interrompu) : plus aucune proposition en attente
+      if (ev.type === 'selectCancelled') this.closeProposal(ev.id);       // question annulée par le CLI (Échap / interruption) : son diff se ferme
       if (ev.type === 'select' && ev.proposal && typeof ev.proposal.after === 'string') {
         this.showProposal(ev);
         ev = { ...ev, proposal: { path: String(ev.proposal.path || ''), created: !!ev.proposal.created } };   // le panneau n'a pas besoin des contenus
@@ -319,7 +346,7 @@ class Chat {
         const text = String(m.text || '');
         if (!text.trim()) return;
         const ctx = this.useContext && !text.trim().startsWith('/') && !text.trim().startsWith('!') ? editorContext() : null;
-        this.toCli({ type: 'submit', text: contextPrefix(ctx) + text });
+        this.toCli({ type: 'submit', text: contextPrefix(ctx, this.baseDir()) + text });   // chemin relatif au dossier de travail du CLI
         return;
       }
       case 'select': this.closeProposal(m.id); return this.toCli({ type: 'select', id: m.id, index: m.index });
@@ -471,8 +498,8 @@ class Chat {
 
   insertSelection() {
     const ctx = editorContext();
-    if (!ctx || !ctx.text) return;
-    this.useContext = true; this.pushContext();
+    if (ctx) { this.useContext = true; this.pushContext(); }
+    if (!ctx || !ctx.text) this.post({ type: 'event', ev: { type: 'flash', text: ctx ? 'aucune sélection : seul le fichier ouvert sera joint' : 'aucun fichier ouvert : sélectionne du code dans l\'éditeur pour le joindre' } });
     this.post({ type: 'focusInput' });
   }
 
@@ -500,13 +527,21 @@ class Chat {
 }
 
 class SidebarProvider {
-  constructor(context) { this.context = context; this.chat = null; }
+  constructor(context, onVisible) { this.context = context; this.chat = null; this.onVisible = onVisible; }
   resolveWebviewView(view) {
     this.view = view;
     this.chat?.dispose();
-    this.chat = new Chat(this.context, view.webview);
-    view.onDidDispose(() => { this.chat?.dispose(); this.chat = null; });
+    const chat = this.chat = new Chat(this.context, view.webview);
+    view.onDidChangeVisibility(() => { if (view.visible && this.chat === chat) this.onVisible?.(chat, true); });   // barre latérale montrée : c'est elle qu'on utilise
+    view.onDidDispose(() => { this.onVisible?.(chat, false); if (this.chat === chat) { chat.dispose(); this.chat = null; } });
   }
+}
+
+/** « Demander à FS-CLI » : le panneau visé est toujours montré (barre latérale cachée par l'Explorateur, onglet derrière un autre) */
+async function revealChat(c, sidebar, exec) {
+  if (c && c.panel) { try { c.panel.reveal(undefined, false); } catch {} return c; }
+  await exec('fsCli.chat.focus');
+  return sidebar.chat;
 }
 
 /** Accepter / Refuser depuis l'éditeur : l'uri reçue (ou l'onglet actif) désigne la proposition */
@@ -522,9 +557,9 @@ function answerFromEditor(uri, accept) {
 }
 
 function activate(context) {
-  const sidebar = new SidebarProvider(context);
-  const tabs = new Set();
   let lastActive = null;                                            // dernier panneau utilisé (pour « Demander à FS-CLI »)
+  const sidebar = new SidebarProvider(context, (c, shown) => { if (shown) lastActive = c; else if (lastActive === c) lastActive = null; });
+  const tabs = new Set();
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider('fs-cli-before', { provideTextDocumentContent: uri => beforeDocs.get(uri.toString()) ?? '' }),
@@ -537,6 +572,7 @@ function activate(context) {
       const panel = vscode.window.createWebviewPanel('fsCli.tab', 'FS-CLI', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
       panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
       const chat = new Chat(context, panel.webview, t => { panel.title = t ? `FS-CLI · ${t.slice(0, 30)}` : 'FS-CLI'; });
+      chat.panel = panel;                                           // pour le remettre au premier plan (« Demander à FS-CLI »)
       tabs.add(chat); lastActive = chat;
       panel.onDidChangeViewState(e => { if (e.webviewPanel.active) lastActive = chat; });
       panel.onDidDispose(() => { chat.dispose(); tabs.delete(chat); if (lastActive === chat) lastActive = null; });
@@ -544,8 +580,7 @@ function activate(context) {
     vscode.commands.registerCommand('fsCli.focus', () => vscode.commands.executeCommand('fsCli.chat.focus')),
     vscode.commands.registerCommand('fsCli.newChat', () => { const c = lastActive || sidebar.chat; if (c) c.toCli({ type: 'submit', text: '/new' }); else vscode.commands.executeCommand('fsCli.chat.focus'); }),
     vscode.commands.registerCommand('fsCli.askSelection', async () => {
-      let c = lastActive || sidebar.chat;
-      if (!c) { await vscode.commands.executeCommand('fsCli.chat.focus'); c = sidebar.chat; }
+      const c = await revealChat(lastActive || sidebar.chat, sidebar, id => vscode.commands.executeCommand(id));
       c?.insertSelection();
     }),
     vscode.commands.registerCommand('fsCli.login', () => {
@@ -559,4 +594,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, _test: { locateCli, parseLoginOutput, notFoundMessage, isNotFoundExit, toEditorPath, knownBinDirs, Chat } };   // _test : pour test/macos-extension.test.mjs
+module.exports = { activate, deactivate, _test: { locateCli, parseLoginOutput, notFoundMessage, isNotFoundExit, notFoundExitMessage, toEditorPath, knownBinDirs, pathForCli, contextPrefix, revealChat, SidebarProvider, Chat } };   // _test : pour test/macos-extension.test.mjs et test/audit2-ide.test.mjs

@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { cfg, HOME_DIR } from './config.js';
+import { cfg, HOME_DIR, ROOT } from './config.js';
 
 /** Dossier personnel exploré (désactivé dans les tests, sauf FS_IMPORT_HOME explicite). */
 export function importHome() {
@@ -78,6 +78,19 @@ export function claudeDesktopConfig(home, platform = process.platform, env = pro
   return path.join(xdg || path.join(home, '.config'), 'Claude', 'claude_desktop_config.json');
 }
 
+/**
+ * Le propre serveur MCP de FS-CLI (« france-student », écrit par fs-cli --install-mcp) : jamais réimporté ni proposé au modèle,
+ * sinon citer « France Student » démarre un 2e cli.js --mcp et invite le modèle à rappeler France Student lui-même (requêtes payées en double).
+ */
+export const SELF_MCP_NAME = 'france-student';
+export function isSelfMcpServer(name, raw) {
+  if (String(name || '').toLowerCase() === SELF_MCP_NAME) return true;
+  const args = Array.isArray(raw?.args) ? raw.args.map(String) : [];
+  if (!args.includes('--mcp')) return false;
+  const own = path.join(ROOT, 'cli.js');
+  return args.some(a => /(^|[\\/])fs-cli[\\/]cli\.js$/i.test(a) || (() => { try { return samePath(a, own); } catch { return false; } })());
+}
+
 /** Serveurs MCP configurés dans les autres assistants : { nom: { ...serveur, _source } }. Le premier trouvé gagne. */
 export function discoverMcpServers(cwd) {
   const home = importHome(); if (!home) return {};
@@ -85,6 +98,8 @@ export function discoverMcpServers(cwd) {
   const add = (servers, source) => {
     for (const [name, raw] of Object.entries(servers || {})) {
       if (out[name] || !/^[\w.-]{1,64}$/.test(name)) continue;
+      if (isSelfMcpServer(name, raw)) continue;                       // FS-CLI lui-même : pas de serveur MCP qui se rappelle
+
       const s = toServer(raw); if (s) out[name] = { ...s, _source: source };
     }
   };

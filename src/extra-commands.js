@@ -1,7 +1,7 @@
 // Commandes supplémentaires : contexte, quota, compactage, duel, mémoire, skills, projet, historique
 import fs from 'node:fs';
 import path from 'node:path';
-import { cfg, saveCfg, saveCfgKeys, upsertSession } from './config.js';
+import { cfg, saveCfg, saveCfgKeys, upsertSession, loadSessions } from './config.js';
 import { fetchChat } from './api.js';
 import { streamChat, fetchChatsList, deleteChat, findOrCreateFsProject, attachChatToProject, requestJson, listFsProjects, projectChats, deleteFsProjectSafely } from './api.js';
 import { fetchChatUsage, fetchUserUsage, contextPercent, describeChatUsage, describeUserUsage } from './account.js';
@@ -20,6 +20,30 @@ import { c, println } from './ui.js';
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
+/**
+ * Préprompt, fait ou compétence changé : la conversation en cours reçoit seulement ce changement (courte note jointe au prochain message),
+ * jamais une 2e copie de tout le bloc de contexte (rejouée par France Student à chaque message). Renvoie true si c'est pris en compte dès le prochain message.
+ */
+export function contextNote(S, note) {
+  if (!S.chatId) return false;                                       // pas encore de conversation : le bloc complet, à jour, part avec le 1er message
+  if (!S.ctxSent) return true;                                       // bloc pas encore envoyé dans cette conversation : il partira au prochain message, à jour
+  if (S.bareChat) return false;                                      // conversation « ta demande seule » (après un refus) : rien n'y est ajouté
+  (S.notes ||= []).push(note);
+  return true;
+}
+
+/** conversation réutilisée (/btw, /compare) trop chargée : on repart d'une neuve (seulement si la limite des 50 par jour le permet) */
+async function tooFullToReuse(env, chatId, agentId, { pctMax = 20, tokensMax = 40000 } = {}) {
+  if (!chatId || (cfg.dailyLimitHitAt || 0) >= lastReset()) return false;
+  const pct = await (env.contextPercent || contextPercent)(chatId).catch(() => null);
+  if (typeof pct !== 'number') return false;
+  const win = Number(env.S?.ctxWindows?.[String(agentId)]) || 0;     // fenêtre connue : pourcentage → tokens rejoués à chaque question
+  return pct >= pctMax || (win > 0 && pct / 100 * win >= tokensMax);
+}
+const FRESH_QUESTION = '(Question indépendante des précédentes.)\n';
+/** titre du site sans l'étiquette de session « [7f3a] » / « [7f3a·w0] » */
+export const cleanTitle = t => String(t || '').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '').trim();
+
 // ── Compactage de la conversation ─────────────────────────────────────────────
 const compactPrompt = (extra = '') =>
   'Résume cette session de travail pour la poursuivre dans une nouvelle conversation, sans rien perdre d\'utile. Réponds en français, en texte simple (pas de bloc de code, pas de fichier), avec ces rubriques :\n' +
@@ -31,25 +55,24 @@ const compactPrompt = (extra = '') =>
 const compactSeed = summary =>
   'Reprise de session : voici le résumé de la conversation précédente. Garde-le comme contexte pour les prochaines demandes. Réponds seulement « Compris. ».\n\n' + summary;
 
-export async function compactSession(S, { instruction = '', signal } = {}) {
+export async function compactSession(S, { instruction = '', signal, stream = streamChat } = {}) {
   if (!S.chatId) throw new Error('aucune conversation à résumer');
   // la nouvelle conversation compte dans la limite des 50 par jour : limite déjà atteinte → on ne paie même pas le résumé
   if ((cfg.dailyLimitHitAt || 0) >= lastReset()) throw new Error('limite des 50 nouvelles conversations atteinte aujourd\'hui : le résumé attendra la remise à zéro (rien n\'a été consommé)');
   const prev = S.chatId;
   ui.spinner.start('résumé de la session…');
   try {
-    const r1 = await streamChat({ agentId: S.agentId, chatId: prev, content: compactPrompt(instruction), webSearch: false, signal });
+    const r1 = await stream({ agentId: S.agentId, chatId: prev, content: compactPrompt(instruction), webSearch: false, signal });
     const summary = clip(r1.text.trim(), 20000);
     if (!summary) throw new Error('résumé vide : la session n\'a pas été compactée');
     // comme Claude Code : pas de requête « Compris. » ; le résumé part avec le prochain vrai message, qui ouvre la nouvelle conversation
     S.compactedFrom = prev; S.pendingSummary = summary;
     S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
-    S.ctxPercent = null; S.lastPromptTokens = 0;
+    S.ctxPercent = null; S.lastPromptTokens = 0; S.needCompact = null;
     return { chars: summary.length, previous: prev, chatId: null, percent: null };
   } finally { ui.spinner.stop(); }
 }
 
-/** Avant un envoi : compacte si le contexte atteint le seuil (jamais pendant une boucle) */
 /** seuil de résumé automatique (tokens envoyés par message) : le tien s'il est fixé, sinon adapté à la fenêtre de contexte du modèle */
 export function compactLimit(S) {
   if (cfg.compactTokens > 0) return cfg.compactTokens;
@@ -58,15 +81,18 @@ export function compactLimit(S) {
   return win ? Math.max(60000, Math.min(200000, Math.round(win * 0.3))) : 80000;
 }
 
-export async function maybeAutoCompact(S, signal) {
+/** Avant un envoi (chatTurn, ou entre deux agents de /team en mode same) : compacte si le contexte atteint le seuil.
+ *  Pendant une demande, runNative demande seulement au modèle de s'arrêter après l'étape en cours (voir native.js). */
+export async function maybeAutoCompact(S, signal, { stream } = {}) {
   if (!cfg.autoCompact || !S.chatId) return;
   const full = typeof S.ctxPercent === 'number' && S.ctxPercent >= cfg.compactThreshold;
-  const heavy = (S.lastPromptTokens || 0) >= compactLimit(S);   // chaque message renvoie tout l'historique : au-delà, il coûte trop
+  const heavy = (S.lastPromptTokens || 0) >= compactLimit(S)    // chaque message renvoie tout l'historique : au-delà, il coûte trop
+    || (!!S.needCompact && S.needCompact === S.chatId);           // demande arrêtée en cours de route par runNative (conversation trop chargée)
   if (!full && !heavy) return;
   if ((cfg.dailyLimitHitAt || 0) >= lastReset()) return;                     // limite atteinte : pas de nouvelle conversation possible, on n'essaie pas
   println(c.yellow(full ? `  ⚠ contexte à ${Math.round(S.ctxPercent)} % — résumé automatique de la conversation` : `  ⚠ conversation lourde (≈${Math.round(S.lastPromptTokens / 1000)}k tokens envoyés à chaque message) — résumé automatique pour l'alléger`) + c.dim('  (/autocompact off pour désactiver)'));
   try {
-    const r = await compactSession(S, { signal });
+    const r = await compactSession(S, { signal, ...(stream ? { stream } : {}) });
     println(c.dim(`  ✓ conversation résumée (${r.chars} caractères) : la suite repart dans une conversation légère\n`));
   } catch (e) { println(c.yellow(`  compactage impossible : ${e.message}`)); }
 }
@@ -90,11 +116,14 @@ async function duel(env, prompt) {
     const t0 = Date.now();
     // deux conversations « duelA / duelB » créées une fois puis réutilisées (limite de 50 nouvelles conversations par jour)
     S.slots ||= {}; S.sid ||= newSid();
+    const stream = env.stream || streamChat;
+    // conversations du duel trop chargées : chaque /compare y repaierait toutes les questions précédentes → neuves
+    for (const [slot, id] of [['duelA', a], ['duelB', b]]) if (S.slots[slot] && await tooFullToReuse(env, S.slots[slot], id)) delete S.slots[slot];
     const run = (id, slot) => {
       let chatId = S.slots[slot] || null;
       const fresh = !chatId;
       const content = (fresh && cfg.tagChats !== false ? tag(S.sid, slot) : '') + msg;
-      return streamChat({ agentId: id, chatId, content, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: slot }, onChat: cid => { if (!chatId) { chatId = cid; S.slots[slot] = cid; } } })
+      return stream({ agentId: id, chatId, content, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: slot }, onChat: cid => { if (!chatId) { chatId = cid; S.slots[slot] = cid; } } })
         .then(r => ({ ...r, secs: (Date.now() - t0) / 1000 }));
     };
     const [ra, rb] = await Promise.allSettled([run(a, 'duelA'), run(b, 'duelB')]);
@@ -443,7 +472,10 @@ export async function extraCommand(cmd, arg, env) {
       const content = (ctx ? `Pour contexte, voici la fin de la réponse que je lis en ce moment :\n"""\n${ctx.slice(-1500)}\n"""\n\n` : '') + `Question rapide (réponds court) : ${q}`;
       await withAbort(async signal => {
         ui.spinner.start('question à côté…');
-        const send = chatId => streamChat({ agentId: S.agentId, chatId, content: chatId ? content : (cfg.tagChats !== false ? tag(S.sid || newSid(), 'btw') : '') + content, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: 'btw' },
+        const stream = env.stream || streamChat;
+        // conversation des /btw partagée par toutes les sessions : chaque question y repaie les précédentes → neuve au-delà de 20 % (ou ≈ 40k tokens)
+        if (cfg.btwChat?.id && await tooFullToReuse(env, cfg.btwChat.id, S.agentId)) saveCfgKeys({ btwChat: null });
+        const send = chatId => stream({ agentId: S.agentId, chatId, content: chatId ? FRESH_QUESTION + content : (cfg.tagChats !== false ? tag(S.sid || newSid(), 'btw') : '') + content, webSearch: cfg.webSearch, signal, register: { sid: S.sid, role: 'btw' },
           onChat: id => { if (cfg.btwChat?.id !== id) saveCfgKeys({ btwChat: { id } }); } });
         let r;
         try { r = await send(cfg.btwChat?.id || null); }
@@ -745,18 +777,25 @@ export async function extraCommand(cmd, arg, env) {
       if (/^(user|utilisateur)$/i.test(scopeWord)) { text = rest.join(' '); }
       else if (/^(projet|project)$/i.test(scopeWord)) { scope = 'projet'; text = rest.join(' '); }
       if (!text) { println(`  ${c.dim(scope)} : ${mem.loadProfile(scope, cwd).preprompt || c.dim('(vide)')}`); return true; }
-      mem.setPreprompt(scope, cwd, /^(clear|vider|efface)$/i.test(text) ? '' : text);
-      S.ctxSent = false;
-      println(c.green('  ✓ ') + c.dim(`préprompt ${scope} ${/^(clear|vider|efface)$/i.test(text) ? 'effacé' : 'enregistré'} — joint au prochain premier message (/new pour l'appliquer tout de suite)`));
+      const cleared = /^(clear|vider|efface)$/i.test(text);
+      mem.setPreprompt(scope, cwd, cleared ? '' : text);
+      // conversation en cours qui a déjà le contexte : seulement le changement (pas une 2e copie de tout le bloc, rejouée à chaque message)
+      const now = contextNote(S, cleared ? `L'utilisateur a effacé son préprompt (${scope}) : ne l'applique plus.` : `Nouveau préprompt de l'utilisateur (${scope}), à appliquer désormais : ${text.slice(0, 1000)}`);
+      println(c.green('  ✓ ') + c.dim(`préprompt ${scope} ${cleared ? 'effacé' : 'enregistré'} — ${now ? 'pris en compte dès ton prochain message' : 'joint au début de la prochaine conversation'}`));
       return true;
     }
     case '/profil': case '/profile': {
       const m = arg.match(/^(?:(user|utilisateur|projet|project)\s+)?(learn|forget)\s+(.+)$/i);
       if (m) {
         const scope = /projet|project/i.test(m[1] || '') ? 'projet' : 'utilisateur';
-        if (/learn/i.test(m[2])) { mem.learnFact(scope, cwd, m[3]); println(c.green('  ✓ fait ajouté / renforcé')); }
-        else println(mem.forgetFact(scope, cwd, parseInt(m[3])) ? c.green('  ✓ fait oublié') : c.red('  numéro invalide'));
-        S.ctxSent = false; return true;
+        if (/learn/i.test(m[2])) { mem.learnFact(scope, cwd, m[3]); contextNote(S, `Fait sur l'utilisateur : ${m[3].trim().slice(0, 200)}`); println(c.green('  ✓ fait ajouté / renforcé')); }
+        else {
+          const gone = [...mem.loadProfile(scope, cwd).facts].sort((a, b) => b.weight - a.weight)[parseInt(m[3]) - 1]?.fact;   // même ordre que forgetFact
+          const ok = mem.forgetFact(scope, cwd, parseInt(m[3]));
+          if (ok && gone) contextNote(S, `L'utilisateur a retiré ce fait de son profil, n'en tiens plus compte : ${gone}`);
+          println(ok ? c.green('  ✓ fait oublié') : c.red('  numéro invalide'));
+        }
+        return true;
       }
       const facts = [...mem.loadProfile('utilisateur', cwd).facts, ...mem.loadProfile('projet', cwd).facts].sort((a, b) => b.weight - a.weight);
       println();
@@ -768,7 +807,7 @@ export async function extraCommand(cmd, arg, env) {
     case '/skills': {
       println();
       mem.loadSkills().forEach((s, i) => println(`  ${cfg.skills.includes(s.id) ? c.green('●') : c.dim('○')} ${c.accent(String(i + 1))}  ${c.bold(s.name)} ${c.dim('· ' + (s.badge || ''))}\n       ${c.dim(clip(s.description || '', 90))}`));
-      println(c.dim('\n  /skill <n°|id> pour activer/désactiver (joint au prochain premier message)\n'));
+      println(c.dim('\n  /skill <n°|id> pour activer/désactiver (pris en compte dès ton prochain message)\n'));
       return true;
     }
     case '/skill': {
@@ -776,8 +815,9 @@ export async function extraCommand(cmd, arg, env) {
       const s = list[parseInt(arg) - 1] || list.find(x => x.id === arg || x.name.toLowerCase().includes(arg.toLowerCase()));
       if (!arg || !s) { println(c.red('  skill introuvable') + c.dim(' (/skills)')); return true; }
       const on = !cfg.skills.includes(s.id);
-      cfg.skills = on ? [...cfg.skills, s.id] : cfg.skills.filter(x => x !== s.id); saveCfg(); S.ctxSent = false;
-      println(c.dim(`  → ${s.name} : ${on ? c.green('activé') : 'désactivé'}  (appliqué à la prochaine conversation : /new)`)); return true;
+      cfg.skills = on ? [...cfg.skills, s.id] : cfg.skills.filter(x => x !== s.id); saveCfg();
+      const now = contextNote(S, on ? `Compétence à appliquer désormais — ${s.name} : ${String(s.systemPrompt || s.description || '').slice(0, 1500)}` : `N'applique plus la compétence « ${s.name} ».`);
+      println(c.dim(`  → ${s.name} : ${on ? c.green('activé') : 'désactivé'}  (${now ? 'pris en compte dès ton prochain message' : 'appliqué au début de la prochaine conversation'})`)); return true;
     }
 
     // ── projet ──
@@ -790,9 +830,14 @@ export async function extraCommand(cmd, arg, env) {
     case '/project': {
       const dir = resolveP(arg || '.', cwd);
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) { println(c.red('  dossier introuvable')); return true; }
-      S.cwd = dir; S.notes.push(`Dossier courant changé : ${dir}`); refreshPrompt();
-      const notes = mem.listNotes(dir).length, has = fs.existsSync(path.join(dir, 'RESUME.md'));
-      println(c.green('  ✓ ') + `projet : ${dir}`);
+      if (env.changeCwd) {                                               // comme /cd : question de confiance (dossier très large…) et dossier cible remis à zéro
+        const before = S.cwd;
+        await env.changeCwd(dir);
+        if (S.cwd === before && path.resolve(before).toLowerCase() !== dir.toLowerCase()) return true;   // refusé : dossier inchangé (déjà dit)
+      } else { S.cwd = dir; S.targetDir = null; S.notes.push(`Dossier courant changé : ${dir}`); refreshPrompt(); }   // l'ancien dossier cible ne doit plus recevoir les écritures
+      const pdir = S.cwd;
+      const notes = mem.listNotes(pdir).length, has = fs.existsSync(path.join(pdir, 'RESUME.md'));
+      println(c.green('  ✓ ') + `projet : ${pdir}`);
       println(c.dim(`    ${notes} note${notes > 1 ? 's' : ''} · ${has ? 'RESUME.md présent' : 'pas de RESUME.md (/index pour le générer)'}`));
       return true;
     }
@@ -871,13 +916,20 @@ export async function extraCommand(cmd, arg, env) {
 
     // ── historique du compte ──
     case '/history': {
-      const list = await fetchChatsList(15);
+      const list = await (env.fetchChatsList || fetchChatsList)(15);
       if (!list.length) { println(c.dim('  historique indisponible')); return true; }
       const n = parseInt(arg);
       if (n >= 1 && list[n - 1]) {
-        const ch = list[n - 1];
-        applySession({ chatId: ch.id, agentId: ch.agent?.id, cwd: S.cwd, title: ch.title, primed: true, ctxSent: false });
-        println(c.green('  ✓ conversation reprise') + c.dim(` · ${ch.title} · ${ch.agent?.name || ''}`)); return true;
+        const ch = list[n - 1], title = cleanTitle(ch.title);
+        // comme /resume : session locale reprise si elle existe (contexte déjà envoyé, sid, conversations d'agents, dossier cible) ;
+        // sinon conversation du compte (site, autre PC) : son contexte n'est pas renvoyé en double
+        if (env.resumeChatById) await env.resumeChatById(ch.id);
+        else {
+          const s = loadSessions().find(x => x.chatId === ch.id) || { chatId: ch.id, agentId: ch.agent?.id, title, ctxSent: true };
+          const own = cleanTitle(s.title);
+          applySession({ ...s, title: own && own !== '(sans titre)' ? own : title }); refreshPrompt?.();
+        }
+        println(c.green('  ✓ conversation reprise') + c.dim(` · ${title} · ${ch.agent?.name || ''}`)); return true;
       }
       println();
       list.forEach((ch, i) => println(`  ${c.accent(String(i + 1).padStart(2))}  ${clip(ch.title || '(sans titre)', 42).padEnd(42)} ${c.dim((ch.agent?.name || '').padEnd(18))} ${c.dim(String(ch.createdAt || '').slice(0, 16).replace('T', ' '))}`));

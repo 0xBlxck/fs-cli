@@ -10,7 +10,7 @@ import { newSid, tag } from './chats.js';
 import { runNative } from './native.js';
 import { judgeCommand, judgeCode, decide, addRulesForJudgement, sensitivePathReason, scanSecrets } from './permissions.js';
 import { extractBlocks, panelBlocks, pickAutoBlocks } from './blocks.js';
-import { TOOLS, normalizeArgs, riskInfo, resolveP, makeTmp, dropTmp, proposedChange } from './tools.js';
+import { TOOLS, normalizeArgs, riskInfo, resolveP, makeTmp, dropTmp, proposedChange, unreadOverwrite } from './tools.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './trust.js';
@@ -147,8 +147,21 @@ function readCacheFor(S) {
   if (!S.chatId) return null;
   S.readCaches ||= new Map();
   if (!S.readCaches.has(S.chatId)) { S.readCaches.set(S.chatId, new Map()); if (S.readCaches.size > 20) S.readCaches.delete(S.readCaches.keys().next().value); }
-  return S.readCaches.get(S.chatId);
+  const cache = S.readCaches.get(S.chatId);
+  // taille du contexte en forte baisse (> 30 %) dans la même conversation : France Student l'a résumée, le modèle a oublié les fichiers lus
+  const tok = S.lastPromptTokens;
+  if (typeof tok === 'number' && tok > 0) {
+    if (cache.tokens && tok < cache.tokens * 0.7) cache.clear();
+    cache.tokens = tok;
+  }
+  return cache;
 }
+/** read_file dont le résultat n'est pas arrivé en entier au modèle (coupé par la limite d'un envoi) : la relecture le renverra */
+export function forgetRead(S, key) { if (key && S.chatId) S.readCaches?.get(S.chatId)?.delete(key); }
+
+// noms des outils et paramètres de France Student (messages destinés au modèle)
+const FS_TOOL = { grep: 'search_files', shell: 'run_command', list_dir: 'list_directory' };
+const FS_PARAM = { old_string: 'old_text', new_string: 'new_text', pattern: 'query', timeout: 'timeout_seconds', offset: 'start_line' };
 
 export async function execCall(S, call, { signal, ask, root = null }) {
   const tool = TOOLS[call.name];
@@ -157,12 +170,16 @@ export async function execCall(S, call, { signal, ask, root = null }) {
     ui.toolBody(`Outil inconnu`, { error: true });
     return { name: call.name, ok: false, output: `Outil inconnu: "${call.name}". Outils disponibles: ${Object.keys(TOOLS).join(', ')}.` };
   }
-  const { args, missing } = normalizeArgs(tool, call.args);
-  const ctx = { cwd: root || S.cwd, signal, undo: S.undo, readCache: readCacheFor(S) };      // root = racine du workspace (moteur natif)
-  if (missing.length) {
+  const { args, missing, invalid = [] } = normalizeArgs(tool, call.args);
+  // root = racine du workspace (moteur natif) ; allowOverwrite : l'utilisateur a choisi ce bloc lui-même (/run, exécution auto confirmée)
+  const ctx = { cwd: root || S.cwd, signal, undo: S.undo, readCache: readCacheFor(S), allowOverwrite: !!call.allowOverwrite };
+  if (missing.length || invalid.length) {
+    // noms de France Student (ceux que le modèle connaît), sans aucun format d'outil dans le texte
+    const fsName = n => FS_PARAM[n] || n, tName = FS_TOOL[call.name] || call.name;
     ui.toolHeader(call.name, '');
-    ui.toolBody(`paramètre manquant: ${missing.join(', ')}`, { error: true });
-    return { name: call.name, ok: false, output: `Paramètre(s) manquant(s) pour ${call.name}: ${missing.join(', ')}. Format attendu: <fs:param name="${missing[0]}">…</fs:param>` };
+    ui.toolBody(missing.length ? `paramètre manquant: ${missing.join(', ')}` : `paramètre invalide: ${invalid.join(', ')}`, { error: true });
+    const why = [missing.length ? `paramètre manquant : ${missing.map(fsName).join(', ')}` : '', invalid.length ? `${invalid.map(fsName).join(', ')} doit être une chaîne de texte (le contenu exact), pas un objet JSON` : ''].filter(Boolean).join(' ; ');
+    return { name: call.name, ok: false, output: `${tName} : ${why}.` };
   }
 
   ui.toolHeader(call.name, tool.summary?.(args, ctx) || '');
@@ -209,10 +226,11 @@ export async function execCall(S, call, { signal, ask, root = null }) {
 
   if (needsConfirm(risk, S)) {
     const danger = !!(risk.danger || risk.protectedPath || risk.secrets);
-    const title = risk.secrets ? `Secret détecté dans le contenu (${[...new Set(risk.secrets.map(s => s.name))].join(', ')}) — écrire quand même ?`
+    const title = (risk.secrets ? `Secret détecté dans le contenu (${[...new Set(risk.secrets.map(s => s.name))].join(', ')}) — écrire quand même ?`
       : risk.danger ? `Action sensible : ${risk.danger}`
       : risk.protectedPath ? `Chemin sensible : ${risk.protectedPath}`
-      : `${call.name} demande ton accord`;
+      : `${call.name} demande ton accord`)
+      + (call.name === 'write_file' && !ctx.allowOverwrite && unreadOverwrite(resolveP(args.path, ctx.cwd)) ? ' — écrase un fichier existant que le modèle n\'a pas lu' : '');
     const detail = risk.secrets ? risk.secrets.slice(0, 5).map(s => `${s.name} : ${s.sample}`).join('\n') : tool.preview?.(args, ctx);
     // seul souci = dossier hors du dossier de travail → on propose de faire confiance à ce dossier (plus de question ensuite, même en auto)
     const trustDir = risk.outsideDir && !risk.danger && !risk.secrets && !isBroadFolder(risk.outsideDir) ? risk.outsideDir : null;
@@ -224,6 +242,7 @@ export async function execCall(S, call, { signal, ask, root = null }) {
       ui.toolNote('refusé', 'yellow');
       return { name: call.name, ok: false, output: `L'utilisateur a REFUSÉ cette action.${r.feedback ? ' Il précise : ' + r.feedback : ' Propose une alternative ou demande-lui.'}` };
     }
+    ctx.allowOverwrite = true;                                          // l'utilisateur a accepté CETTE écriture (fichier existant compris)
     if (r.trust && trustDir) { trustFolder(trustDir); ui.toolNote(`dossier approuvé : ${trustDir} (plus de question pour ce dossier)`, 'dim'); }
     else if (r.always && risk.judgement) { addRulesForJudgement(risk.judgement, S.cwd, 'projet'); ui.toolNote('règle enregistrée pour ce dossier (/permissions)', 'dim'); }
     else if (r.always) S.allow[risk.kind] = true;
@@ -237,7 +256,8 @@ export async function execCall(S, call, { signal, ask, root = null }) {
   if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
 
   // affichage du résultat : l'action passe dans l'historique avec sa couleur (puce verte / rouge) ; exploration réussie = rien de plus
-  if (!ui.toolDone(res.ok)) return { name: call.name, ok: res.ok, output: res.output };
+  // cacheKey (read_file) : à oublier avec forgetRead si le résultat est coupé avant d'arriver au modèle
+  if (!ui.toolDone(res.ok)) return { name: call.name, ok: res.ok, output: res.output, cacheKey: res.cacheKey };
   if (res.diff) ui.diffView(res.diff[0], res.diff[1]);              // résumé « N ajouts, M suppressions » + diff coloré numéroté
   else if (res.silent) { if (res.display) ui.toolNote(res.display, res.ok ? 'dim' : 'red'); }
   else if (!res.ok) ui.toolBody(res.display || res.output, { error: true, max: 4 });
@@ -246,7 +266,7 @@ export async function execCall(S, call, { signal, ask, root = null }) {
     ui.toolBody(res.output.split('\n').slice(call.name === 'list_dir' ? 1 : 0, 9).join('\n'), { max: 8 });
   } else ui.toolNote(res.display || 'ok', res.kind === 'warn' ? 'yellow' : res.kind === 'ok' ? 'green' : 'dim');
 
-  return { name: call.name, ok: res.ok, output: res.output };
+  return { name: call.name, ok: res.ok, output: res.output, cacheKey: res.cacheKey };
 }
 
 // ── Tour complet : message utilisateur → (outils)* → réponse finale ───────────
@@ -291,7 +311,7 @@ export async function runBlock(S, b, io) {
       if (r.aborted || io.signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
       if (!r.allow) { ui.toolNote('ignoré (fichier conservé)', 'yellow'); S.pendingResults.push(`[${b.name}] non écrit : l'utilisateur a gardé le fichier existant`); return { ok: true, output: 'ignoré' }; }
     }
-    call = { name: 'write_file', args: { path: target, content: b.code } };
+    call = { name: 'write_file', args: { path: target, content: b.code }, allowOverwrite: true };   // bloc choisi par l'utilisateur (/run) ou écrasement déjà confirmé ci-dessus
   }
   else if (b.action === 'python') call = { name: 'python', args: { code: b.code } };
   else if (b.action === 'node') {

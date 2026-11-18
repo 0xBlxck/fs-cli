@@ -8,9 +8,9 @@ import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, 
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent } from './account.js';
-import { cfg, saveCfg } from './config.js';
-import { newSid, tag } from './chats.js';
-import { execCall, baseDir } from './agent.js';
+import { cfg, saveCfg, saveCfgKeys } from './config.js';
+import { newSid, tag, lastReset } from './chats.js';
+import { execCall, baseDir, forgetRead } from './agent.js';
 import { clipMiddle } from './tools.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
@@ -23,6 +23,8 @@ const TOOL_REFUSAL = /servir de moteur|(?:moteur|outil|agent) (?:d'un |à un |po
 export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || '').slice(0, 400));   // list_directory, read_file, search_files : seuls outils proposés en mode plan
 const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi
+// conversation trop chargée en pleine demande : le modèle finit l'étape en cours puis s'arrête (le résumé est fait avant le message suivant)
+export const HEAVY_NOTE = '(Note : cette conversation est devenue très longue. Termine l\'étape en cours, puis arrête-toi avec un court point d\'étape : ce qui est fait, ce qui reste à faire. La suite reprendra juste après, à partir d\'un résumé.)';
 
 /** appel FS → appel de nos outils (noms et arguments traduits) */
 export function mapCall(name, a = {}) {
@@ -32,7 +34,7 @@ export function mapCall(name, a = {}) {
       const start = a.start_line ? Number(a.start_line) : undefined, end = a.end_line ? Number(a.end_line) : undefined;
       return { name: 'read_file', args: { path: a.path, offset: start, limit: start && end && end >= start ? end - start + 1 : (end && !start ? end : undefined) } };
     }
-    case 'search_files': return { name: 'grep', args: { pattern: a.query, path: a.path, glob: a.glob, context: 0 }, max: a.max_results };
+    case 'search_files': return { name: 'grep', args: { pattern: a.query, path: a.path, glob: a.glob, context: 0, max_results: a.max_results } };   // la recherche gère elle-même la limite (et dit s'il en reste)
     case 'edit_file': return { name: 'edit_file', args: { path: a.path, old_string: a.old_text, new_string: a.new_text, replace_all: a.replace_all } };
     case 'write_file': return { name: 'write_file', args: { path: a.path, content: a.content } };
     case 'run_command': return { name: 'shell', args: { command: a.command, cwd: a.cwd, timeout: a.timeout_seconds } };
@@ -51,9 +53,9 @@ async function execNative(S, call, io) {
   }
   const r = await execCall(S, { name: mapped.name, args: mapped.args }, io);
   let out = String(r.output ?? '');
-  if (mapped.max && mapped.name === 'grep') out = out.split('\n').slice(0, Math.max(1, Number(mapped.max))).join('\n');
   if (!r.ok && /REFUSÉ|refusé par la politique/i.test(out)) out = out.includes('REFUSÉ') ? `Commande refusée par l'utilisateur. ${out.replace(/^.*?REFUSÉ cette action\.?/i, '').trim()}`.trim() : out;
-  return { callId, output: clipMiddle(out, MAX_RESULT), isError: !r.ok };
+  if (out.length > MAX_RESULT && r.cacheKey) forgetRead(S, r.cacheKey);   // lecture coupée : jamais notée « déjà reçue » (sinon la relecture répondrait « inchangé »)
+  return { callId, output: clipMiddle(out, MAX_RESULT), isError: !r.ok, cacheKey: r.cacheKey };
 }
 
 /** titre d'un document du site utilisable comme fichier du dossier de travail (« carla_env.py », « src/app.js ») ; sinon null */
@@ -115,6 +117,12 @@ export async function runNative(S, userText, opts) {
   let results = null, resultFiles = [], nTools = 0, nReq = 0, tokensIn = 0, tokensOut = 0, steps = 0, hitLimit = false, visible = '';
 
   const maxSteps = S.maxSteps || cfg.maxSteps || 40;                  // --max-turns : pour cette exécution seulement
+  // résumé automatique pendant une longue demande : sur demande seulement (opts.midCompact), ou conversation principale d'une session
+  // INTERACTIVE (S.interactive, posé par cli.js hors -p / stdin) : en mode -p le processus s'arrête après la réponse, /continue est impossible.
+  // Jamais pour les agents de /team ni le serveur MCP, que rien ne résumerait ensuite. La tâche n'est jamais coupée : le modèle
+  // termine l'étape en cours et fait un point d'étape ; le résumé est fait au message suivant (/continue), avant d'envoyer.
+  const midCompact = opts.midCompact ?? (S.interactive === true && 'bare' in opts && !S.tagRole);
+  let heavyAt = 0;
   for (; steps < maxSteps; steps++) {
     if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     const md = new ui.MdStream({ collapse: false });
@@ -183,8 +191,21 @@ export async function runNative(S, userText, opts) {
       nTools++;
       let r = await execNative(S, call, { signal, ask, root });
       { const a = parseArgs(call.arguments); done.push(`${call.name}${a.path ? ' ' + a.path : a.command ? ' « ' + String(a.command).slice(0, 80) + ' »' : ''} (${r.isError ? 'échec' : 'ok'})`); }
-      if (total + r.output.length > MAX_TOTAL) r = { ...r, output: r.output.slice(0, Math.max(500, MAX_TOTAL - total)) + '\n[… coupé : lis une plage plus étroite]' };
+      if (total + r.output.length > MAX_TOTAL) { forgetRead(S, r.cacheKey); r = { ...r, output: r.output.slice(0, Math.max(500, MAX_TOTAL - total)) + '\n[… coupé : lis une plage plus étroite]' }; }
+      delete r.cacheKey;                                                 // FS n'attend que callId, output, isError
       total += r.output.length; results.push(r);
+    }
+    // conversation très chargée (≥ 1,5 × le seuil du résumé) : une seule fois, demande au modèle de finir l'étape en cours puis de s'arrêter
+    if (midCompact && !heavyAt && reqIn && results.length && cfg.autoCompact && S.chatId && (cfg.dailyLimitHitAt || 0) < lastReset()) {
+      const { compactLimit } = await import('./extra-commands.js');
+      if (reqIn >= 1.5 * compactLimit(S)) {
+        heavyAt = reqIn; S.needCompact = S.chatId;                       // lu par maybeAutoCompact au prochain message de CETTE conversation
+        const last = results.length - 1, add = '\n\n' + HEAVY_NOTE;
+        let out = results[last].output;
+        const over = Math.max(total + add.length - MAX_TOTAL, out.length + add.length - MAX_RESULT, 0);
+        if (over) out = out.slice(0, Math.max(0, out.length - over));
+        results[last] = { ...results[last], output: out + add };
+      }
     }
     // captures renvoyées par les outils (navigateur, Blender…) : envoyées sur Files v2 et jointes à ces résultats → le modèle les VOIT
     resultFiles = [];
@@ -194,7 +215,7 @@ export async function runNative(S, userText, opts) {
     if (resultFiles.length) ui.toolNote(`📷 ${resultFiles.length} capture${resultFiles.length > 1 ? 's' : ''} transmise${resultFiles.length > 1 ? 's' : ''} au modèle`);
   }
   if (visible) S.lastResponse = visible;
-  if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; cfg.toolRefusals = r; saveCfg(); }
+  if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; saveCfgKeys({ toolRefusals: r }); }
   // Le modèle croit ne pas avoir le droit d'utiliser les outils (« pas de moteur pour un agent externe »). Or ce sont les outils client OFFICIELS
   // de France Student (doc « client tools » : prévus pour les IDE et CLI). Récupération transparente, affichée, désactivable (cfg.refusalRecover) :
   // 1) une seule précision factuelle au modèle ; 2) s'il refuse encore, la même demande repart avec Sonnet (ou Opus). Rien de caché, aucun faux en-tête.
@@ -203,7 +224,7 @@ export async function runNative(S, userText, opts) {
   const fallback = String(S.agentId) === '-2003' ? -2001 : String(S.agentId) === '-2001' ? null : -2003;
   const recover = refused && cfg.refusalRecover !== false && !signal.aborted && (stage === 0 || (stage === 1 && fallback !== null));
   if (refused && !recover) {
-    cfg.toolRefusals = { ...(cfg.toolRefusals || {}), [String(S.agentId)]: Date.now() }; saveCfg();
+    saveCfgKeys({ toolRefusals: { ...(cfg.toolRefusals || {}), [String(S.agentId)]: Date.now() } });
     const other = String(S.agentId) === '-2003' ? '/model opus' : '/model sonnet';
     ui.println('\n' + c.yellow('  ⚠ Le modèle a refusé d\'utiliser les outils pour cette demande : il n\'a rien lu ni modifié.'));
     ui.println(c.dim('    Ça arrive surtout quand la demande ou le projet parle de France Student elle-même (son API, des outils externes), ou quand la conversation est très longue. Reformule, repars de zéro avec ') +
@@ -226,6 +247,8 @@ export async function runNative(S, userText, opts) {
   if (secs > 15 && process.stdout.isTTY) process.stdout.write('\x07');   // tâche longue finie : alerte (la barre des tâches clignote si la fenêtre n'est pas au premier plan)
   if (cfg.sound && secs > 3) process.stdout.write('\x07');
   if (hitLimit) ui.println(c.yellow(`  ⚠ limite de ${maxSteps} étapes atteinte — tape /continue pour poursuivre`));
+  if (heavyAt) ui.println(c.yellow(`  ⚠ conversation très chargée (≈${Math.round(heavyAt / 1000)}k tokens par requête) : elle sera résumée avant ton prochain message.`) +
+    c.dim('\n    Si la tâche n\'est pas finie, tape /continue : elle reprendra dans une conversation légère, à partir du résumé (rien n\'est perdu).'));
   if (recover && stage === 0) {
     // GPT qui refuse dès le 1er message : la précision dans la même conversation échoue souvent (le refus reste dans l'historique).
     // Testé en vrai : la MÊME demande, seule, dans une conversation neuve, passe. Coût : 1 conversation (limite de 50 par jour).

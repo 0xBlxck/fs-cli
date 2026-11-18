@@ -9,9 +9,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync, spawn } from 'node:child_process';
 
-import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone, unmarkSessionsGone } from './src/config.js';
-import { fetchChatUsage } from './src/account.js';
-import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride } from './src/api.js';
+import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone, unmarkSessionsGone, encodeHistory, decodeHistory, historyKeeps } from './src/config.js';
+import { fetchChatUsage, contextPercent } from './src/account.js';
+import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride, effectiveProject } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
 import { createInput, attachScreen } from './src/input.js';
@@ -19,9 +19,9 @@ import { StdioInput, send as stdioSend } from './src/stdio.js';
 import { findEditors, buildVsix, installInto } from './src/vscode-install.js';
 import { mcpOverview, connectAll, connectOne } from './src/mcp-status.js';
 import { approveServer as approveMcp } from './src/pseudo.js';
-import { detectTargetDir } from './src/target.js';
+import { detectTargetDir, acceptTarget, targetNote } from './src/target.js';
 import { sensitivePathReason } from './src/permissions.js';
-import { detectIntent, urlsIn } from './src/intent.js';
+import { detectIntent, urlsIn, isSlashCommand } from './src/intent.js';
 import { isFolderTrusted, trustFolder, isBroadFolder } from './src/trust.js';
 import { loginWizard } from './src/setup.js';
 import { runDoctor } from './src/doctor.js';
@@ -37,6 +37,7 @@ import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
 import { stripEditorContext } from './src/editor-context.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow } from './src/extra-commands.js';
+import { runTeam } from './src/team.js';
 import { WHATS_NEW, latestNews } from './src/whatsnew.js';
 const PALETTE_KEY = process.platform === 'darwin' ? 'Cmd+Maj+P' : 'Ctrl+Maj+P';   // palette de commandes de l'éditeur (VS Code, Cursor…)
 import { isOpenAiModel } from './src/native.js';
@@ -143,6 +144,7 @@ const S = {
   notes: [], allow: {}, undo: [], tokens: { in: 0, out: 0 }, stats: { turns: 0, requests: 0, tools: 0 }, startedAt: Date.now(), lastResponse: '', title: '', pendingFiles: [],
   blocks: [], pendingResults: [], ctxSent: false, ctxPercent: null, lastUserText: '', pendingContext: [], images: [], pendingFileIds: [], mcpSig: '', targetDir: null, sid: newSid(), slots: {},
 };
+let projectRun = null;                                                 // --projet : projet de toute cette exécution ({ id, name })
 const modelName = (id = S.agentId) => AGENTS[String(id)] || `#${id}`;
 
 function resolveModel(arg) {
@@ -158,7 +160,14 @@ function resolveModel(arg) {
 
 function saveSession() {
   if (!S.chatId) return;
-  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, targetDir: S.targetDir, toolsHintSig: S.toolsHintSig || '' });
+  upsertSession({ chatId: S.chatId, agentId: S.agentId, cwd: S.cwd, title: S.title || '(sans titre)', ctxSent: S.ctxSent, sid: S.sid, slots: S.slots, slotTokens: S.slotTokens || {}, targetDir: S.targetDir, toolsHintSig: S.toolsHintSig || '', skillsCatSig: S.skillsCatSig || '', lastPromptTokens: S.lastPromptTokens || 0 });
+}
+
+/** conversation quittée (nouvelle, reprise, supprimée, verrouillée, illisible) : rien de l'ancienne ne passe dans la suivante */
+function resetChatState() {
+  S.chatId = null; S.ctxSent = false; S.ctxPercent = null; S.lastPromptTokens = 0; S.needCtxCheck = false;
+  S.pendingSummary = null; S.compactedFrom = null; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null;
+  S.notes = []; S.blocks = []; S.pendingResults = [];
 }
 
 // ── Démarrage ─────────────────────────────────────────────────────────────────
@@ -174,16 +183,22 @@ if (opts.model) {
 }
 if (opts.cont) {
   const list = loadSessions();
-  const s = list.find(x => path.resolve(x.cwd || '') === path.resolve(S.cwd)) || list[0];
+  // la dernière session de CE dossier seulement (casse ignorée sous Windows/macOS) : jamais celle d'un autre projet, qui changerait le dossier de travail
+  const s = list.find(x => !x.gone && x.chatId && x.cwd && sameDir(x.cwd, S.cwd));
   if (s) { applySession(s); if (opts.cwd) { S.cwd = path.resolve(opts.cwd); S.targetDir = null; } }   // --cwd explicite : il gagne sur le dossier de la session reprise
-  else console.log(c.dim('  aucune session à reprendre'));
+  else console.log(c.dim(list.length ? '  aucune session dans ce dossier (/resume pour en choisir une autre)' : '  aucune session à reprendre'));
 }
 function applySession(s) {
+  resetChatState();                                                   // résumé en attente, notes, taille de l'ancienne conversation : oubliés
+  setProjectOnce(undefined); S.projectName = projectRun ? projectRun.name : undefined;   // « nouvelle conversation dans le projet P » ne vaut plus
   S.chatId = s.chatId; S.agentId = s.agentId || S.agentId; S.title = s.title || '';
-  S.ctxSent = s.ctxSent !== false; S.ctxPercent = null; S.blocks = []; S.pendingResults = [];
-  S.sid = s.sid || newSid(); S.slots = s.slots || {}; S.targetDir = s.targetDir && fs.existsSync(s.targetDir) ? s.targetDir : null;
+  S.ctxSent = s.ctxSent !== false;
+  S.sid = s.sid || newSid(); S.slots = s.slots || {}; S.slotTokens = s.slotTokens || {}; S.targetDir = s.targetDir && fs.existsSync(s.targetDir) ? s.targetDir : null;
   if (s.cwd && fs.existsSync(s.cwd)) S.cwd = s.cwd;
   S.toolsHintSig = s.toolsHintSig || '';                             // outils du PC déjà annoncés dans cette conversation ?
+  S.skillsCatSig = s.skillsCatSig || '';                             // index des skills déjà annoncé ?
+  S.lastPromptTokens = Number(s.lastPromptTokens) || 0;              // taille de CETTE conversation (seuil de résumé automatique)
+  S.needCtxCheck = !!S.chatId && !S.lastPromptTokens;                 // inconnue (autre PC, site, ancienne session) : demandée une fois avant le 1er envoi
 }
 
 // ── Pièces jointes (@fichier) ─────────────────────────────────────────────────
@@ -205,7 +220,7 @@ function readAttachment(fp) {
 /** Envoie les images en attente (Files v2) et prépare leurs ids pour ce message ; ajoute une ligne pour que le modèle sache lesquelles. */
 async function sendImages(message) {
   const ids = [], names = [];
-  const list = S.images.splice(0, S.images.length);
+  const list = S.images.splice(0, S.images.length); S.imageTags = {};
   ui.spinner.start(`envoi de ${list.length} image${list.length > 1 ? 's' : ''}…`);
   try {
     for (const [i, p0] of list.entries()) {
@@ -236,7 +251,10 @@ function pasteClipboardImage() {
   if (!p) { if (input.flash && interactive) input.flash(`pas d'image dans le presse-papiers (fais une capture avec ${SHOT}, puis ${KEY})`); else println(c.yellow(`  pas d'image dans le presse-papiers (capture avec ${SHOT}, puis /image)`)); return; }
   S.images.push(p);
   const tag = `[Image #${S.images.length}] `;
-  if (input.insert && interactive) input.insert(tag); else println(c.dim(`  📎 ${tag.trim()} prête : elle partira avec ton prochain message`));
+  if (input.insert && interactive) {                                  // étiquette posée dans la saisie : l'effacer retire l'image
+    S.imageTags ||= {}; S.imageTags[p] = tag.trim();
+    input.insert(tag);
+  } else println(c.dim(`  📎 ${tag.trim()} prête : elle partira avec ton prochain message`));   // mode classique : pas d'étiquette à suivre, l'image part
 }
 
 function buildMessage(text) {
@@ -247,7 +265,23 @@ function buildMessage(text) {
     const raw = m[1].replace(/^"|"$/g, '').replace(/[.,;:!?)]+$/, '');
     const fp = resolveP(raw, S.cwd);
     try {
-      if (!fs.existsSync(fp)) continue;
+      if (!fs.existsSync(fp)) {                                        // tapé par toi (pas le code sélectionné ni un bloc collé) : jamais en silence
+        const typedAt = text.length - stripEditorContext(text).length;
+        const at = m.index + m[0].length - m[1].length - 1;              // position du « @ »
+        const inFence = ((text.slice(typedAt, at).match(/^(```|~~~)/gm) || []).length % 2) === 1;
+        if (at < typedAt || inFence) continue;
+        let spaced = '';
+        if (!m[1].startsWith('"')) {                                   // « @Mes documents/notes.txt » : chemin avec espace, sans guillemets
+          let acc = raw;
+          for (const w of text.slice(m.index + m[0].length).match(/^(?: [^\s]+){1,6}/)?.[0].match(/ [^ ]+/g) || []) {
+            acc += w;
+            try { if (fs.existsSync(resolveP(acc.replace(/[.,;:!?)]+$/, ''), S.cwd))) spaced = acc.replace(/[.,;:!?)]+$/, ''); } catch {}
+          }
+        }
+        if (spaced) println(c.yellow(`  ⚠ @${raw} introuvable : rien de joint (chemin avec espace : écris @"${spaced}")`));
+        else if (/[\\/]|\.[A-Za-z0-9]{1,6}$/.test(raw)) println(c.dim(`  @${raw} introuvable : rien de joint`));
+        continue;
+      }
       const why = sensitivePathReason(fp);   // un @fichier ne doit pas envoyer un secret à l'API sans que tu le saches
       if (why) { println(c.yellow('  ⚠ @' + raw + ' non joint : ' + why)); continue; }
       if (isImagePath(fp)) { if (!S.images.includes(fp) && S.images.length < MAX_IMAGES) S.images.push(fp); continue; }   // @image.png : envoyée comme image
@@ -292,12 +326,18 @@ function pathCandidates(frag, dirsOnly = false) {
   return ents.filter(e => e.name.toLowerCase().startsWith(base) && (!dirsOnly || e.isDirectory()))
     .slice(0, 60).map(e => dirFrag + e.name + (e.isDirectory() ? '/' : ''));
 }
+/** @chemin à insérer : entre guillemets s'il contient un espace (sinon seul « @Mes » serait lu) ; dossier : guillemet laissé ouvert pour continuer */
+function atMention(p, quoted = false) {
+  if (!quoted && !p.includes(' ')) return '@' + p;
+  return `@"${p}${p.endsWith('/') ? '' : '"'}`;
+}
 function completer(line) {
   if (line.startsWith('/') && !line.includes(' ')) { const hits = SLASH.filter(x => x.startsWith(line)); return [hits.length ? hits : SLASH, line]; }
   let m = line.match(/^(\/cd |\/read )(.*)$/);
   if (m) return [pathCandidates(m[2], m[1] === '/cd ').map(x => m[1] + x), line];
   if ((m = line.match(/^(\/model )(.*)$/))) return [Object.values(AGENTS).filter(n => n.toLowerCase().includes(m[2].toLowerCase())).map(n => m[1] + n), line];
-  if ((m = line.match(/(?:^|\s)@(\S*)$/))) { const sub = '@' + m[1]; return [pathCandidates(m[1]).map(x => '@' + x), sub]; }
+  if ((m = line.match(/(?:^|\s)@"([^"]*)$/))) return [pathCandidates(m[1]).map(x => atMention(x, true)), '@"' + m[1]];
+  if ((m = line.match(/(?:^|\s)@(\S*)$/))) { const sub = '@' + m[1]; return [pathCandidates(m[1]).map(x => atMention(x)), sub]; }
   return [[], line];
 }
 
@@ -313,9 +353,9 @@ const promptStr = () => `${c.dim(path.basename(S.cwd) || S.cwd)}${cfg.mode === '
 let histLines = [];
 try {
   if (fs.existsSync(FILES.hist)) {
-    histLines = fs.readFileSync(FILES.hist, 'utf8').split(/\r?\n/).filter(Boolean);
-    if (histLines.length > 2000) { histLines = histLines.slice(-1000); fs.writeFileSync(FILES.hist, histLines.join('\n') + '\n'); }
-    histLines = histLines.slice(-500);
+    let raw = fs.readFileSync(FILES.hist, 'utf8').split(/\r?\n/).filter(Boolean);
+    if (raw.length > 2000) { raw = raw.slice(-1000); fs.writeFileSync(FILES.hist, raw.join('\n') + '\n', { mode: 0o600 }); }
+    histLines = decodeHistory(raw.slice(-500).join('\n'));            // une entrée par ligne, en JSON : un message de plusieurs lignes reste entier
   }
 } catch {}
 
@@ -344,19 +384,23 @@ function suggest(buf, cur) {
     const q = m[1].toLowerCase();
     return { start: upto.length - m[1].length, items: Object.entries(AGENTS).filter(([, n]) => n.toLowerCase().includes(q)).map(([id, n]) => ({ label: n, insert: n, desc: id })) };
   }
-  if ((m = /(?:^|\s)@(\S*)$/.exec(upto))) {
-    return { start: upto.length - m[1].length - 1, items: pathCandidates(m[1]).map(p => ({ label: '@' + p, insert: '@' + p, desc: p.endsWith('/') ? 'dossier' : '', keepOpen: p.endsWith('/') })) };
+  if ((m = /(?:^|\s)@"([^"]*)$/.exec(upto) || /(?:^|\s)@(\S*)$/.exec(upto))) {   // @"Mes documents/… : chemin avec espace, entre guillemets
+    const quoted = m[0].includes('@"');
+    return { start: upto.length - m[1].length - (quoted ? 2 : 1), items: pathCandidates(m[1]).map(p => ({ label: '@' + p, insert: atMention(p, quoted), desc: p.endsWith('/') ? 'dossier' : '', keepOpen: p.endsWith('/') })) };
   }
   return null;
 }
 
 const interactive = !!opts.stdio || (!!process.stdin.isTTY && !!process.stdout.isTTY && !opts.classic && !opts.print);
-const input = opts.stdio ? new StdioInput() : createInput({
-  interactive, history: histLines, completer, promptStr, suggester: suggest,
-  onHistory: t => { if (t && !opts.print && !/TOKEN\s*=|session-token|sk-[A-Za-z0-9]{20}|ghp_[A-Za-z0-9]{20}/i.test(t)) try { fs.appendFileSync(FILES.hist, t + '\n', { mode: 0o600 }); } catch {} },
+// panneau : les messages reçus pendant le démarrage attendent la question de confiance du dossier (libérés plus bas)
+const input = opts.stdio ? new StdioInput({ startBusy: true }) : createInput({
+  interactive, history: interactive ? histLines : histLines.filter(l => !l.includes('\n')), completer, promptStr, suggester: suggest,
+  // fichier en clair : ni long collage, ni secret (.env, clés…) ; ↑ les retrouve quand même pendant la session
+  onHistory: t => { if (t && !opts.print && historyKeeps(t)) try { fs.appendFileSync(FILES.hist, encodeHistory(t) + '\n', { mode: 0o600 }); } catch {} },
 });
 
 let busy = false, turnAbort = null;
+let holdInput = !!opts.stdio;                                          // démarrage du panneau : la file reste fermée jusqu'à la confiance du dossier
 const ask = query => input.askLine(query);
 const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
@@ -501,6 +545,8 @@ const extraEnv = () => ({
   transcriptOf,
   printTurnChanges,
   chatTurn: (t, o) => chatTurn(t, o),
+  changeCwd: d => changeCwd(d),                                       // /project : question de confiance + dossier cible remis à zéro
+  resumeChatById: id => resumeChatById(id),                           // /history <n°> : comme /resume (titre du site, session locale)
   ...(opts.stdio && panelAtLeast('0.4.0') ? { mcpPanel: () => openMcpPanel() } : {}),
   ...(opts.stdio && panelAtLeast('0.5.0') ? { card: data => stdioSend('card', data) } : {}),
   ...(opts.stdio && PANEL_FEATURES.has('agents') ? { agentMap: true } : {}),   // le panneau affiche l'équipe d'agents en bloc « Agents »
@@ -757,8 +803,9 @@ async function command(line) {
     case '/id': return println(c.dim('  ' + (S.chatId || 'aucune conversation')));
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
-      setProjectOnce(undefined); S.projectName = undefined;
-      S.chatId = null; S.pendingSummary = null; S.compactedFrom = null; S.lastPromptTokens = 0; S.turnMarks = []; S.lastEditorCtx = null; S.fetchedUrls = null; S.briefSent = null; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      setProjectOnce(undefined); S.projectName = projectRun ? projectRun.name : undefined;   // --projet vaut pour toute l'exécution
+      resetChatState();
+      S.turnMarks = []; S.lastEditorCtx = null; S.fetchedUrls = null; S.briefSent = null; S.allow = {}; S.undo = []; S.title = ''; S.pendingFiles = []; S.pendingContext = []; S.images = []; S.imageTags = {}; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
@@ -1044,7 +1091,7 @@ async function command(line) {
     }
     case '/continue': return chatTurn('Continue.', { keepLast: true });
     case '/image': {                                                  // /image : presse-papiers · /image <chemin> : fichier · /image clear
-      if (/^(clear|aucune|off)$/i.test(arg)) { S.images = []; return println(c.dim('  → images en attente retirées')); }
+      if (/^(clear|aucune|off)$/i.test(arg)) { S.images = []; S.imageTags = {}; return println(c.dim('  → images en attente retirées')); }
       if (!arg) { pasteClipboardImage(); return; }
       const p = resolveP(arg, S.cwd);
       if (!fs.existsSync(p) || !isImagePath(p)) return println(c.red(`  image introuvable (png, jpg, gif, webp, bmp${process.platform === 'darwin' ? ', heic' : ''})`));
@@ -1094,17 +1141,34 @@ function printTurnChanges() {
   println(c.dim('    /changes pour voir les diffs ou annuler un fichier'));
 }
 
-async function chatTurn(text, { keepLast = false } = {}) {
+async function chatTurn(text, { keepLast = false, retry = false } = {}) {
   turnAbort = new AbortController();
   println();
+  // relance automatique (conversation supprimée, illisible, limite après un résumé) : le message repart AVEC ce qu'il emportait
+  const original = text, own = stripEditorContext(text);              // own : ce que tu as tapé, sans le contexte de l'éditeur
+  const consumed = { files: [...S.pendingFiles], results: [...S.pendingResults], context: [...S.pendingContext], images: [...S.images], tags: { ...(S.imageTags || {}) }, forced: S.forceSkills };
+  const again = () => {
+    S.pendingFiles = consumed.files; S.pendingResults = consumed.results; S.pendingContext = consumed.context; S.images = consumed.images; S.imageTags = consumed.tags; S.forceSkills = consumed.forced;
+    for (const f of consumed.forced || []) S.skillsSent?.delete(f.name);   // le skill demandé n'est pas arrivé : il repart
+    turnAbort = null;
+    return chatTurn(original, { keepLast: true, retry: true });
+  };
   try {
     ui.tasks.clear();                                                  // nouvelle demande : le panneau de tâches repart de zéro
     ui.resetThinking();
     if (!keepLast) {                                                   // repère pour /rewind (et le bouton « Revenir ici » du panneau)
-      const own = stripEditorContext(text);
       const mark = { id: ++markSeq, at: S.undo.length, text: own.replace(/\s+/g, ' ').trim().slice(0, 70), full: own.slice(0, 20000), t: Date.now() };
       S.turnMarks ||= []; S.turnMarks.push(mark); if (S.turnMarks.length > 50) S.turnMarks.shift();
       if (opts.stdio) stdioSend('turnMark', { id: mark.id, text: mark.text });
+    }
+    if (S.needCtxCheck && S.chatId && cfg.autoCompact) {               // conversation reprise de taille inconnue : demandée une fois (seuil de résumé juste dès ce message)
+      S.needCtxCheck = false;
+      const pct = await within(contextPercent(S.chatId), 4000, null);
+      if (typeof pct === 'number') {
+        S.ctxPercent = pct;
+        const win = Number(S.ctxWindows?.[String(S.agentId)]) || 0;
+        if (win && !S.lastPromptTokens) S.lastPromptTokens = Math.round(pct / 100 * win);
+      }
     }
     await maybeAutoCompact(S, turnAbort.signal);                       // contexte plein → résumé + nouvelle conversation
     { // panneau de l'éditeur : « [Contexte VS Code : … lignes a-b sélectionnées …] » + bloc de code → recollé à chaque message ; une fois suffit
@@ -1113,13 +1177,27 @@ async function chatTurn(text, { keepLast = false } = {}) {
       const f = !m && text.match(/^\[Contexte VS Code : fichier ouvert dans l'éditeur : ([^\n]*)\]\n\n?/);
       if (f && alreadySent('sel', 'fichier:' + f[1])) text = text.slice(f[0].length);   // même fichier ouvert : déjà dit
     }
+    if (S.images.some(p => S.imageTags?.[p])) {                        // image collée (Alt+V) dont tu as effacé l'étiquette « [Image #n] » : elle ne part pas
+      const kept = [];
+      for (const p of S.images) {
+        const tag = S.imageTags?.[p];
+        if (tag && !text.includes(tag)) { println(c.dim(`  image retirée (étiquette ${tag} effacée) : ${path.basename(p)}`)); delete S.imageTags[p]; continue; }
+        kept.push(p);
+      }
+      kept.forEach((p, i) => {                                         // numéros recalés sur les images qui restent (ordre croissant : aucune collision)
+        const tag = S.imageTags?.[p], now = `[Image #${i + 1}]`;
+        if (tag && tag !== now) { text = text.split(tag).join(now); S.imageTags[p] = now; }
+      });
+      S.images = kept;
+    }
     const ex = extractImagePaths(text, S.images.length);               // image glissée-déposée (chemin collé) → [Image #n]
     if (ex.paths.length) { text = ex.text; for (const p of ex.paths) if (!S.images.includes(p)) S.images.push(p); }
     // « … dans C:\Users\moi\Downloads\SITE » → les fichiers y seront écrits. Seulement d'après CE QUE TU AS TAPÉ : le fichier ouvert ou la
     // sélection de l'éditeur ne changent plus le dossier en silence (audit 17/11) ; jamais un dossier trop large ; un changement est annoncé.
-    const dir = detectTargetDir(stripEditorContext(text));
-    if (dir && dir !== S.targetDir && !isBroadFolder(dir)) {
-      const was = S.targetDir; S.targetDir = dir;
+    const dir = detectTargetDir(own);                                   // own : ce que tu as tapé (déclaré en haut de chatTurn)
+    // citer un fichier ou coller une trace d'erreur ne change plus la racine des outils : seulement « crée … dans <dossier> », un dossier hors du projet…
+    if (dir && dir !== S.targetDir && !isBroadFolder(dir) && acceptTarget(dir, { cwd: S.cwd, text: own })) {
+      const was = S.targetDir; S.targetDir = dir; S.notes.push(targetNote(dir));
       println(was ? c.yellow(`  ＋ dossier cible changé : ${was} → ${dir}  (/target pour voir ou effacer)`) : c.dim(`  ＋ dossier cible : ${dir}  (/target pour voir ou effacer)`));
     }
     let message = buildMessage(text);
@@ -1146,9 +1224,11 @@ async function chatTurn(text, { keepLast = false } = {}) {
       if (S.pendingSummary) { message = `[Reprise : résumé de la conversation précédente (même session de travail), à garder comme contexte]\n${S.pendingSummary}\n\n[Nouvelle demande de l'utilisateur]\n${message}`; println(c.dim('  ＋ résumé de la conversation précédente')); }
       const { text: ctxText, label } = mem.buildContextBlock(S.cwd);
       if (ctxText) { message += '\n\n' + ctxText; println(c.dim(`  ＋ contexte joint : ${label}`)); }
-      if (cfg.fsProject && cfg.fsProject.id) {                         // projet France Student choisi (/projet) : ses instructions personnalisées
-        if (S.fsProjInstr?.id !== cfg.fsProject.id) S.fsProjInstr = { id: cfg.fsProject.id, text: String((await listFsProjects().catch(() => [])).find(p => p.id === cfg.fsProject.id)?.customInstructions || '').trim() };
-        if (S.fsProjInstr.text) { message += `\n\n[Instructions du projet France Student « ${cfg.fsProject.name} » de l'utilisateur, à suivre :\n${S.fsProjInstr.text.slice(0, 8000)}]`; println(c.dim(`  ＋ instructions du projet « ${cfg.fsProject.name} »`)); }
+      // projet France Student de CETTE conversation (onglet Projets, --projet, sinon /projet) : ses instructions ; hors projet : aucune
+      const proj = effectiveProject();
+      if (proj && proj.id) {
+        if (S.fsProjInstr?.id !== proj.id) S.fsProjInstr = { id: proj.id, text: String((await listFsProjects().catch(() => [])).find(p => p.id === proj.id)?.customInstructions || '').trim() };
+        if (S.fsProjInstr.text) { message += `\n\n[Instructions du projet France Student « ${proj.name} » de l'utilisateur, à suivre :\n${S.fsProjInstr.text.slice(0, 8000)}]`; println(c.dim(`  ＋ instructions du projet « ${proj.name} »`)); }
       }
       S.ctxSent = true;
     }
@@ -1159,20 +1239,20 @@ async function chatTurn(text, { keepLast = false } = {}) {
       // La liste complète dans la conversation faisait refuser GPT (« moteur d'un agent externe ») et coûtait ≈ 6 500 tokens rejoués à chaque message.
       // GPT (testé en vrai le 17/11) refuse encore parfois avec la seule ligne : pour GPT, elle ne part que si tu parles toi-même de skills/guides
       // (/nom-du-skill marche toujours). Claude s'en sert sans problème (il ouvre l'index puis le bon guide).
-      const skillsOk = !isOpenAiModel(S) || /\b(skills?|guides?)\b/i.test(text);
+      const skillsOk = !isOpenAiModel(S) || /\b(skills?|guides?)\b/i.test(own);   // own : pas le code sélectionné dans l'éditeur
       const cat = skillsOk ? skillIndex(discoverSkills(S.cwd), S.cwd) : null;
       if (cat && cat.sig !== S.skillsCatSig) { message += '\n\n' + cat.text; S.skillsCatSig = cat.sig; println(c.dim(`  ＋ ${cat.count} skills disponibles (liste ouverte par le modèle si besoin)`)); }
-      for (const name of mentionedServers(S.cwd, text)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
+      for (const name of mentionedServers(S.cwd, own)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief && !alreadySent('mcp', name + '|' + hashOf(brief))) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
       }
-      if (wantsBrowser(text)) {
+      if (wantsBrowser(own)) {
         const pw = loadMcpConfig(S.cwd).mcpServers || {};
         if (!Object.keys(pw).some(n => BROWSER_SERVERS.test(n))) println(c.yellow('  💡 Pour que je pilote le navigateur, active-le une fois avec /navigateur'));
         else if (pw.playwright?.args?.includes('--extension') && !chromeExtensionInstalled()) println(c.yellow('  ⚠ Mode « ton Chrome » sans l\'extension Playwright MCP Bridge : installe-la, ou tape /navigateur separe'));
       }
     }
-    if (!keepLast) {                                                   // skills joints à cette demande
+    if (!keepLast || retry) {                                          // skills joints à cette demande (relance : de nouveau, dans la nouvelle conversation)
       S.skillsSent ||= new Set();
       let budget = 20000;
       const forced = S.forceSkills || []; S.forceSkills = null;        // /nom-du-skill : joint en premier, même sans correspondance
@@ -1193,9 +1273,9 @@ async function chatTurn(text, { keepLast = false } = {}) {
         println(c.dim(`  ＋ skill : ${sk.name}`));
       }
     }
-    if (!keepLast) S.lastUserText = text;
-    mem.observe(text, S.cwd);
-    if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);   // provisoire : remplacé par le titre de France Student dès qu'il est connu
+    if (!keepLast) S.lastUserText = original;                         // /retry : la demande telle qu'envoyée (contexte de l'éditeur compris)
+    mem.observe(own, S.cwd);
+    if (!S.title) S.title = own.replace(/\s+/g, ' ').trim().slice(0, 60) || 'Conversation';   // provisoire (sans le contexte de l'éditeur) : remplacé par le titre de France Student dès qu'il est connu
     try {
       const agentBefore = S.agentId, turnT0 = Date.now();
       try { await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text }); } finally { attachSentToChat(); }   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
@@ -1229,17 +1309,16 @@ async function chatTurn(text, { keepLast = false } = {}) {
   } catch (e) {
     if (/Chat not found/i.test(e.message || '') && S.chatId) {        // conversation supprimée du site entre-temps : on repart sur une neuve
       markSessionsGone([S.chatId]);
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      resetChatState();
       println(c.yellow('  cette conversation a été supprimée du site : ton message part dans une nouvelle conversation'));
-      turnAbort = null;
-      return chatTurn(text, { keepLast: true });
+      return again();
     }
     if (isLockedChat(e) && S.chatId) {                                 // verrouillée par France Student (signalement du fournisseur) : on n'y renvoie rien
       ui.spinner.stop();
       println(c.yellow('\n  ⚠ France Student a verrouillé cette conversation : le filtre de sécurité du fournisseur du modèle l\'a signalée. Elle ne peut plus être utilisée.'));
       println(c.dim('    Ton prochain message partira dans une nouvelle conversation (rien n\'y est recopié).'));
       if (isBroadFolder(S.cwd)) println(c.dim('    Conseil : ton dossier de travail est ton dossier personnel ; choisis plutôt le dossier du projet (📁 en bas du panneau, ou /cd) : le modèle y voit moins de fichiers sans rapport.'));
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.pendingSummary = null; S.compactedFrom = null;
+      resetChatState();
       turnAbort = null;
       return;
     }
@@ -1249,18 +1328,15 @@ async function chatTurn(text, { keepLast = false } = {}) {
       println(c.dim('    Ton message repart dans une nouvelle conversation, avec la fin de celle-ci comme contexte.'));
       let recap = '';
       try { recap = transcriptOf(await fetchChat(old)).slice(-10).map(m => `${m.role === 'user' ? 'Utilisateur' : 'Assistant'} : ${m.text.slice(0, 1500)}`).join('\n\n'); } catch {}
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      resetChatState();
       S.pendingSummary = recap ? `Derniers échanges de la conversation précédente (devenue inutilisable à cause d'une erreur du serveur) :\n${recap}` : null;
-      S.compactedFrom = null;
-      turnAbort = null;
       S.recovering = true;
-      try { return await chatTurn(text, { keepLast: true }); } finally { S.recovering = false; }
+      try { return await again(); } finally { S.recovering = false; }
     }
     if (e.code === 'DAILY_CHAT_LIMIT' && S.compactedFrom && !S.chatId) {   // impossible d'ouvrir la conversation légère : on reste dans l'actuelle, rien n'est perdu
       S.chatId = S.compactedFrom; S.compactedFrom = null; S.pendingSummary = null; S.ctxSent = true;
       println(c.yellow('  limite des 50 conversations atteinte : on continue dans la conversation actuelle'));
-      turnAbort = null;
-      return chatTurn(text, { keepLast: true });
+      return again();
     }
     if (e.name === 'AbortError' || turnAbort.signal.aborted) {
       ui.spinner.stop();
@@ -1297,13 +1373,21 @@ async function direct(cmdline) {
 }
 
 /** Demande en langage naturel → fonction du CLI (équipe d'agents, comparaison, mémoire, quota…). Renvoie true si elle a été traitée. */
-async function naturalIntent(t) {
+async function naturalIntent(t, editorCtx = '') {                  // t : ce que tu as tapé ; editorCtx : contexte de l'éditeur (panneau) devant
   const r = detectIntent(t);
   if (!r) return false;
   println(c.dim(`  ↳ compris : ${r.label}`) + c.dim(r.cmd === '/team' ? '  (dis « sans agents » pour l\'éviter)' : ''));
   const prevDuel = cfg.duelModel;
   if (r.duelModel) { const id = resolveModel(r.duelModel); if (id !== null && id !== S.agentId) cfg.duelModel = id; }
-  try { await command(`${r.cmd} ${r.arg}`.trim()); }
+  // équipe et duel envoient une demande au modèle : la sélection de l'éditeur part avec.
+  // Équipe : options déjà comprises, passées à part (un « tail -n 20 » ou « --parallel » de la sélection n'est pas relu comme option)
+  if (editorCtx && r.cmd === '/team' && r.team) {
+    const { agents, mode, review, task } = r.team;
+    await runTeam(extraEnv(), `${editorCtx}${task}`, { review, agents, mode });
+    return true;
+  }
+  const arg = editorCtx && r.cmd === '/compare' ? `${editorCtx}${r.arg}` : r.arg;
+  try { await command(`${r.cmd} ${arg}`.trim()); }
   finally { cfg.duelModel = prevDuel; }
   return true;
 }
@@ -1331,11 +1415,15 @@ async function handleInput(text) {
   try {
     const t = text.trim();
     if (!t) return;
-    if (!t.includes('\n') && t.startsWith('/')) await command(t);
+    // panneau de l'éditeur : « [Contexte VS Code : …] » (+ sélection) devant le message → raccourcis et intentions lus sur CE QUE TU AS TAPÉ
+    const own = stripEditorContext(t).trim(), editorCtx = t.slice(0, t.length - own.length);
+    const knownCmd = name => SLASH.some(x => x.trim() === name) || COMMANDS.some(x => x.name === name)
+      || loadCustomCommands(S.cwd).some(x => '/' + x.name === name.toLowerCase()) || discoverSkills(S.cwd).some(x => '/' + x.name.toLowerCase() === name.toLowerCase());
+    if (isSlashCommand(t, { win: IS_WIN, known: knownCmd })) await command(t);   // Mac/Linux : « /Users/moi/app plante » est un message, pas une commande
     else if (!t.includes('\n') && t.startsWith('!')) await direct(t.slice(1));
-    else if (!t.includes('\n') && /^#\s*\S/.test(t) && !/^##/.test(t)) await command('/remember ' + t.replace(/^#\s*/, ''));   // « # info » : retenue en mémoire (comme Claude Code)
-    else if (!opts.print && await onlyAFolder(t)) return;            // message = juste un chemin de dossier : on demande ce qu'il faut en faire
-    else if ((cfg.intents !== false || /PLAYWRIGHT_MCP_EXTENSION_TOKEN/.test(t)) && await naturalIntent(t)) return;   // un jeton collé ne part jamais au modèle
+    else if (!own.includes('\n') && /^#\s*\S/.test(own) && !/^##/.test(own)) await command('/remember ' + own.replace(/^#\s*/, ''));   // « # info » : retenue en mémoire (comme Claude Code)
+    else if (!opts.print && own && await onlyAFolder(own)) return;  // message = juste un chemin de dossier : on demande ce qu'il faut en faire
+    else if (own && (cfg.intents !== false || /PLAYWRIGHT_MCP_EXTENSION_TOKEN/.test(own)) && await naturalIntent(own, editorCtx)) return;   // un jeton collé ne part jamais au modèle
     else {
       if (cfg.intents !== false && cfg.engine === 'native') {     // le modèle n'a pas d'accès web : une URL citée est lue et jointe
         const own = stripEditorContext(t).replace(/```[\s\S]*?```/g, ' ').slice(0, 600);   // pas le code sélectionné ni un log collé
@@ -1348,7 +1436,7 @@ async function handleInput(text) {
     println(c.red(`\n  Erreur: ${e.message}`));
     if (/401|expiré/.test(e.message)) println(c.dim('  → ta clé de session a expiré : quitte puis lance « fs-cli --login »'));
   } finally {
-    busy = false; input.setBusy(false);
+    busy = false; if (!holdInput) input.setBusy(false);              // démarrage du panneau : la file reste fermée jusqu'à la confiance
     refreshPrompt();
     if (!opts.print) input.prompt();
   }
@@ -1358,7 +1446,7 @@ async function handleInput(text) {
 async function runInput(text) {
   await handleInput(text);
   for (;;) {
-    if (busy) return;
+    if (busy || holdInput) return;
     const next = input.takeQueued();
     if (!next) return;
     await handleInput(next);
@@ -1455,7 +1543,7 @@ if (opts.stdio) {                                                    // commande
     markSessionsGone([chatId]);
     remoteCache = remoteCache.filter(r => r.chatId !== chatId);
     if (S.chatId === chatId) {                                         // c'était la conversation ouverte : page vierge
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.title = ''; S.sid = newSid();
+      resetChatState(); S.title = ''; S.sid = newSid();
       stdioSend('clear'); refreshPrompt();
     }
     stdioSend('flash', { text: `conversation « ${name} » supprimée` });
@@ -1691,7 +1779,11 @@ async function ensureFolderTrust(dir, { picked = false } = {}) {
   trustFolder(dir, { remember: options[idx].startsWith('Oui, je') });
   return dir;
 }
-const samePathCI = (a, b) => path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase();
+function samePathCI(a, b) { return path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase(); }
+// même dossier ? casse ignorée sous Windows et macOS seulement : sous Linux, /home/a/Proj et /home/a/proj sont deux dossiers (fs -c)
+function sameDir(a, b, platform = process.platform) {
+  return platform === 'win32' || platform === 'darwin' ? samePathCI(a, b) : path.resolve(String(a)) === path.resolve(String(b));
+}
 /** dossier de travail choisi explicitement : proposé en premier au prochain lancement depuis un dossier large */
 function rememberWorkDir(dir) { if (!isBroadFolder(dir)) saveCfgKeys({ lastWorkDir: path.resolve(dir) }); }
 
@@ -1709,13 +1801,15 @@ async function shutdown(code = 0, { quiet = false } = {}) {
 }
 
 // ── Lancement ─────────────────────────────────────────────────────────────────
+S.interactive = !opts.print;                                          // native.js : résumé possible en pleine longue tâche (pas en -p : /continue impossible)
 if (opts.bypass) await enableBypass({ silent: true });                   // --dangerously-skip-permissions (choisi explicitement à la ligne de commande)
 if (opts.project) {                                                    // --projet <nom|id> : pour cette exécution seulement (le réglage /projet ne change pas)
   const want = String(opts.project).trim(), low = want.toLocaleLowerCase('fr-FR');
   const list = await listFsProjects().catch(() => null);
   const p = list && (list.find(x => x.id === want) || list.find(x => String(x.name || '').trim().toLocaleLowerCase('fr-FR') === low));
   if (!p) { console.error(c.red(`  ✗ projet France Student introuvable : « ${want} »`) + c.dim('  (nom exact ou id ; /projet pour la liste)')); process.exit(1); }
-  setProjectOverride({ id: p.id, name: p.name }); S.projectName = p.name; refreshPrompt();
+  projectRun = { id: p.id, name: p.name };
+  setProjectOverride(projectRun); S.projectName = p.name; refreshPrompt();
 }
 if (opts.print) {
   if (!initial) { console.log(c.red('  -p nécessite une demande')); process.exit(1); }
@@ -1745,7 +1839,7 @@ if (!trustedCwd) {
   saveSession(); input.stop(); process.exit(0);
 }
 if (!opts.stdio) banner();                                             // comme Claude Code : confiance d'abord, puis l'accueil avec le VRAI dossier de travail
-if (opts.stdio) { input.setBusy(false); const q = input.takeQueued(); if (q) runInput(q); }
+if (opts.stdio) { holdInput = false; input.setBusy(false); const q = input.takeQueued(); if (q) runInput(q); }   // messages envoyés pendant le démarrage : maintenant
 if (!opts.stdio && !cfg.vscodeTip) {                                 // une seule fois : le panneau de chat existe aussi pour l'éditeur
   try { const eds = findEditors(); if (eds.length) println(c.dim('  💡 FS-CLI existe aussi en panneau de chat dans ' + eds.map(e => e.name).join(', ') + ' : tape ') + c.accent('/vscode')); } catch {}
   cfg.vscodeTip = true; saveCfg();

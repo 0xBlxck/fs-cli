@@ -1,6 +1,14 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.47.0', items: [
+    'Un fichier existant jamais lu n\'est plus écrasé à l\'aveugle : le modèle le lit d\'abord',
+    'Recherche plus intelligente : casse ignorée en minuscules, .gitignore respecté, plus de blocage',
+    'Projets : chaque conversation reçoit les instructions de SON projet ; /team reçoit le contexte',
+    'IDE : questions en file sans voler le clavier, « Demander à FS-CLI » ouvre le panneau',
+    'Terminal : ↑ dans un long message, emojis, Ctrl+O complet, fs -p sans codes couleur',
+    'MCP : une conversation par dossier pour fs_agent, nouvelle clé prise en compte, aide si GPT refuse',
+  ] },
   { version: '3.46.2', items: [
     'Moins de tokens : sélection de l\'IDE, pages web et outils MCP envoyés une seule fois par conversation',
     'Index des skills un tiers plus léger ; conversation du MCP renouvelée au-delà de 60 000 tokens',

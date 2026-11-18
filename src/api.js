@@ -321,6 +321,8 @@ let projectPromise = null, projectOverride, projectOnce;
 export function setProjectOnce(p) { projectOnce = p; }
 /** serveur MCP : projet propre (undefined = comme FS-CLI · false = aucun · { id, name }) */
 export function setProjectOverride(p) { projectOverride = p; projectPromise = null; }
+/** projet où ira la prochaine conversation (choix ponctuel, sinon --projet, sinon le réglage /projet) ; false/undefined = hors projet. Ne consomme rien. */
+export function effectiveProject() { return projectOnce !== undefined ? projectOnce : projectOverride !== undefined ? projectOverride : cfg.fsProject; }
 function attachToFsProject(chatId) {
   if (projectOnce !== undefined) { const p = projectOnce; projectOnce = undefined; if (p?.id) attachChatToProject(p.id, chatId).catch?.(() => {}); return; }
   const proj = projectOverride !== undefined ? projectOverride : cfg.fsProject;

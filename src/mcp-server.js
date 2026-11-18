@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
-import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys, FILES, ROOT } from './config.js';
+import { TOKEN, VERSION, cfg, saveCfgKeys, setToken, FILES, ROOT, HOME_DIR } from './config.js';
 import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat, isBrokenHistory, isLockedChat, withDocumentContents } from './api.js';
 import { fetchUserUsage } from './account.js';
 import { sensitivePathReason } from './permissions.js';
@@ -27,7 +27,29 @@ const FALLBACK_AGENTS = {
 };
 
 const NO_TOKEN = 'Aucune clé de session France Student n\'est configurée pour FS-CLI. ' +
-  'Lance « fs-cli » une fois dans un terminal pour te connecter (assistant de connexion), puis redémarre l\'application de l\'agent.';
+  'Lance « fs-cli » une fois dans un terminal pour te connecter (assistant de connexion), puis rappelle l\'outil (inutile de redémarrer l\'application de l\'agent).';
+const EXPIRED = 'Clé de session France Student expirée ou refusée (401). Lance « fs-cli --login » dans un terminal pour te reconnecter, ' +
+  'puis rappelle l\'outil : inutile de redémarrer l\'application de l\'agent.';
+/** 401 : clé de session expirée ou révoquée */
+const expired = e => e?.status === 401 || /^401\b/.test(String(e?.message || ''));
+
+/** Clés de session écrites dans les .env de FS-CLI : « fs-cli --login » les change pendant que le serveur tourne.
+ *  ~/.fs-cli/.env d'abord : c'est celui que « fs-cli --login » écrit (setup.js), donc la clé la plus récente. */
+export function envTokens(files = [path.join(HOME_DIR, '.env'), path.join(ROOT, '.env')]) {
+  const out = [];
+  for (const f of files) {
+    let raw = '';
+    try { raw = fs.readFileSync(f, 'utf8').replace(/^﻿/, ''); } catch { continue; }
+    for (const line of raw.split(/\r?\n/)) {
+      const m = line.match(/^\s*FS_SESSION_TOKEN\s*=\s*(.*?)\s*$/);
+      if (!m) continue;
+      let v = m[1];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      if (v) out.push(v);
+    }
+  }
+  return out;
+}
 
 const INSTRUCTIONS = 'Serveur MCP de FS-CLI (client communautaire non officiel de France Student AI). ' +
   'fs_models liste les modèles ; fs_ask pose une question à un modèle France Student (texte, recherche web en option) ; ' +
@@ -73,7 +95,8 @@ export const TOOL_DEFS = [
     description: 'Confie une tâche à l\'agent FS-CLI : un modèle France Student lit, cherche et modifie les fichiers du dossier « folder » avec les outils officiels de France Student, puis renvoie son compte rendu, ' +
       'la liste des fichiers modifiés et le nombre d\'appels d\'outils. Le dossier doit être un chemin ABSOLU déjà approuvé par l\'utilisateur dans fs-cli (sinon refus). ' +
       'Aucun humain ne répond aux confirmations : les actions sensibles (commandes dangereuses ou à confirmer, chemins protégés, secrets, écritures hors du dossier) sont refusées automatiquement. ' +
-      'Les modifications de fichiers dans le dossier sont permises. Une conversation est réutilisée par dossier pendant la session du serveur.',
+      'Les modifications de fichiers dans le dossier sont permises. Chaque dossier a sa propre conversation, réutilisée d\'une tâche à l\'autre (même après un redémarrage), ' +
+      'sauf si l\'utilisateur a choisi une conversation précise (conversation_id, ou fs_conversations « select »).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -186,6 +209,20 @@ export function deniedMessage(p, platform = process.platform) {
     ? `Accès refusé par macOS (Confidentialité et sécurité) : ${p}\nAutorise l'application qui lance FS-CLI (Claude, Antigravity, VS Code, Terminal…) dans Réglages Système › Confidentialité et sécurité › Fichiers et dossiers (ou Accès complet au disque), puis relance-la.`
     : `Accès refusé : ${p} (droits insuffisants).`;
 }
+/** Début d'un fichier texte, sans le lire en entier : au plus maxChars × 4 octets (un caractère UTF-8 fait 4 octets au plus).
+ *  partial = le fichier continue au-delà ; un caractère coupé en fin de lecture est retiré. */
+export function readTextHead(file, size, maxChars) {
+  const n = Math.max(0, Math.min(size, maxChars * 4));
+  const buf = Buffer.alloc(n);
+  const fd = fs.openSync(file, 'r');
+  let got = 0;
+  try { while (got < n) { const r = fs.readSync(fd, buf, got, n - got, got); if (!r) break; got += r; } }
+  finally { fs.closeSync(fd); }
+  const partial = got < size;
+  let text = buf.subarray(0, got).toString('utf8');
+  if (partial) text = text.replace(/�+$/, '');
+  return { text, partial };
+}
 /** Clé d'un dossier pour retrouver sa session : chemin réel ; Windows et Mac (APFS) ne distinguent pas la casse. */
 export function folderKey(dir, platform = process.platform) {
   let p = path.resolve(dir); try { p = fs.realpathSync.native(p); } catch {}
@@ -224,7 +261,13 @@ const REFUSAL_NOTE = 'refus automatique : FS-CLI tourne comme serveur MCP pour u
  */
 export function createMcpServer(deps = {}) {
   const d = {
-    hasToken: () => !!TOKEN,
+    hasToken: () => !!TOKEN || (!!d.reloadToken() && !!TOKEN),         // pas encore de clé : peut-être ajoutée depuis (fs-cli dans un terminal)
+    /** relit les .env : true si une AUTRE clé que celle en cours (et pas déjà essayée : « tried ») a été trouvée, et prise */
+    reloadToken: tried => {
+      const t = envTokens().find(x => x !== TOKEN && !tried?.has(x));
+      if (!t) return false;
+      tried?.add(t); setToken(t); return true;
+    },
     stream: streamChat,
     fetchAgents,
     fetchAgentsFull: async () => (await requestJson('GET', '/chats/agents').catch(() => ({}))).data,   // { data: [...] } déballé
@@ -237,6 +280,7 @@ export function createMcpServer(deps = {}) {
     userUsage: fetchUserUsage,
     runNative: null,                                                   // chargé à la demande (moteur natif + outils locaux)
     allowCommands: process.env.FS_MCP_ALLOW_COMMANDS === '1',
+    foldersFile: FOLDERS_FILE,                                         // conversation de chaque dossier de fs_agent
     ...deps,
   };
   let agents = null;
@@ -246,6 +290,45 @@ export function createMcpServer(deps = {}) {
   const chatFor = args => (typeof args.conversation_id === 'string' && /^[\w-]{8,64}$/.test(args.conversation_id) ? args.conversation_id : null);
   const remember = (id, title) => { if (id && cfg.mcpChat?.id !== id) saveCfgKeys({ mcpChat: { id, title: title || '', since: Date.now() } }); };
   const cleanTitle = t => String(t || '(sans titre)').replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '').replace(/\s+/g, ' ').trim().slice(0, 60) || '(sans titre)';
+  // choix de l'utilisateur : « choseNow » vaut pour l'appel en cours ('mcp' = la conversation du MCP, 'new' = une neuve) ;
+  // « pinned » = il a désigné une conversation précise (fs_conversations select, identifiant) : fs_agent l'utilise dans tous les dossiers
+  let choseNow = false, pinned = false;
+
+  // ── conversation propre à chaque dossier de fs_agent, retenue dans son propre fichier (clé du dossier → { id, at }) ──
+  // jamais dans config.json : tout saveCfg() (fs-cli, api.js, native.js) réécrit ce fichier avec les seules clés connues et l'effacerait
+  const FOLDERS_MAX = 30, FOLDER_CTX_MAX = 60;                         // dossiers retenus · contexte (%) au-delà duquel le dossier repart à neuf
+  const validId = id => typeof id === 'string' && /^[\w-]{8,64}$/.test(id);
+  const folderChats = () => readFolders(d.foldersFile);
+  const folderChat = key => { const v = folderChats()[key]; return validId(v?.id) ? v.id : null; };
+  const rememberFolder = (key, id) => {
+    const all = folderChats();
+    if (all[key]?.id === id) return;
+    const kept = Object.entries(all).filter(([k]) => k !== key).sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0)).slice(0, FOLDERS_MAX - 1);
+    writeFolders(d.foldersFile, Object.fromEntries([...kept, [key, { id, at: Date.now() }]]));
+  };
+  const forgetFolderChat = id => {
+    const all = folderChats(), left = Object.entries(all).filter(([, v]) => v?.id !== id);
+    if (left.length !== Object.keys(all).length) writeFolders(d.foldersFile, Object.fromEntries(left));
+  };
+  /** limite des 50 nouvelles conversations du jour atteinte (vue par ce serveur, ou enregistrée par un autre fs-cli) */
+  const limitHit = () => {
+    let at = Number(cfg.dailyLimitHitAt) || 0;
+    try { at = Math.max(at, Number(JSON.parse(fs.readFileSync(FILES.cfg, 'utf8')).dailyLimitHitAt) || 0); } catch {}
+    return at > lastReset();
+  };
+  /** limite atteinte et dossier sans conversation : une conversation existante (celle du MCP, sinon celle du dernier dossier utilisé) */
+  const borrowChat = () => {
+    if (validId(askState.chatId)) return { id: askState.chatId, what: 'la conversation du MCP' };
+    const last = Object.values(folderChats()).filter(v => validId(v?.id)).sort((a, b) => (b.at || 0) - (a.at || 0))[0];
+    return last ? { id: last.id, what: 'la conversation d\'un autre dossier' } : null;
+  };
+  /** conversation supprimée ou verrouillée par France Student : plus personne ne l'utilise (MCP, dossiers, config) */
+  const forgetChat = id => {
+    if (!id) return;
+    if (askState.chatId === id) { askState.chatId = null; pinned = false; saveCfgKeys({ mcpChat: null }); }
+    for (const S of folders.values()) if (S.chatId === id) { S.chatId = null; S.pendingResults = []; S.own = true; }   // la neuve sera celle du dossier
+    forgetFolderChat(id);
+  };
 
   // ── requêtes vers le client (elicitation : l'IDE affiche un petit formulaire à l'utilisateur) ──
   let clientCanAsk = false, askedWhere = false, reqN = 0;
@@ -284,9 +367,9 @@ export function createMcpServer(deps = {}) {
   /** choix de l'utilisateur transmis par l'agent : conversation_id = "mcp" | "new" | identifiant */
   function applyChoice(args) {
     const v = typeof args.conversation_id === 'string' ? args.conversation_id.trim() : '';
-    if (/^(new|nouvelle?)$/i.test(v)) { delete args.conversation_id; args.new_conversation = true; }
-    else if (/^(mcp|courante|current|session)$/i.test(v)) delete args.conversation_id;
-    else if (/^[\w-]{8,64}$/.test(v)) { if (pendingChoice) { askState.chatId = v; remember(v); folders.clear(); delete args.conversation_id; } }
+    if (/^(new|nouvelle?)$/i.test(v)) { delete args.conversation_id; args.new_conversation = true; choseNow = 'new'; pinned = false; }
+    else if (/^(mcp|courante|current|session)$/i.test(v)) { delete args.conversation_id; choseNow = 'mcp'; }
+    else if (/^[\w-]{8,64}$/.test(v)) { if (pendingChoice) { askState.chatId = v; remember(v); folders.clear(); delete args.conversation_id; choseNow = 'mcp'; pinned = true; } }
     else if (args.new_conversation !== true) return;                   // aucun choix exprimé
     askedWhere = true; pendingChoice = false;
   }
@@ -324,11 +407,11 @@ export function createMcpServer(deps = {}) {
       setProjectOverride(p);
       if (v.remember === true) saveCfgKeys({ mcpProject: p === undefined ? 'same' : p });
     }
-    if (v.conversation === 'new') { askState.chatId = null; askState.sid = newSid(); folders.clear(); }
+    if (v.conversation === 'new') { askState.chatId = null; askState.sid = newSid(); folders.clear(); choseNow = 'new'; pinned = false; }
     else if (typeof v.conversation === 'string' && v.conversation.startsWith('chat:') && conv.includes(v.conversation)) {
       const id = v.conversation.slice(5);
-      askState.chatId = id; remember(id, titles.get(id)); folders.clear();
-    }
+      askState.chatId = id; remember(id, titles.get(id)); folders.clear(); choseNow = 'mcp'; pinned = true;
+    } else if (v.conversation === 'keep') choseNow = 'mcp';
     if (v.remember === true) saveCfgKeys({ mcpAskWhere: false });
     return null;
   }
@@ -395,7 +478,7 @@ export function createMcpServer(deps = {}) {
     // (sauf si la limite des 50 nouvelles conversations du jour est atteinte, ou si une conversation précise a été demandée)
     const MCP_CHAT_MAX = 60000;
     if (!target && askState.chatId && (cfg.mcpChat?.tokens || 0) > MCP_CHAT_MAX && !(cfg.dailyLimitHitAt > lastReset())) {
-      askState.chatId = null; askState.sid = newSid(); folders.clear(); saveCfgKeys({ mcpChat: null });
+      askState.chatId = null; askState.sid = newSid(); folders.clear(); pinned = false; saveCfgKeys({ mcpChat: null });
     }
     const send = async chatId => {
       let content = prompt;
@@ -406,10 +489,23 @@ export function createMcpServer(deps = {}) {
         onChat: id => { if (!target && !askState.chatId) { askState.chatId = id; remember(id); } },
       });
     };
+    // conversation supprimée sur le site (ou verrouillée) : une neuve, et plus aucun dossier de fs_agent ne la réutilise
+    const attempt = async () => {
+      try { return await send(target || askState.chatId); }
+      catch (e) { if (!gone(e) || target) throw e; forgetChat(askState.chatId); return send(null); }
+    };
     try {
       let res;
-      try { res = await send(target || askState.chatId); }
-      catch (e) { if (!gone(e) || target) throw e; askState.chatId = null; saveCfgKeys({ mcpChat: null }); res = await send(null); }   // conversation supprimée sur le site : une neuve
+      try { res = await attempt(); }
+      catch (e) {
+        // clé changée depuis (fs-cli --login) : nouvel essai avec chaque autre clé des .env (3 au plus)
+        const tried = new Set([TOKEN]);
+        let last = e, ok = false;
+        for (let i = 0; i < 3 && expired(last) && d.reloadToken(tried); i++) {
+          try { res = await attempt(); ok = true; break; } catch (e2) { last = e2; }
+        }
+        if (!ok) throw last;
+      }
       if (!target && askState.chatId) remember(askState.chatId);
       if (!target && askState.chatId && res?.usage && typeof res.usage === 'object') {   // taille actuelle de la conversation (pour le seuil ci-dessus)
         let pt = 0; for (const [k, v] of Object.entries(res.usage)) if (typeof v === 'number' && /prompt|input/i.test(k) && !/total|cached|reasoning/i.test(k)) pt += v;
@@ -429,10 +525,14 @@ export function createMcpServer(deps = {}) {
         return `--- Document « ${x.title || 'sans titre'} »${x.update ? ' (mis à jour)' : ''} — contenu complet ---\n\`\`\`${ext.toLowerCase()}\n${x.content.replace(/\n?$/, '\n')}\`\`\``;
       }).join('\n\n');
       if (!text && !imgs.length && !docText) return textResult(`${nameOf(m.id)} n'a renvoyé aucune réponse.`, true);
-      const body = [text, docText].filter(Boolean).join('\n\n') || '(image seule)';
+      // GPT refuse souvent quand la question parle d'outils, d'agents, de MCP ou d'IDE : on dit à l'agent appelant comment reformuler
+      const refusalHint = !docText && text && (await import('./native.js')).looksLikeToolRefusal(text)   // chargé à la demande (démarrage rapide)
+        ? '\n\n[Note de FS-CLI : le modèle a refusé parce que la question mentionne un outil, un agent, un MCP ou un IDE. Repose-la sans ces mots (seulement le sujet), ou utilise un modèle Claude.]' : '';
+      const body = ([text, docText].filter(Boolean).join('\n\n') || '(image seule)') + refusalHint;
       return withImages(textResult(body), imgs, typeof args.save_dir === 'string' && path.isAbsolute(args.save_dir) ? args.save_dir : '');
     } catch (e) {
       if (e?.name === 'AbortError') return textResult('Demande annulée.', true);
+      if (expired(e)) return textResult(EXPIRED, true);
       return textResult(`Erreur France Student : ${e?.message || e}`, true);
     }
   }
@@ -461,18 +561,36 @@ export function createMcpServer(deps = {}) {
       d.runNative = (await import('./native.js')).runNative;
     }
     const key = folderKey(dir);                                        // /tmp et /private/tmp, Projet et projet : même session
+    choseNow = false;
     applyChoice(args);
-    const cw = !folders.has(key) && !chatFor(args) && args.new_conversation !== true ? await chooseWhere(signal) : null;
+    const want = chatFor(args);                                        // conversation précise demandée pour cet appel
+    const cw = !folders.has(key) && !want && args.new_conversation !== true ? await chooseWhere(signal) : null;
     if (cw?.cancel) return CANCELLED();
     if (cw?.ask) return textResult(cw.ask);
+    // conversation : celle demandée, une neuve, celle du MCP si l'utilisateur vient de la choisir (ou en a désigné une), sinon celle de ce dossier
+    const fresh = args.new_conversation === true || choseNow === 'new';
+    const mcpWanted = !want && !fresh && (choseNow === 'mcp' || pinned) && askState.chatId ? askState.chatId : null;
+    const chosen = want || mcpWanted;
     let S = folders.get(key);
-    if (!S || args.new_conversation === true) {
-      S = { chatId: chatFor(args) || (args.new_conversation === true ? null : askState.chatId), sid: newSid(), agentId: m.id, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: [], tokens: { in: 0, out: 0 }, slots: {}, stats: { turns: 0, requests: 0, tools: 0 }, lastResponse: '' };
+    // S.borrowed : conversation empruntée faute de pouvoir en créer une (limite du jour) → le dossier prend la sienne dès que possible
+    if (!S || fresh || (chosen && S.chatId !== chosen) || (S.borrowed && !limitHit())) {
+      S = { chatId: fresh ? null : chosen || folderChat(key), sid: newSid(), agentId: m.id, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: [], tokens: { in: 0, out: 0 }, slots: {}, stats: { turns: 0, requests: 0, tools: 0 }, lastResponse: '' };
+      S.own = !chosen;                                                 // conversation du dossier : retenue (mcp-folders.json)
+      S.borrowed = '';
       folders.set(key, S);
     }
+    /** pas de conversation pour ce dossier et limite des 50 nouvelles du jour atteinte : une existante plutôt qu'un échec (429) */
+    const borrow = () => {
+      if (S.chatId || fresh || want || !limitHit()) return false;
+      const b = borrowChat();
+      if (!b) return false;
+      S.chatId = b.id; S.own = false; S.borrowed = b.what; S.pendingResults = [];
+      return true;
+    };
+    borrow();
     S.agentId = m.id; S.allow = {};                                    // aucune autorisation « toujours » ne survit d'une tâche à l'autre
     const from = S.undo.length, tools0 = S.stats.tools;
-    S.lastResponse = '';
+    S.lastResponse = ''; S.ctxPercent = null;
     const log = [], refused = [];
     const ask = async q => {
       if (/raison|alternative/i.test(String(q))) return REFUSAL_NOTE;  // explication renvoyée au modèle
@@ -485,35 +603,73 @@ export function createMcpServer(deps = {}) {
       return 'n';
     };
     // mode : fichiers sans confirmation ; commandes refusées (ou, si l'utilisateur l'a choisi via FS_MCP_ALLOW_COMMANDS=1, seules les commandes sans danger)
-    const savedMode = cfg.mode;
-    cfg.mode = d.allowCommands ? 'auto' : 'edits';
-    ui.attachSink({ print: s => { for (const l of ui.stripAnsi(String(s)).split('\n')) if (l.trim()) { log.push(l); if (log.length > 400) log.shift(); progress(l.trim()); } }, spinner: () => {} });
+    const savedMode = cfg.mode, forced = d.allowCommands ? 'auto' : 'edits';
+    cfg.mode = forced;
+    // acted : un outil a démarré (ui.toolHeader affiche l'action en cours via setActive, même une lecture qui ne laisse aucune ligne)
+    let acted = false;
+    ui.attachSink({ print: s => { for (const l of ui.stripAnsi(String(s)).split('\n')) if (l.trim()) { log.push(l); if (log.length > 400) log.shift(); progress(l.trim()); } }, spinner: () => {},
+      setActive: lines => { if (lines?.length) acted = true; } });
     let error = null;
     const agentImages = [];
     ui.onImage(im => agentImages.push(im));                            // images générées pendant la tâche : renvoyées à l'appelant
+    let renewed = '', stopped = '';
+    // rien n'a été fait pendant l'essai qui a échoué (aucun outil lancé, aucun fichier touché, rien affiché) : relancer ne refait rien.
+    // native.js ne compte les outils (S.stats.tools) qu'à la fin d'un tour réussi : ce compteur seul ne suffit pas.
+    const untouched = () => !acted && !log.length && S.undo.length === from && S.stats.tools === tools0 && !S.lastResponse;
     try {
-      await d.runNative(S, task, { signal, ask });
-      if (!chatFor(args) && S.chatId && !askState.chatId) { askState.chatId = S.chatId; remember(S.chatId); }   // même conversation pour fs_ask et fs_agent
+      const tried = new Set([TOKEN]);
+      for (let attempt = 0; ; attempt++) {
+        try { await d.runNative(S, task, { signal, ask }); break; }
+        catch (e) {
+          if (e?.name === 'AbortError' || attempt >= 3) throw e;
+          const dead = !!S.chatId && !want && gone(e);
+          if (!untouched()) {
+            // des actions ont déjà été faites : jamais relancé (elles seraient refaites) ; conversation morte oubliée pour la suite
+            if (dead) { forgetChat(S.chatId); S.chatId = null; S.own = true; S.borrowed = ''; S.pendingResults = []; S.sid = newSid(); stopped = 'gone'; }
+            throw e;
+          }
+          if (dead) { forgetChat(S.chatId); S.chatId = null; S.own = true; S.borrowed = ''; borrow(); continue; }   // supprimée ou verrouillée : une neuve, pour ce dossier
+          if (!S.chatId && borrow()) continue;                          // limite du jour atteinte à l'instant (429) : une conversation existante
+          if (expired(e) && d.reloadToken(tried)) continue;             // clé changée depuis (fs-cli --login)
+          throw e;
+        }
+      }
     }
     catch (e) { error = e; }
     finally {
       ui.onImage(null);
       cfg.mode = savedMode;
-      restoreSavedMode(savedMode);
+      restoreSavedMode(savedMode, forced);
       ui.attachSink(SILENT_SINK);
+    }
+    if (S.own && S.chatId) {
+      // France Student rejoue tout l'historique à chaque message : conversation du dossier remplie à 60 % → une neuve à la prochaine tâche
+      // (sauf si la limite des 50 nouvelles conversations du jour est atteinte)
+      if (typeof S.ctxPercent === 'number' && S.ctxPercent >= FOLDER_CTX_MAX && !(cfg.dailyLimitHitAt > lastReset())) {
+        renewed = `Conversation de ce dossier remplie à ${Math.round(S.ctxPercent)} % : la prochaine tâche dans ce dossier démarrera une nouvelle conversation.`;
+        forgetFolderChat(S.chatId); S.chatId = null; S.sid = newSid(); S.pendingResults = [];
+      } else rememberFolder(key, S.chatId);
     }
     for (const l of log) if (/refusé par la politique de sécurité/i.test(l)) refused.push(l.replace(/^[\s⎿]+/, '').trim());
     const changes = summarizeChanges(S.undo, from);
     const nTools = S.stats.tools - tools0;
     const parts = [];
-    if (error) parts.push(error.name === 'AbortError' ? 'Tâche annulée.' : error.code === 'NATIVE_UNSUPPORTED' ? `${error.message}` : `Erreur : ${error.message || error}`);
+    if (error) parts.push(error.name === 'AbortError' ? 'Tâche annulée.' : error.code === 'NATIVE_UNSUPPORTED' ? `${error.message}` : expired(error) ? EXPIRED : `Erreur : ${error.message || error}`);
     parts.push(S.lastResponse ? `Réponse de ${nameOf(S.agentId)} :\n${S.lastResponse}` : `(${nameOf(S.agentId)} n'a pas écrit de compte rendu)`);
     const rel = p => { const r = path.relative(dir, p); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p; };
     parts.push(changes.length
       ? `Fichiers modifiés (${changes.length}) :\n${changes.map(f => `- ${rel(f.path)}${f.created ? ' (créé)' : f.deleted ? ' (supprimé)' : ''}${f.binary ? ' binaire' : ` +${f.added} −${f.removed}`}`).join('\n')}`
       : 'Fichiers modifiés : aucun.');
-    parts.push(`Appels d'outils : ${nTools}.`);
+    // erreur en cours de tâche : native.js n'a pas encore fait le compte des outils de ce tour
+    parts.push(error && acted && !nTools ? 'Appels d\'outils : au moins 1 avant l\'erreur (décompte exact indisponible).' : `Appels d'outils : ${nTools}.`);
     if (refused.length) parts.push(`Actions refusées automatiquement (${refused.length}) :\n${[...new Set(refused)].slice(0, 20).map(r => `- ${r}`).join('\n')}`);
+    if (error && error.name !== 'AbortError' && acted) {
+      parts.push((stopped === 'gone'
+        ? 'France Student a supprimé ou verrouillé la conversation pendant la tâche, après des actions déjà faites. La prochaine tâche dans ce dossier démarrera une nouvelle conversation. '
+        : '') + 'La tâche n\'a pas été relancée automatiquement, pour ne pas refaire les actions déjà faites (fichiers modifiés ci-dessus, et commandes éventuelles) : vérifie l\'état du dossier et ne redemande que ce qui reste à faire.');
+    }
+    if (S.borrowed) parts.push(`Limite des 50 nouvelles conversations du jour atteinte : ce dossier n'a pas encore sa propre conversation, la tâche a donc continué ${S.borrowed} (le modèle voit son historique). Le dossier aura sa propre conversation après la remise à zéro de la limite.`);
+    if (renewed) parts.push(renewed);
     return withImages(textResult(parts.join('\n\n'), !!error && !S.lastResponse), agentImages, '');
   }
 
@@ -572,6 +728,7 @@ export function createMcpServer(deps = {}) {
   }
 
   const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|jsonl|ya?ml|toml|ini|xml|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|php|java|kt|go|rs|c|h|cpp|hpp|cs|swift|sql|sh|ps1|bat|lua|luau|log|r|dart|vue|svelte)$/i;
+  const TEXT_BUDGET = 120_000;                                          // caractères de texte envoyés au plus par appel de fs_files
   const UPLOAD_EXT = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', pdf: 'application/pdf' };
   async function toolFiles(args, signal) {
     const prompt = str(args.prompt);
@@ -580,8 +737,8 @@ export function createMcpServer(deps = {}) {
     if (!paths.length) return textResult('Paramètre « paths » manquant : donne 1 à 5 chemins absolus.', true);
     if (paths.length > 5) return textResult('5 fichiers au maximum par appel.', true);
     if (!d.hasToken()) return textResult(NO_TOKEN, true);
-    const ids = [], texts = [];
-    let textBudget = 120_000;
+    const ids = [], texts = [], skipped = [];
+    let textBudget = TEXT_BUDGET;
     for (const p of paths) {
       if (!path.isAbsolute(p)) return textResult(`Chemin non absolu : ${p}`, true);
       const why = sensitivePathReason(p);
@@ -595,15 +752,20 @@ export function createMcpServer(deps = {}) {
         try { ids.push(await d.upload(fs.readFileSync(p), path.basename(p), UPLOAD_EXT[ext])); }
         catch (e) { return textResult(`Envoi de ${path.basename(p)} impossible : ${e?.message || e}`, true); }
       } else if (TEXT_EXT.test(p)) {
-        const t = fs.readFileSync(p, 'utf8');
-        const cut = t.length > textBudget ? t.slice(0, textBudget) + '\n[… fichier coupé]' : t;
+        // limite de texte déjà atteinte : fichier signalé (au modèle et à l'appelant), et les fichiers suivants (images, PDF) sont quand même traités
+        if (textBudget <= 0) { skipped.push(path.basename(p)); texts.push(`[${path.basename(p)} non inclus : limite de ${TEXT_BUDGET.toLocaleString('fr-FR')} caractères de texte atteinte]`); continue; }
+        let t;
+        try { t = readTextHead(p, st.size, textBudget); }                // jamais tout un gros fichier en mémoire
+        catch (e) { return textResult(deniedCode(e) ? deniedMessage(p) : `Lecture de ${path.basename(p)} impossible : ${e?.message || e}`, true); }
+        const cut = t.partial || t.text.length > textBudget ? t.text.slice(0, textBudget) + '\n[… fichier coupé]' : t.text;
         textBudget -= cut.length;
         texts.push(`--- ${path.basename(p)} ---\n${cut}`);
-        if (textBudget <= 0) break;
       } else return textResult(`Type de fichier non pris en charge : ${path.basename(p)} (images, PDF ou fichiers texte).`, true);
     }
     const full = texts.length ? `${prompt}\n\n${texts.join('\n\n')}` : prompt;
-    return toolAsk({ prompt: full, model: args.model, conversation_id: args.conversation_id }, signal, { files: ids });
+    const r = await toolAsk({ prompt: full, model: args.model, conversation_id: args.conversation_id }, signal, { files: ids });
+    if (!skipped.length || r.isError) return r;
+    return { ...r, content: [...r.content, { type: 'text', text: `Non envoyé${skipped.length > 1 ? 's' : ''} à France Student (limite de ${TEXT_BUDGET.toLocaleString('fr-FR')} caractères de texte par appel atteinte) : ${skipped.join(', ')}. Rappelle fs_files avec ce${skipped.length > 1 ? 's' : ''} fichier${skipped.length > 1 ? 's' : ''} seul${skipped.length > 1 ? 's' : ''}.` }] };
   }
 
   const cleanUser = t => {
@@ -635,7 +797,7 @@ export function createMcpServer(deps = {}) {
     const chat = await d.fetchChat(id).catch(() => null);
     if (!chat) return textResult(`Conversation introuvable : ${id}`, true);
     if (action === 'select') {
-      askState.chatId = id; remember(id, chat.title || ''); folders.clear(); askedWhere = true; pendingChoice = false;
+      askState.chatId = id; remember(id, chat.title || ''); folders.clear(); askedWhere = true; pendingChoice = false; pinned = true;
       return textResult(`Conversation du MCP : « ${cleanTitle(chat.title)} ». fs_ask, fs_agent, fs_image, fs_web et fs_files l'utilisent désormais.`);
     }
     if (action !== 'read') return textResult(`Action inconnue : ${action} (list, read ou select).`, true);
@@ -724,9 +886,32 @@ export function createMcpServer(deps = {}) {
 
 const SILENT_SINK = { print: () => {}, spinner: () => {} };
 
-/** le mode imposé pendant fs_agent ne doit jamais rester enregistré dans la config de l'utilisateur (runNative peut appeler saveCfg) */
-function restoreSavedMode(mode) {
-  try { const saved = JSON.parse(fs.readFileSync(FILES.cfg, 'utf8')); if (saved.mode !== undefined && saved.mode !== mode) saveCfg(); } catch {}
+/** Conversation de chaque dossier de fs_agent : fichier à part (config.json est réécrit en entier par saveCfg, qui ne connaît pas cette clé). */
+export const FOLDERS_FILE = path.join(HOME_DIR, 'mcp-folders.json');
+export function readFolders(file = FOLDERS_FILE) {
+  try { const j = JSON.parse(fs.readFileSync(file, 'utf8')); return j && typeof j === 'object' && !Array.isArray(j) ? j : {}; } catch { return {}; }
+}
+/** écriture atomique (fichier temporaire puis renommage) : un autre serveur MCP ne lit jamais un fichier à moitié écrit */
+export function writeFolders(file = FOLDERS_FILE, obj = {}) {
+  const text = JSON.stringify(obj, null, 2) + '\n', tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, text, { mode: 0o600 });
+    try { fs.renameSync(tmp, file); }
+    catch { fs.writeFileSync(file, text, { mode: 0o600 }); try { fs.unlinkSync(tmp); } catch {} }   // Windows : fichier ouvert ailleurs (antivirus…)
+  } catch {}
+}
+
+/** le mode imposé pendant fs_agent ne doit jamais rester enregistré dans la config de l'utilisateur (runNative peut appeler saveCfg).
+ *  Seule la clé « mode » est remise, et seulement si c'est encore le mode imposé : les autres réglages (et un mode changé
+ *  entre-temps dans un autre fs-cli) ne sont jamais écrasés par la copie en mémoire du serveur. */
+export function restoreSavedMode(mode, forced, file = FILES.cfg) {
+  try {
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (saved && typeof saved === 'object' && !Array.isArray(saved) && saved.mode === forced && forced !== mode) {
+      fs.writeFileSync(file, JSON.stringify({ ...saved, mode }, null, 2), { mode: 0o600 });
+    }
+  } catch {}
 }
 
 /** Lance le serveur sur stdin/stdout. Se termine quand stdin est fermé. */
@@ -870,7 +1055,8 @@ function installToml(t, entry) {
   const re = new RegExp(`^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:"${SERVER_NAME}"|'${SERVER_NAME}'|${SERVER_NAME})\\s*\\]`, 'm');
   if (text !== null && re.test(text)) return { status: 'déjà présent (non modifié)' };
   const q = s => JSON.stringify(String(s));                           // chaîne TOML « basique » (mêmes échappements que JSON)
-  const section = `[mcp_servers.${SERVER_NAME}]\ncommand = ${q(entry.command)}\nargs = [${entry.args.map(q).join(', ')}]\n`;
+  // Codex coupe un appel d'outil au bout de 60 s par défaut : une tâche fs_agent dure souvent plusieurs minutes (30 min au plus ici)
+  const section = `[mcp_servers.${SERVER_NAME}]\ncommand = ${q(entry.command)}\nargs = [${entry.args.map(q).join(', ')}]\nstartup_timeout_sec = 30\ntool_timeout_sec = 1800\n`;
   const bak = text !== null ? backup(t.file) : null;
   const base = text === null ? '' : text.replace(/\s*$/, '');
   atomicWrite(t.file, (base ? base + '\n\n' : '') + section);

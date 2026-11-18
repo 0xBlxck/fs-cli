@@ -69,7 +69,16 @@ export class Tui {
   // ── affichage ───────────────────────────────────────────────────────────────
   print(text) { if (!this.started) { this.stdout.write(text); return; } this.screen.print(text); }
   clearScreen() { this.screen.clearScreen(); }
-  render() { if (this.started) this.screen.render(); }
+  // rendus regroupés : une seule image par tour de boucle (une commande bavarde appelait render() à chaque ligne de sortie) ;
+  // les touches, elles, sont redessinées tout de suite (renderNow à la fin de onKey)
+  render() {
+    if (!this.started) return;
+    this.dirty = true;
+    if (this.inKey || this.renderQueued) return;
+    this.renderQueued = true;
+    setImmediate(() => { this.renderQueued = false; this.renderNow(); });
+  }
+  renderNow() { if (!this.started || !this.dirty) return; this.dirty = false; this.screen.render(); }
   spinner(text) { this.spinnerText = text; this.render(); }
   setBusy(b) {
     this.busy = !!b;
@@ -225,7 +234,7 @@ export class Tui {
     }
 
     // zone de saisie : cadre aux coins arrondis (comme Claude Code)
-    const textW = Math.max(10, W - 7);
+    const textW = this.textWidth();
     const text = this.search ? this.search.q : this.buf;
     const lay = layoutInput(text, this.search ? text.length : this.cur, textW);
     const max = Math.max(1, Math.min(this.maxInputLines, maxRows - 8));
@@ -312,7 +321,9 @@ export class Tui {
   }
   edited() { this.updateSuggestions(); this.render(); }
   clearInput() { this.buf = ''; this.cur = 0; this.histIdx = -1; this.sug = { items: [], idx: -1, start: 0 }; this.render(); }
-  layout() { return layoutInput(this.buf, this.cur, Math.max(10, this.screen.getCols() - 3)); }
+  /** largeur du texte dans le cadre de saisie : la même pour l'affichage (compose) et pour ↑ ↓ (layout) */
+  textWidth() { return Math.max(10, this.screen.getCols() - 7); }
+  layout() { return layoutInput(this.buf, this.cur, this.textWidth()); }
 
   moveVert(dir) {
     const lay = this.layout();
@@ -356,9 +367,13 @@ export class Tui {
 
   // ── touches ─────────────────────────────────────────────────────────────────
   onKey(k) {
-    if (this.select_) return this.keySelect(k);
-    if (this.search) return this.keySearch(k);
-    return this.keyInput(k);
+    this.inKey = true;
+    try {
+      if (this.select_) this.keySelect(k);
+      else if (this.search) this.keySearch(k);
+      else this.keyInput(k);
+    } finally { this.inKey = false; }
+    this.renderNow();                                                  // la frappe s'affiche sans attendre
   }
 
   keySelect(k) {

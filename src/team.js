@@ -6,7 +6,9 @@ import { baseDir } from './agent.js';
 import { summarizeChanges } from './changes.js';
 import { cfg } from './config.js';
 import { contextPercent } from './account.js';
-import { newSid, createdToday, DAILY_LIMIT } from './chats.js';
+import { newSid, createdToday, lastReset, DAILY_LIMIT } from './chats.js';
+import * as mem from './memory.js';
+import { workPreferences } from './pseudo.js';
 import * as ui from './ui.js';
 import { c, println } from './ui.js';
 
@@ -103,6 +105,26 @@ function summaryOf(W) {
 }
 const QUIET = { print() {}, spinner() {}, setActive() {} };           // affichage mis de côté pendant le travail en parallèle
 
+/**
+ * Conversation NEUVE d'un agent : le même contexte de projet que la conversation principale (FSCLI.md, préprompt, faits, notes,
+ * instructions du projet France Student, préférences de forme), joint une seule fois. Jamais l'index des skills ni de protocole d'outils.
+ * Mode same après un résumé automatique : le résumé de la conversation précédente part en tête, comme dans chatTurn.
+ */
+export function workerContext(S, WS, { sameChat = false } = {}) {
+  if (WS.chatId || (sameChat && S.ctxSent)) return { before: '', after: '', prefsSig: null };
+  const after = [];
+  const block = mem.buildContextBlock(S.cwd).text;
+  if (block) after.push(block);
+  if (cfg.fsProject?.id && S.fsProjInstr?.id === cfg.fsProject.id && S.fsProjInstr.text) {   // instructions déjà lues par chatTurn (pas de requête ici)
+    after.push(`[Instructions du projet France Student « ${cfg.fsProject.name} » de l'utilisateur, à suivre :\n${S.fsProjInstr.text.slice(0, 8000)}]`);
+  }
+  let prefsSig = null;
+  if (!(sameChat && S.bareChat)) { const p = workPreferences(); if (p.sig !== WS.toolsHintSig) { after.push(p.text); prefsSig = p.sig; } }
+  const before = sameChat && S.pendingSummary
+    ? `[Reprise : résumé de la conversation précédente (même session de travail), à garder comme contexte]\n${S.pendingSummary}\n\n[Nouvelle demande de l'utilisateur]\n` : '';
+  return { before, after: after.length ? '\n\n' + after.join('\n\n') : '', prefsSig };
+}
+
 /** Une part du travail = une demande à l'agent FS-CLI (outils officiels), dans la conversation courante ou dans « w0, w1… » */
 async function runWorker(W, WS, ctx) {
   const t0 = Date.now();
@@ -112,8 +134,26 @@ async function runWorker(W, WS, ctx) {
   timer.unref?.();
   const undoBefore = WS.undo.length, tokBefore = (WS.tokens?.in || 0) + (WS.tokens?.out || 0), hadChat = !!WS.chatId;
   try {
-    await ctx.runNative(WS, workerTask(ctx.task, W, ctx.plan, ctx.dir, { same: ctx.sameChat, reused: !ctx.sameChat && hadChat }),
-      { signal: ctx.signal, ask: ctx.ask, stream: ctx.stream, ...(ctx.sameChat ? {} : { ctxPct: async () => null }) });
+    for (let attempt = 0; ; attempt++) {
+      const extra = workerContext(ctx.S || WS, WS, { sameChat: ctx.sameChat });
+      const consigne = workerTask(ctx.task, W, ctx.plan, ctx.dir, { same: ctx.sameChat, reused: !ctx.sameChat && hadChat });
+      try {
+        await ctx.runNative(WS, extra.before + consigne + extra.after,
+          { signal: ctx.signal, ask: ctx.ask, stream: ctx.stream, ...(ctx.sameChat ? {} : { ctxPct: async () => null }) });
+      } catch (e) {
+        // résumé automatique entre deux agents, mais limite des 50 conversations atteinte : on reste dans la conversation d'avant, rien n'est perdu
+        if (e?.code === 'DAILY_CHAT_LIMIT' && ctx.sameChat && !WS.chatId && WS.compactedFrom && !attempt) {
+          WS.chatId = WS.compactedFrom; WS.compactedFrom = null; WS.pendingSummary = null; WS.ctxSent = true;
+          continue;
+        }
+        throw e;
+      }
+      if (WS.chatId && (extra.after || extra.before)) {                 // contexte arrivé dans la conversation : pas renvoyé au message suivant
+        if (extra.prefsSig) WS.toolsHintSig = extra.prefsSig;
+        if (ctx.sameChat) { WS.ctxSent = true; WS.pendingSummary = null; WS.compactedFrom = null; }
+      }
+      break;
+    }
     W.text = WS.lastResponse || '';
     W.written = summarizeChanges(WS.undo, undoBefore).filter(f => !f.deleted).map(f => path.relative(ctx.dir, f.path) || path.basename(f.path));
     W.status = W.files.length && !W.written.length ? 'sans fichier' : 'ok';
@@ -187,17 +227,28 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
       ev('teamDone', { count: workers.length, durationMs: Date.now() - T0, ok: workers.filter(W => W.status === 'ok').length, ...extra });
     };
 
-    // conversations réutilisées trop pleines → on repart d'une neuve (une seule création, étiquetée)
+    // conversations réutilisées trop pleines → on repart d'une neuve (une seule création, étiquetée).
+    // Chaque tâche y est « indépendante des précédentes » : leur historique est rejoué pour rien à chaque requête → seuil en tokens
+    // (celui du résumé automatique, 60k au plus), pas seulement 70 % du contexte (≈ 700k tokens sur Claude 1M). Jamais quand la limite des 50 est atteinte.
     if (!sameChat) {
+      const canCreate = (cfg.dailyLimitHitAt || 0) < lastReset();
+      const { compactLimit } = await import('./extra-commands.js');
+      const limit = Math.min(compactLimit({ ctxWindows: S.ctxWindows, agentId: workerId }), 60000);
+      const win = Number(S.ctxWindows?.[String(workerId)]) || 0;
+      S.slotTokens ||= {};                                             // par identifiant de conversation : jamais appliqué à une autre (/resume, /history, /new)
+      const drop = (j, why) => { delete S.slotTokens[S.slots[`w${j}`]]; delete S.slots[`w${j}`]; say(c.dim(`    conversation w${j} ${why} → une neuve sera ouverte`)); };
       for (let j = 0; j < Math.min(parallel, plan.length); j++) {
         const id = S.slots[`w${j}`];
         if (!id) continue;
+        const tok = Number(S.slotTokens[id]) || 0;                     // taille envoyée à sa dernière requête (connue sans appel réseau)
+        if (canCreate && tok >= limit) { drop(j, `chargée (≈${Math.round(tok / 1000)}k tokens par requête)`); continue; }
         const pct = await ctxPct(id).catch(() => null);
-        if (typeof pct === 'number' && pct >= 70) { delete S.slots[`w${j}`]; say(c.dim(`    conversation w${j} presque pleine (${Math.round(pct)} %) → une neuve sera ouverte`)); }
+        if (typeof pct === 'number' && pct >= 70) drop(j, `presque pleine (${Math.round(pct)} %)`);
+        else if (canCreate && typeof pct === 'number' && win && pct / 100 * win >= limit) drop(j, `chargée (${Math.round(pct)} % du contexte)`);
       }
     }
 
-    const ctx = { task, plan, dir, signal, ask, stream, runNative, sameChat, created: 0, limitHit: null, ev, modelLabel };
+    const ctx = { S, task, plan, dir, signal, ask, stream, runNative, sameChat, created: 0, limitHit: null, ev, modelLabel };
     const K = Math.min(parallel, workers.length);
     const work = Array.from({ length: K }, (_, j) => workers.filter((_, i) => i % K === j));   // répartition fixe : la voie j garde sa conversation « wj »
     const states = [];
@@ -220,8 +271,17 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
         for (const W of work[j]) {
           if (signal.aborted) return;
           W.slot = `w${j}`;
+          // mode same : les agents s'enchaînent dans la conversation courante sans passer par chatTurn → résumé automatique ici, entre deux agents
+          if (sameChat) await (await import('./extra-commands.js')).maybeAutoCompact(S, signal, { stream: env.stream });
           await runWorker(W, WS, ctx);
-          if (!sameChat) { if (WS.chatId) S.slots[`w${j}`] = WS.chatId; else delete S.slots[`w${j}`]; }
+          if (!sameChat) {
+            if (WS.chatId) {
+              S.slots[`w${j}`] = WS.chatId;
+              delete S.slotTokens[WS.chatId]; S.slotTokens[WS.chatId] = WS.lastPromptTokens || 0;
+              const ks = Object.keys(S.slotTokens).filter(k => k !== WS.chatId);
+              for (const k of ks.slice(0, Math.max(0, ks.length - 199))) delete S.slotTokens[k];   // taille bornée sur une longue session (200 au plus)
+            } else delete S.slots[`w${j}`];
+          }
         }
       };
       const lanes = [];

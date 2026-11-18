@@ -8,7 +8,7 @@ import path from 'node:path';
 import { ROOT } from './config.js';
 import { loadMcpConfig } from './mcp.js';
 import { getMcp } from './mcp-runtime.js';
-import { discoverSkills, searchSkills } from './discover.js';
+import { discoverSkills, searchSkills, isSelfMcpServer } from './discover.js';
 import { isImportApproved, approveImport } from './approvals.js';
 import { confirm } from './agent.js';
 import * as ui from './ui.js';
@@ -87,7 +87,8 @@ export function toolsHint(cwd, userText) {
 /** Serveurs MCP nommés dans la demande (« avec le mcp leboncoin », « via blender »…). */
 export function mentionedServers(cwd, text) {
   const t = String(text || '').toLowerCase();
-  const names = Object.entries(loadMcpConfig(cwd).mcpServers || {}).filter(([, s]) => !s.disabled).map(([n]) => n);
+  // FS-CLI lui-même (« france-student », même ajouté dans ~/.fs-cli/mcp.json) : jamais proposé, sinon « France Student » dans la demande le démarre
+  const names = Object.entries(loadMcpConfig(cwd).mcpServers || {}).filter(([n, s]) => !s.disabled && !isSelfMcpServer(n, s)).map(([n]) => n);
   const saysMcp = /\bmcp\b/.test(t);
   const found = names.filter(n => {
     const re = new RegExp(`(^|[^\\w-])${n.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[_-]/g, '[ _-]?')}($|[^\\w-])`);

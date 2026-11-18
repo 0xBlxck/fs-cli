@@ -9,10 +9,11 @@ export function send(type, data = {}) {
 }
 
 export class StdioInput {
-  constructor() {
+  /** startBusy : messages mis en file dès le départ (démarrage du CLI : rien ne part avant la question de confiance du dossier) */
+  constructor({ startBusy = false } = {}) {
     this.kind = 'stdio';
     this.handlers = { instant: [], deleteProject: [], submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [], setMode: [], setModel: [], diffBefore: [], undoFile: [], mcpAction: [], historyOpen: [], resumeChat: [], projectUse: [], folderPicked: [], settingsOpen: [], setting: [], deleteChat: [], skillsOpen: [], skillToggle: [] };
-    this.queue = []; this.busy = false; this.pending = new Map(); this.seq = 0;
+    this.queue = []; this.busy = !!startBusy; this.pending = new Map(); this.seq = 0;
     this.rl = readline.createInterface({ input: process.stdin, terminal: false });
     this.rl.on('line', line => this.onLine(line));
     this.rl.on('close', () => this.emit('quit'));
@@ -38,7 +39,11 @@ export class StdioInput {
         p(m.type === 'select' ? (Number.isInteger(m.index) && m.index >= 0 ? m.index : null) : String(m.text ?? ''));
         return;
       }
-      case 'interrupt': return this.emit('interrupt');
+      case 'interrupt': {                                               // arrêt : les questions encore ouvertes répondent « non » et leurs cartes disparaissent du panneau
+        for (const [id, resolve] of this.pending) { send('selectCancelled', { id }); resolve(null); }
+        this.pending.clear();
+        return this.emit('interrupt');
+      }
       case 'cycleMode': return this.emit('cycleMode');
       case 'setMode': return this.emit('setMode', String(m.mode || ''));
       case 'setModel': return this.emit('setModel', String(m.id ?? ''));

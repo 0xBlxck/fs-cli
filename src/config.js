@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { scanSecrets } from './permissions.js';
 
 export const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const HOME_DIR = process.env.FS_CLI_HOME || path.join(os.homedir(), '.fs-cli');
@@ -15,6 +16,22 @@ export const FILES = {
   legacySession: path.join(HOME_DIR, 'session.json'),
   trash: path.join(HOME_DIR, 'trash'),
 };
+
+// ── Historique ↑ : une entrée par ligne, en JSON (un message de plusieurs lignes reste UNE entrée) ──
+const HIST_SECRET = /TOKEN\s*=|session-token|sk-[A-Za-z0-9]{20}|ghp_[A-Za-z0-9]{20}|\b[A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY)[A-Z0-9_]*["']?\s*[=:]\s*\S|mot\s+de\s+passe\s*[=:]/i;
+/** entrée à garder dans le fichier d'historique ? (jamais un long collage ni ce qui ressemble à un secret : le fichier est en clair) */
+export function historyKeeps(t) {
+  const s = String(t || '');
+  return !!s.trim() && s.length <= 2000 && !HIST_SECRET.test(s) && !scanSecrets(s).length;
+}
+export const encodeHistory = t => JSON.stringify(String(t));
+/** lignes du fichier → entrées (anciennes lignes en texte brut acceptées) */
+export function decodeHistory(raw) {
+  return String(raw || '').split(/\r?\n/).filter(Boolean).map(l => {
+    if (l.startsWith('"')) try { const v = JSON.parse(l); if (typeof v === 'string') return v; } catch {}
+    return l;
+  });
+}
 
 // ── .env : process.env > dossier du CLI > ~/.fs-cli ────────────────────────────
 // Sécurité : le .env du dossier COURANT n'est jamais lu (un dépôt piégé pourrait y mettre PATH ou NODE_OPTIONS),

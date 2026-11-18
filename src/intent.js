@@ -28,9 +28,12 @@ const NUM = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept
 const NUM_RE = '(\\d+|un|une|deux|trois|quatre|cinq|six|sept|huit)';
 const AGENT_RE = '(?:sous[- ]?agents?|subagents?|agents?|ia|bots?|workers?)';
 
-// « plusieurs agents », « 3 agents », « des sous-agents », « en équipe », « multi-agents »
+// « agents » suivi d'un complément = des personnes du sujet (agents immobiliers, agents de sécurité…), pas des agents qui travaillent
+const NOT_WORKERS = `(?!\\s+(?:immobili\\w*|commerci\\w*|secrets?|sp[ée]ciaux|de\\s+(?:s[ée]curit[ée]|voyages?|nettoyage|police|joueurs?|ma[iî]trise|change|service|accueil|entretien|terrain|circulation|la\\s|l['’])|d['’](?!ia\\b)|du\\s|des\\s))`;
+// « avec plusieurs agents », « utilise 3 agents », « des sous-agents », « en équipe », « multi-agents »
 const TEAM_PATTERNS = [
-  new RegExp(`\\b(plusieurs|des|quelques|\\d+|deux|trois|quatre|cinq|six|sept|huit)\\s+${AGENT_RE}\\b`, 'i'),   // pas « un agent » : ça désigne souvent ce qu'on veut coder
+  // pas « un agent » (souvent ce qu'on veut coder), ni « pour des agents immobiliers » : les agents doivent être l'outil du travail
+  new RegExp(`\\b(?:avec|utilis\\w*|lance[rz]?|via|par|en|prends?|emploie[rz]?|gr[âa]ce\\s+[àa]|mets?)\\s+(plusieurs|des|quelques|\\d+|deux|trois|quatre|cinq|six|sept|huit)\\s+${AGENT_RE}\\b${NOT_WORKERS}`, 'i'),
   /\bmulti[- ]?agents?\b/i,
   /\b(en|une|avec (une|ton|ta)?)\s*équipe\b/i,
   /\bsous[- ]?agents?\b/i,
@@ -43,11 +46,11 @@ const REVIEW = /\b(relis|relire|relecture|review|fais\s+(une\s+)?revue|contr[ôo
 // connecteurs à retirer autour de la consigne « agents » pour garder une tâche propre
 const CLAUSE = new RegExp(
   `[,;]?\\s*(?:et\\s+)?(?:en\\s+)?(?:utilis\\w*|prends?|lance[rz]?|avec|fais[- ]le\\s+avec|mets?|emploie[rz]?|grâce\\s+à|via|par)?\\s*` +
-  `(?:plusieurs|des|quelques|${NUM_RE.slice(1, -1)})?\\s*(?:${AGENT_RE}|multi[- ]?agents?|une\\s+équipe(?:\\s+d['e]\\s*${AGENT_RE})?|en\\s+équipe)` +
+  `(?:plusieurs|des|quelques|${NUM_RE.slice(1, -1)})?\\s*(?:${AGENT_RE}\\b${NOT_WORKERS}|multi[- ]?agents?|une\\s+équipe(?:\\s+d['e]\\s*${AGENT_RE})?|en\\s+équipe)` +
   `(?:\\s+(?:en\\s+parall[eè]le|en\\s+même\\s+temps|simultanément|à\\s+la\\s+suite))?`, 'gi');
 
 function agentCount(text) {
-  const m = text.match(new RegExp(`\\b${NUM_RE}\\s+${AGENT_RE}\\b`, 'i'));
+  const m = text.match(new RegExp(`\\b${NUM_RE}\\s+${AGENT_RE}\\b${NOT_WORKERS}`, 'i'));
   if (!m) return null;
   const n = /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : NUM[m[1].toLowerCase()];
   return n >= 2 && n <= 8 ? n : null;
@@ -134,10 +137,25 @@ export function detectIntent(raw) {
       const review = REVIEW.test(head);
       const arg = [n ? `-n ${n}` : '', mode === 'pool' ? '--pool' : mode === 'same' ? '--same' : '', review ? '--review' : '', task].filter(Boolean).join(' ');
       const label = `équipe ${n ? 'de ' + n + ' agents' : "d'agents"}${mode === 'pool' ? ' en parallèle' : mode === 'same' ? ' à la suite' : ''}${review ? ' + relecture' : ''}`;
-      return { cmd: '/team', arg, label };
+      return { cmd: '/team', arg, label, team: { agents: n, mode, review, task } };   // team : options déjà lues (contexte de l'éditeur ajouté sans être relu comme options)
     }
   }
   return null;
+}
+
+/**
+ * Message d'une ligne qui commence par « / » : commande du CLI, ou chemin absolu à traiter comme du texte
+ * (Mac/Linux : « /Users/moi/app/server.js plante », dossier glissé dans le terminal) ? Windows : inchangé (chemins en C:\…).
+ */
+export function isSlashCommand(t, { win = process.platform === 'win32', exists = p => fs.existsSync(p), known = () => false } = {}) {
+  const s = String(t || '');
+  if (!s.startsWith('/') || s.includes('\n')) return false;
+  if (win) return true;
+  const first = s.split(/\s+/)[0];
+  if (first.length < 2) return true;
+  if (first.slice(1).includes('/')) return false;                     // aucune commande ne contient un 2e « / »
+  if (known(first)) return true;
+  try { return !exists(first); } catch { return true; }                // « /tmp » : un dossier qui existe → c'est un chemin
 }
 
 /** URL(s) http(s) citées dans la demande : leur contenu est joint automatiquement (le modèle n'a pas d'accès web direct). */

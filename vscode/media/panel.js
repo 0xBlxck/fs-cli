@@ -36,7 +36,7 @@
   };
 
   // ── état ──
-  const S = { models: [], modes: [], commands: [], status: {}, busy: false, ctx: null, ctxOn: true, ai: null, tool: null, explore: null, spin: null, tasks: [], tasksMin: false, menu: null, ask: null, started: false };
+  const S = { models: [], modes: [], commands: [], status: {}, busy: false, ctx: null, ctxOn: true, ai: null, tool: null, explore: null, spin: null, tasks: [], tasksMin: false, menu: null, started: false };
 
   // ── structure ──
   const app = document.getElementById('app');
@@ -118,7 +118,7 @@
   function welcomeOff() { if (welcome) { welcome.remove(); welcome = null; } }
 
   // ── markdown (sous-ensemble GFM), toujours échappé ──
-  const codeStore = [];
+  // « Copier » relit le code dans le DOM (textContent) : rien n'est gardé à côté, donc rien ne s'accumule à chaque image du flux
   function inline(src) {
     const keep = [];
     const stash = html => `\u0000${keep.push(html) - 1}\u0000`;
@@ -146,9 +146,8 @@
         const tick = fence[1], body = []; i++;
         while (i < L.length && !(L[i].trim().startsWith(tick[0].repeat(tick.length)) && /^\s*[`~]+\s*$/.test(L[i]))) body.push(L[i++]);
         const closed = i < L.length; i++;
-        const id = codeStore.push(body.join('\n')) - 1;
         const name = [fence[2], fence[3]].filter(Boolean).join(' ');
-        out += `<div class="code"><div class="bar"><span>${esc(name || 'code')}</span><button data-copy="${id}">Copier</button></div><pre><code>${esc(body.join('\n'))}${!closed && streaming ? '' : ''}</code></pre></div>`;
+        out += `<div class="code"><div class="bar"><span>${esc(name || 'code')}</span><button data-copy="1">Copier</button></div><pre><code>${esc(body.join('\n'))}${!closed && streaming ? '' : ''}</code></pre></div>`;
         continue;
       }
       let m;
@@ -215,7 +214,9 @@
   }
 
   // ── réponse du modèle (flux) ──
-  let raf = 0;
+  let raf = 0, rafSlow = false;                                         // rafSlow : rendu programmé par setTimeout (longue réponse)
+  const SLOW_RENDER = 20000;                                           // au-delà, le markdown entier n'est ré-analysé que ~10 fois par seconde
+  function cancelRender() { if (raf) { if (rafSlow) clearTimeout(raf); else cancelAnimationFrame(raf); raf = 0; } }
   function renderAI(final) {
     raf = 0;
     if (!S.ai) return;
@@ -227,11 +228,13 @@
     thinkEnd();
     if (!S.ai) { S.ai = { el: add(h('div', 'tl msg-ai')), text: '' }; S.tool = null; }
     S.ai.text += delta;
-    if (!raf) raf = requestAnimationFrame(() => renderAI(false));
+    if (raf) return;
+    rafSlow = S.ai.text.length > SLOW_RENDER;
+    raf = rafSlow ? setTimeout(() => renderAI(false), 100) : requestAnimationFrame(() => renderAI(false));
   }
   function aiEnd() {
     if (!S.ai) return;
-    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    cancelRender();
     if (!S.ai.text.trim()) S.ai.el.remove(); else renderAI(true);
     S.ai = null;
   }
@@ -372,10 +375,48 @@
     add(el);
   }
 
-  // ── questions (confirmations, menus) ──
-  function selectCard(ev) {
+  // ── questions (confirmations, menus) : une seule carte affichée à la fois, les suivantes attendent leur tour ──
+  // Une carte ne prend pas le clavier pendant qu'on écrit un message, et ignore les touches tapées juste après son apparition.
+  const ASKQ = [];                                                     // cartes sans réponse, dans l'ordre d'arrivée ; ASKQ[0] est affichée
+  const ASK_GUARD_MS = 600;
+  const askHead = () => ASKQ[0] || null;
+  function askPush(card) { ASKQ.push(card); if (ASKQ.length === 1) askShow(); else askMore(); }
+  function askShow() {
+    const c = ASKQ[0]; if (!c) return;
+    closeOverlays();                                                   // une question ne se cache jamais derrière une fenêtre (Agents, Skills, Consommation…)
     aiEnd(); endExplore();
+    const typing = document.activeElement === ta && !!ta.value.trim();
+    c.t0 = Date.now(); add(c.el); askMore();
+    if (!typing) c.focus();
+    else showFlash('question en attente : clique dessus ou appuie sur Tab');
+  }
+  function askMore() {
+    const c = ASKQ[0]; if (!c) return;
+    const n = ASKQ.length - 1;
+    c.more.hidden = n <= 0;
+    c.more.textContent = n > 0 ? `+ ${n} autre${n > 1 ? 's' : ''} question${n > 1 ? 's' : ''} en attente` : '';
+  }
+  /** carte répondue (text = ce qui reste dans le fil) ou annulée : retirée de la file, la suivante s'affiche */
+  function askClose(card, text) {
+    const i = ASKQ.indexOf(card); if (i < 0) return false;
+    ASKQ.splice(i, 1);
+    if (i === 0 || text) {
+      card.el.className = 'tl answered'; card.el.removeAttribute('tabindex');
+      card.el.textContent = text || '✗ question annulée';
+      if (i > 0) add(card.el);                                         // répondue depuis la barre du diff avant d'être affichée
+    }
+    if (i === 0) { if (ASKQ.length) askShow(); else ta.focus(); } else askMore();
+    return true;
+  }
+  /** le CLI s'est arrêté : plus personne n'attend ces réponses */
+  function askCancelAll() { for (const c of ASKQ.slice(1)) askClose(c); if (ASKQ[0]) askClose(ASKQ[0]); }
+  /** relance demandée (bouton d'une notice, même ancienne) : l'ancien processus est tué, ses questions n'attendent plus rien */
+  const postRestart = type => { askCancelAll(); post({ type }); };
+  /** fil effacé (/new, conversation reprise) : la question en cours reste visible */
+  function askReattach() { const c = askHead(); if (c && !c.el.isConnected) add(c.el); }
+  function selectCard(ev) {
     const el = h('div', 'ask'); el.tabIndex = 0;
+    const danger = /^⚠/.test(String(ev.title || ''));                 // action sensible : pas de chiffre, seulement ↑↓ + Entrée ou un clic
     el.append(h('div', 'q', ev.title));
     if (ev.detail) el.append(h('div', 'detail', ev.detail));
     if (ev.proposal) {                                                  // modification de fichier : diff ouvert dans l'éditeur (actuel ↔ proposé)
@@ -389,38 +430,42 @@
     const btns = ev.options.map((o, i) => { const b = h('button', 'opt'); b.append(h('span', 'k', String(i + 1)), h('span', null, o)); b.onclick = () => answer(i); opts.append(b); return b; });
     const paint = () => btns.forEach((b, i) => b.classList.toggle('sel', i === sel));
     paint();
-    el.append(h('div', 'hint', '↑↓ puis Entrée · 1-9 · Échap pour refuser' + (ev.proposal ? ' · ou ✓ / ✗ en haut du diff' : '')));
+    el.append(h('div', 'hint', (danger ? '↑↓ puis Entrée · Échap pour refuser · chiffres désactivés (action sensible)' : '↑↓ puis Entrée · 1-9 · Échap pour refuser') + (ev.proposal ? ' · ou ✓ / ✗ en haut du diff' : '')));
+    const more = h('div', 'hint more'); more.hidden = true; el.append(more);
     const answer = (i, fromEditor = false) => {                       // fromEditor : déjà transmis au CLI par l'extension
-      if (S.ask !== card) return;
-      S.ask = null;
+      if (!ASKQ.includes(card)) return;
       if (!fromEditor) post({ type: 'select', id: ev.id, index: i == null ? -1 : i });
-      el.className = 'tl answered'; el.textContent = i == null || !ev.options[i] ? '✗ refusé' : `${/^(Refuser|Non|Annuler|Plus tard)\b/.test(ev.options[i]) ? '✗' : '✓'} ${ev.options[i]}`;   // « Non, et dire quoi faire… », « Annuler » = refus
-      ta.focus();
+      askClose(card, i == null || !ev.options[i] ? '✗ refusé' : `${/^(Refuser|Non|Annuler|Plus tard)\b/.test(ev.options[i]) ? '✗' : '✓'} ${ev.options[i]}`);   // « Non, et dire quoi faire… », « Annuler » = refus
     };
-    const card = { el, id: ev.id, answer, key: e => {
+    const card = { el, more, id: ev.id, t0: 0, answer, focus: () => el.focus(), key: e => {
+      if (Date.now() - card.t0 < ASK_GUARD_MS) return false;           // touche tapée avant d'avoir pu lire la carte : ignorée
       if (e.key === 'ArrowDown') { sel = (sel + 1) % btns.length; paint(); }
       else if (e.key === 'ArrowUp') { sel = (sel - 1 + btns.length) % btns.length; paint(); }
       else if (e.key === 'Enter') answer(sel);
       else if (e.key === 'Escape') answer(null);
-      else if (/^[1-9]$/.test(e.key) && +e.key <= btns.length) answer(+e.key - 1);
+      else if (!danger && /^[1-9]$/.test(e.key) && +e.key <= btns.length) answer(+e.key - 1);
       else return false;
       e.preventDefault(); return true;
     } };
-    S.ask = card; add(el); el.focus();
+    askPush(card);
   }
   function askCard(ev) {
-    aiEnd(); endExplore();
     const el = h('div', 'ask');
     el.append(h('div', 'q', ev.label || 'Réponse :'));
     const inp = h('input'); el.append(inp);
-    const done = v => { if (S.ask !== card) return; S.ask = null; post({ type: 'ask', id: ev.id, text: v }); el.className = 'tl answered'; el.textContent = `✓ ${v || '(vide)'}`; ta.focus(); };
-    inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); done(inp.value); } else if (e.key === 'Escape') { e.preventDefault(); done(''); } };
-    const card = { el, key: () => false };
-    S.ask = card; add(el); inp.focus();
+    const more = h('div', 'hint more'); more.hidden = true; el.append(more);
+    const done = v => { if (!ASKQ.includes(card)) return; post({ type: 'ask', id: ev.id, text: v }); askClose(card, `✓ ${v || '(vide)'}`); };
+    inp.onkeydown = e => {
+      if ((e.key === 'Enter' || e.key === 'Escape') && Date.now() - card.t0 < ASK_GUARD_MS) { e.preventDefault(); return; }   // Entrée du message d'avant : pas une réponse vide
+      if (e.key === 'Enter') { e.preventDefault(); done(inp.value); } else if (e.key === 'Escape') { e.preventDefault(); done(''); }
+    };
+    const card = { el, more, id: ev.id, t0: 0, answer: null, focus: () => inp.focus(), key: () => false };
+    askPush(card);
   }
   document.addEventListener('keydown', e => {
-    if (e.defaultPrevented || !S.ask) return;                          // touche déjà traitée (ex. Entrée qui envoie un message) : jamais une réponse
-    if (document.activeElement === S.ask.el || document.activeElement === document.body) S.ask.key(e);
+    const c = askHead();
+    if (e.defaultPrevented || !c) return;                              // touche déjà traitée (ex. Entrée qui envoie un message) : jamais une réponse
+    if (document.activeElement === c.el || document.activeElement === document.body) c.key(e);
   });
 
   // ── indicateur d'attente ──
@@ -585,6 +630,7 @@
   ta.addEventListener('keydown', e => {
     if (S.menu && S.menu.key(e)) return;
     if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); cycleMode(); return; }
+    if (e.key === 'Tab' && askHead()) { e.preventDefault(); askHead().focus(); return; }   // question en attente : Tab va dessus (le message tapé reste)
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); return; }
     if (e.key === 'Escape' && S.busy) { e.preventDefault(); post({ type: 'interrupt' }); }
   });
@@ -665,7 +711,7 @@
     e.preventDefault();
     if (a.dataset.url) post({ type: 'openLink', url: a.dataset.url });
     else if (a.dataset.path) { const m = a.dataset.path.match(/^(.*?)(?::(\d+))?$/); post({ type: 'openFile', path: m[1], line: m[2] ? +m[2] : 0 }); }
-    else if (a.dataset.copy) { post({ type: 'copy', text: codeStore[+a.dataset.copy] || '' }); a.textContent = 'Copié ✓'; setTimeout(() => { a.textContent = 'Copier'; }, 1500); }
+    else if (a.dataset.copy) { post({ type: 'copy', text: a.closest('.code')?.querySelector('pre code')?.textContent || '' }); a.textContent = 'Copié ✓'; setTimeout(() => { a.textContent = 'Copier'; }, 1500); }
   });
 
   function chipText(c) { return c.start ? `${c.rel}:${c.start}-${c.end} · ${c.lines} ligne${c.lines > 1 ? 's' : ''}` : c.rel; }
@@ -1036,6 +1082,7 @@
       else { const el = h('div', 'tl msg-ai'); el.innerHTML = md(m.text, false); add(el); }
     }
     const n = h('div', 'print'); n.textContent = `↺ conversation reprise · ${ev.title || ''} · ${ev.model || ''}`; add(n);
+    askReattach();
     stick = true; log.scrollTop = log.scrollHeight;
   }
 
@@ -1280,19 +1327,20 @@
     if (m.type === 'context') { S.ctxOn = !!m.enabled; S.ctx = m.ctx || null; renderChip(); return; }
     if (m.type === 'insert') return insert(m.text);
     if (m.type === 'focusInput') { ta.focus(); return; }
-    if (m.type === 'selectAnswered') { if (S.ask && S.ask.id === m.id && S.ask.answer) S.ask.answer(m.index >= 0 ? m.index : null, true); return; }   // répondu depuis la barre du diff
+    if (m.type === 'selectAnswered') { const c = ASKQ.find(x => x.id === m.id); if (c && c.answer) c.answer(m.index >= 0 ? m.index : null, true); return; }   // répondu depuis la barre du diff
     if (m.type === 'exit') {
-      setBusy(false); S.started = false;
-      if (m.noFolder) return notice(m.message || 'Aucun dossier ouvert.', 'pre', [['Choisir un dossier…', () => post({ type: 'pickStartFolder' })], ['Utiliser le dossier personnel', () => post({ type: 'startHome' }), true]]);
-      if (m.notFound) return notice(m.message || 'FS-CLI introuvable.', 'error pre', [['Réessayer', () => post({ type: 'restart' })], ['Installer FS-CLI', () => post({ type: 'installCli' }), true], ['Réglage fsCli.command', () => post({ type: 'openCliSetting' }), true]]);
-      if (m.needLogin) return notice('FS-CLI n\'est pas encore connecté à ton compte France Student.', 'error', [['Se connecter', () => post({ type: 'login' })], ['Relancer', () => post({ type: 'restart' }), true]]);
-      return notice(`FS-CLI s'est arrêté${m.code != null && m.code !== 0 ? ` (code ${m.code})` : ''}.${m.message ? '\n' + m.message : ''}`, m.code ? 'error' : '', [['Relancer', () => post({ type: 'restart' })]]);
+      setBusy(false); S.started = false; askCancelAll();
+      if (m.noFolder) return notice(m.message || 'Aucun dossier ouvert.', 'pre', [['Choisir un dossier…', () => post({ type: 'pickStartFolder' })], ['Utiliser le dossier personnel', () => postRestart('startHome'), true]]);
+      if (m.notFound) return notice(m.message || 'FS-CLI introuvable.', 'error pre', [['Réessayer', () => postRestart('restart')], ['Installer FS-CLI', () => post({ type: 'installCli' }), true], ['Réglage fsCli.command', () => post({ type: 'openCliSetting' }), true]]);
+      if (m.needLogin) return notice('FS-CLI n\'est pas encore connecté à ton compte France Student.', 'error', [['Se connecter', () => post({ type: 'login' })], ['Relancer', () => postRestart('restart'), true]]);
+      return notice(`FS-CLI s'est arrêté${m.code != null && m.code !== 0 ? ` (code ${m.code})` : ''}.${m.message ? '\n' + m.message : ''}`, m.code ? 'error' : '', [['Relancer', () => postRestart('restart')]]);
     }
     if (m.type !== 'event') return;
     const ev = m.ev;
     switch (ev.type) {
       case 'thinking': thinking(ev.delta || ''); break;
-      case 'ready': S.shell = ev.shell || ''; S.models = ev.models || []; S.modes = ev.modes || []; S.commands = ev.commands || []; S.whatsNew = Array.isArray(ev.whatsNew) ? ev.whatsNew : []; S.version = ev.version || ''; S.started = true; if (!log.querySelector('.msg-user, .msg-ai')) showWelcome(); break;
+      // nouveau processus (relancé sans « exit », ex. vieux bouton « Relancer ») : ses questions repartent de 1, les cartes de l'ancien sont mortes
+      case 'ready': askCancelAll(); S.shell = ev.shell || ''; S.models = ev.models || []; S.modes = ev.modes || []; S.commands = ev.commands || []; S.whatsNew = Array.isArray(ev.whatsNew) ? ev.whatsNew : []; S.version = ev.version || ''; S.started = true; if (!log.querySelector('.msg-user, .msg-ai')) showWelcome(); break;
       case 'status': Object.assign(S.status, ev); renderStatus(); break;
       case 'busy': setBusy(!!ev.busy); if (!ev.busy) agSettle(); break;
       case 'spinner': spinner(ev.label); break;
@@ -1312,7 +1360,8 @@
         showFlash('✓ ' + (ev.message || 'fichier restauré'));
         break;
       }
-      case 'select': closeOverlays(); selectCard(ev); break;   // une question ne se cache jamais derrière une fenêtre (Agents, Skills, Consommation…)
+      case 'select': selectCard(ev); break;                   // en file : affichée (par-dessus aucune fenêtre) quand vient son tour
+      case 'selectCancelled': { const c = ASKQ.find(x => x.id === ev.id); if (c) askClose(c); break; }   // le CLI n'attend plus cette réponse (interruption)
       case 'mcpPanel': mcpPanel(ev); break;
       case 'models': if (Array.isArray(ev.models) && ev.models.length) S.models = ev.models; break;
       case 'card': card(ev); break;
@@ -1347,10 +1396,10 @@
       case 'transcript': transcript(ev); break;
       case 'mcpStatus': mcpStatus(ev); break;
       case 'mcpLoginUrl': mcpStatus({ name: ev.name, loginUrl: ev.url }); break;
-      case 'ask': closeOverlays(); askCard(ev); break;
+      case 'ask': askCard(ev); break;
       case 'flash': showFlash(ev.text); break;
       case 'insert': insert(ev.text); break;
-      case 'clear': S.ai = null; S.tool = null; S.think = null; agReset(); showWelcome(); break;
+      case 'clear': S.ai = null; S.tool = null; S.think = null; agReset(); showWelcome(); askReattach(); break;
       case 'print': {
         const text = String(ev.text || '');
         if (!text.replace(/\x1b\[[0-9;]*m/g, '').trim()) break;
