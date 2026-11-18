@@ -67,7 +67,8 @@ test('dossier cible : « /users », « /tmp » (un seul niveau) ignorés hors Wi
   assert.equal(detectTargetDir('mets les logs dans /tmp'), null);
   assert.equal(detectTargetDir('GET /api/users'), null);
   if (process.getuid?.() !== 0) {
-    assert.equal(detectTargetDir('le dossier /usr/share est plein'), null);   // existe, mais on ne peut pas y écrire
+    let roShare = true; try { fs.accessSync('/usr/share', fs.constants.W_OK); roShare = false; } catch {}   // serveurs CI Linux : parfois inscriptible
+    if (roShare) assert.equal(detectTargetDir('le dossier /usr/share est plein'), null);   // existe, mais on ne peut pas y écrire
     assert.equal(detectTargetDir('crée /usr/monprojet stp'), null);            // à créer dans un parent non inscriptible
   }
   const dir = tmpDir('target');
