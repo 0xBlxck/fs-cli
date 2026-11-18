@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.48.2', items: [
+    'GPT-6 Astra avec la recherche web : quand OpenAI échoue juste après la recherche (erreur 502), la demande repart toute seule sans recherche web',
+  ] },
   { version: '3.48.1', items: [
     '`fs-cli claude` : quand GPT-6 Astra met le site dans le panneau du site France Student, il est écrit dans le dossier demandé (ou le chemin cité par le modèle)',
     'Plus de « C’est fait » quand l’écriture du fichier a été refusée : la passerelle dit ce qui n’a pas été écrit',

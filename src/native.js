@@ -20,7 +20,11 @@ export const READ_TOOLS = CLIENT_TOOLS.slice(0, 3);
 // « colle ici le contenu »…). FS-CLI ne contourne pas ce refus : il l'explique et propose un modèle qui accepte les outils.
 const TOOL_REFUSAL = /servir de moteur|(?:moteur|outil|agent) (?:d'un |à un |pour un )?(?:agent |outil )?externe|(?:je ne (?:peux|pourrai) pas|nous ne pouvons pas|impossible pour moi de) (?:piloter|contr[ôo]ler|utiliser) (?:FS-CLI|tes outils|les outils|ton (?:PC|ordinateur|disque))|(?:je ne (?:peux|pourrai) pas|nous ne pouvons pas) (?:acc[ée]der|modifier|[ée]crire|lire|ex[ée]cuter|cr[ée]er|lancer|ouvrir)\b[^.]{0,60}\b(?:tes |vos |ton |votre )(?:fichiers?|disque|dossier|commandes?|ordinateur|PC|machine)|je n'ai pas (?:d'|l')?acc[èe]s (?:à|aux) (?:tes |ton |vos |votre )(?:fichiers?|disque|dossier|syst[èe]me|ordinateur|PC|machine)|colle[rz]?(?:-le)? ici (?:le )?contenu/i;   // 1re personne + « ici » obligatoires (audit 17/11 : 6 réponses normales sur 7 prises pour des refus)
 // seulement le DÉBUT de la réponse (un refus se dit d'entrée) : « Python ne peut pas lire le fichier… » plus loin n'est pas un refus (audit 17/11)
-export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || '').slice(0, 400));   // list_directory, read_file, search_files : seuls outils proposés en mode plan
+export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || '').slice(0, 400));
+// GPT-6 Astra + recherche web : OpenAI échoue souvent juste après la recherche (« 502 BAD_GATEWAY openai_v2 responses request failed »,
+// 6 essais sur 7 le 18/11/2026 ; sans recherche web : écrit du premier coup). Erreur du serveur, pas un refus.
+export const isUpstreamError = e => !!e && e.name !== 'AbortError' && e.code !== 'DAILY_CHAT_LIMIT'
+  && ((e.serverError && /openai_v2|BAD_GATEWAY|\b50[0234]\b|error occurred while processing your request|overloaded|internal server error/i.test(e.message || '')) || e.status >= 500);   // list_directory, read_file, search_files : seuls outils proposés en mode plan
 const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi
 // conversation trop chargée en pleine demande : le modèle finit l'étape en cours puis s'arrête (le résumé est fait avant le message suivant)
@@ -179,7 +183,7 @@ export async function runNative(S, userText, opts) {
   // Jamais pour les agents de /team ni le serveur MCP, que rien ne résumerait ensuite. La tâche n'est jamais coupée : le modèle
   // termine l'étape en cours et fait un point d'étape ; le résumé est fait au message suivant (/continue), avant d'envoyer.
   const midCompact = opts.midCompact ?? (S.interactive === true && 'bare' in opts && !S.tagRole);
-  let heavyAt = 0;
+  let heavyAt = 0, noWeb = false;                                      // noWeb : recherche web coupée pour le reste de la demande après une erreur d'OpenAI
   for (; steps < maxSteps; steps++) {
     if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     const md = new ui.MdStream({ collapse: false });
@@ -188,9 +192,8 @@ export async function runNative(S, userText, opts) {
     let thinkBuf = '';
     ui.spinner.start(results ? 'réflexion…' : 'réflexion…');
     let res;
-    try {
-      res = await stream({
-        agentId: S.agentId, chatId: S.chatId, signal, webSearch: cfg.webSearch, register: { sid: S.sid, role: 'main' },
+    const send = web => stream({
+        agentId: S.agentId, chatId: S.chatId, signal, webSearch: web, register: { sid: S.sid, role: 'main' },
         clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results, files: resultFiles } : { content, files: S.pendingFileIds }),   // images : avec le message, ou avec les résultats (captures d'outils)
         onChat: id => { if (!S.chatId) S.chatId = id; },
         onText: d => { const t = clean.push(d); if (t) md.push(t); },
@@ -202,6 +205,18 @@ export async function runNative(S, userText, opts) {
           while ((i = thinkBuf.indexOf('\n')) >= 0) { ui.println(c.dim(c.italic('  ✻ ' + thinkBuf.slice(0, i)))); thinkBuf = thinkBuf.slice(i + 1); }
         },
       });
+    try {
+      const web = !!cfg.webSearch && !noWeb;
+      try { res = await send(web); }
+      catch (e) {
+        // recherche web active et erreur d'OpenAI : la même demande repart une fois sans recherche web (affiché, rien de caché)
+        if (!web || signal.aborted || !isUpstreamError(e)) throw e;
+        noWeb = true;
+        ui.spinner.stop();
+        ui.println(c.yellow('  ⚠ le serveur d\'OpenAI a échoué après la recherche web : nouvel essai sans recherche web pour cette demande'));
+        ui.spinner.start('réflexion…');
+        try { res = await send(false); } catch (e2) { throw e2?.name === 'AbortError' ? e2 : e; }
+      }
     } finally { ui.spinner.stop(); }
     { const t = clean.flush(); if (t) md.push(t); }
     md.finish(); nReq++;

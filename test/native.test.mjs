@@ -289,3 +289,38 @@ test('documents du site : « OFFGRID — index.html » → index.html ; page HTM
   assert.equal(htmlDocumentName({ title: 'ORBIT — Studio créatif', kind: 'html', content: '<!DOCTYPE html>' }, dir), 'orbit-studio-creatif.html');
   assert.equal(htmlDocumentName({ title: 'Notes', kind: 'text', content: 'bonjour' }, dir), null);
 });
+
+test('erreur d\'OpenAI après la recherche web : la même demande repart une fois sans recherche web, puis plus de web pour la demande', async () => {
+  const before = cfg.webSearch; cfg.webSearch = true;
+  try {
+    const { dir, S } = mk({ agentId: -1004 });
+    const reqs = []; let n = 0;
+    const stream = async (o) => {
+      reqs.push({ web: o.webSearch, content: o.content, toolResults: o.toolResults, chatId: o.chatId });
+      if (!o.chatId) o.onChat?.('chat-w');
+      n++;
+      if (n === 1) { const e = new Error('Erreur du serveur: 502 BAD_GATEWAY "openai_v2 responses request failed: 200: An error occurred while processing your request."'); e.serverError = true; throw e; }
+      if (n === 2) return { text: '', usage: null, toolCalls: [{ callId: 'w1', name: 'write_file', arguments: JSON.stringify({ path: 'index.html', content: '<h1>ok</h1>' }) }], documents: [] };
+      return { text: 'fini', usage: null, toolCalls: [], documents: [] };
+    };
+    await runNative(S, 'dev moi un site', { ...io(), stream });
+    assert.deepEqual(reqs.map(r => r.web), [true, false, false]);        // 2e essai sans web, et la suite de la demande aussi
+    assert.equal(reqs[1].content, reqs[0].content);                      // même demande
+    assert.equal(reqs[1].chatId, 'chat-w');                              // dans la conversation déjà ouverte (pas une neuve)
+    assert.equal(fs.readFileSync(path.join(dir, 'index.html'), 'utf8'), '<h1>ok</h1>');
+  } finally { cfg.webSearch = before; }
+});
+
+test('erreur d\'OpenAI : sans recherche web, ou erreur qui n\'est pas du serveur → pas de nouvel essai', async () => {
+  const before = cfg.webSearch;
+  try {
+    for (const [web, err] of [[false, Object.assign(new Error('Erreur du serveur: 502 BAD_GATEWAY'), { serverError: true })], [true, new Error('Réponse vide / flux interrompu')]]) {
+      cfg.webSearch = web;
+      const { S } = mk({ agentId: -1004 });
+      let n = 0;
+      const stream = async () => { n++; throw err; };
+      await assert.rejects(runNative(S, 'x', { ...io(), stream }), err);
+      assert.equal(n, 1);
+    }
+  } finally { cfg.webSearch = before; }
+});
