@@ -616,6 +616,22 @@ function transcriptOf(chat) {
     .filter(m => m.text);
 }
 
+/**
+ * Déjà envoyé dans CETTE conversation ? (kind : 'sel' sélection de l'éditeur, 'url' page lue, 'mcp' outils d'un serveur).
+ * Une conversation neuve (chatId pas encore connu) est notée « nouvelle » puis rattachée à son id à la fin du tour.
+ */
+function alreadySent(kind, key, { mark = true } = {}) {
+  S.sentOnce ||= {};
+  const chat = S.chatId || '(nouvelle)';
+  let m = S.sentOnce[kind];
+  if (!m || m.chat !== chat) m = S.sentOnce[kind] = { chat, keys: new Set() };
+  if (m.keys.has(key)) return true;
+  if (mark) m.keys.add(key);
+  return false;
+}
+function attachSentToChat() { for (const m of Object.values(S.sentOnce || {})) if (m.chat === '(nouvelle)' && S.chatId) m.chat = S.chatId; }
+const hashOf = t => { let h = 0; t = String(t || ''); for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36) + ':' + t.length; };
+
 /** reprend une conversation (du PC, d'un autre PC ou du site) : session appliquée, titre du site synchronisé → messages de la conversation */
 async function resumeChatById(chatId) {
   const s = loadSessions().find(x => x.chatId === chatId) || { chatId, title: '', agentId: S.agentId, ctxSent: true };   // conversation du compte (autre PC, site)
@@ -742,7 +758,7 @@ async function command(line) {
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
       setProjectOnce(undefined); S.projectName = undefined;
-      S.chatId = null; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      S.chatId = null; S.pendingSummary = null; S.compactedFrom = null; S.lastPromptTokens = 0; S.turnMarks = []; S.lastEditorCtx = null; S.fetchedUrls = null; S.briefSent = null; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
@@ -1091,6 +1107,12 @@ async function chatTurn(text, { keepLast = false } = {}) {
       if (opts.stdio) stdioSend('turnMark', { id: mark.id, text: mark.text });
     }
     await maybeAutoCompact(S, turnAbort.signal);                       // contexte plein → résumé + nouvelle conversation
+    { // panneau de l'éditeur : « [Contexte VS Code : … lignes a-b sélectionnées …] » + bloc de code → recollé à chaque message ; une fois suffit
+      const m = text.match(/^(\[Contexte VS Code :[^\n]*\])\n(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\2\n\n?/);
+      if (m && alreadySent('sel', hashOf(m[3]))) text = `${m[1].replace(/\]$/, ' (même sélection que plus haut)]')}\n` + text.slice(m[0].length);
+      const f = !m && text.match(/^\[Contexte VS Code : fichier ouvert dans l'éditeur : ([^\n]*)\]\n\n?/);
+      if (f && alreadySent('sel', 'fichier:' + f[1])) text = text.slice(f[0].length);   // même fichier ouvert : déjà dit
+    }
     const ex = extractImagePaths(text, S.images.length);               // image glissée-déposée (chemin collé) → [Image #n]
     if (ex.paths.length) { text = ex.text; for (const p of ex.paths) if (!S.images.includes(p)) S.images.push(p); }
     // « … dans C:\Users\moi\Downloads\SITE » → les fichiers y seront écrits. Seulement d'après CE QUE TU AS TAPÉ : le fichier ouvert ou la
@@ -1142,7 +1164,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
       if (cat && cat.sig !== S.skillsCatSig) { message += '\n\n' + cat.text; S.skillsCatSig = cat.sig; println(c.dim(`  ＋ ${cat.count} skills disponibles (liste ouverte par le modèle si besoin)`)); }
       for (const name of mentionedServers(S.cwd, text)) {               // « à l'aide du mcp leboncoin » → ses outils sont joints à la demande
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
-        if (brief) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
+        if (brief && !alreadySent('mcp', name + '|' + hashOf(brief))) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
       }
       if (wantsBrowser(text)) {
         const pw = loadMcpConfig(S.cwd).mcpServers || {};
@@ -1176,7 +1198,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
     if (!S.title) S.title = text.replace(/\s+/g, ' ').slice(0, 60);   // provisoire : remplacé par le titre de France Student dès qu'il est connu
     try {
       const agentBefore = S.agentId, turnT0 = Date.now();
-      await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text });   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
+      try { await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text }); } finally { attachSentToChat(); }   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
       if (cfg.webhook) {                                               // fin de demande → webhook (CI, notifications) : jamais de jeton ni de contenu de fichier
         const mark = (S.turnMarks || []).at(-1);
         const files = mark && S.undo.length > mark.at ? summarizeChanges(S.undo, mark.at).map(f => ({ file: path.relative(S.cwd, f.path), added: f.added, removed: f.removed, created: !!f.created, deleted: !!f.deleted })) : [];
@@ -1316,7 +1338,8 @@ async function handleInput(text) {
     else if ((cfg.intents !== false || /PLAYWRIGHT_MCP_EXTENSION_TOKEN/.test(t)) && await naturalIntent(t)) return;   // un jeton collé ne part jamais au modèle
     else {
       if (cfg.intents !== false && cfg.engine === 'native') {     // le modèle n'a pas d'accès web : une URL citée est lue et jointe
-        if (!wantsBrowser(t)) for (const u of urlsIn(t)) await extraCommand('/fetch', u, extraEnv());   // « va sur … dans le navigateur » : c'est le navigateur qui ira, pas un téléchargement
+        const own = stripEditorContext(t).replace(/```[\s\S]*?```/g, ' ').slice(0, 600);   // pas le code sélectionné ni un log collé
+        if (!wantsBrowser(own)) for (const u of urlsIn(own)) if (!alreadySent('url', u)) await extraCommand('/fetch', u + ' --auto', extraEnv());   // « va sur … dans le navigateur » : c'est le navigateur qui ira, pas un téléchargement
       }
       await chatTurn(t);
     }

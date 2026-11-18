@@ -51,9 +51,9 @@ test('la zone grandit (saisie multi-ligne, suggestions) sans écraser le contenu
   assert.match(last(sim), /⏵⏵ auto/);
   assert.equal(sim.count(/ligne 40\b/g), 1, 'le dernier texte n\'est ni perdu ni écrasé');
   assert.match(sim.screen(), /ligne 40\n[\s\S]*│ > a\s*│\n│   b\s*│\n│   c/);
-  type(ESC); type('/m'); await tick();                    // Échap vide la saisie ; suggestions sous le trait
+  type(ESC); type(ESC); type('/m'); await tick();          // Échap ×2 vide la saisie (un seul ne fait que prévenir) ; suggestions sous le trait
   assert.match(sim.screen(), /\/model/); assert.match(last(sim), /⏵⏵ auto/);
-  type(ESC); type(ESC); await tick();                     // ferme la liste puis efface : retour à la taille minimale
+  type(ESC); type(ESC); type(ESC); await tick();           // ferme la liste, puis Échap ×2 efface : retour à la taille minimale
   assert.match(last(sim), /⏵⏵ auto/); assert.doesNotMatch(sim.screen(), /\/model/);
   assert.equal(sim.count(/ligne 40\b/g), 1);
   assert.equal(sim.count(/Essaie « /g), 1);

@@ -190,6 +190,7 @@ export function getJson(p, timeout = 12000) {
       let d = ''; res.setEncoding('utf8');
       res.on('data', x => d += x);
       res.on('end', () => { try { resolve(res.statusCode < 300 ? JSON.parse(d) : null); } catch { resolve(null); } });
+      res.on('error', () => resolve(null)); res.on('close', () => { if (!res.complete) resolve(null); });   // coupure en pleine réponse
     });
     req.on('error', () => resolve(null));
     req.setTimeout(timeout, () => { req.destroy(); resolve(null); });
@@ -207,6 +208,7 @@ export function requestJson(method, p, body, timeout = 15000) {
       let d = ''; res.setEncoding('utf8');
       res.on('data', x => d += x);
       res.on('end', () => { let data = null; try { data = d ? JSON.parse(d) : null; } catch {} resolve({ status: res.statusCode || 0, data }); });
+      res.on('error', () => resolve({ status: 0, data: null })); res.on('close', () => { if (!res.complete) resolve({ status: 0, data: null }); });
     });
     req.on('error', () => resolve({ status: 0, data: null }));
     req.setTimeout(timeout, () => { req.destroy(); resolve({ status: 0, data: null }); });
@@ -339,6 +341,7 @@ export function deleteChat(chatId) {
   return new Promise(resolve => {
     const req = https.request({ hostname: HOST, path: `/chats/${encodeURIComponent(chatId)}`, method: 'DELETE', headers: baseHeaders() }, res => {
       res.resume(); res.on('end', () => resolve(res.statusCode < 300));
+      res.on('error', () => resolve(false)); res.on('close', () => { if (!res.complete) resolve(false); });
     });
     req.on('error', () => resolve(false));
     req.setTimeout(10000, () => { req.destroy(); resolve(false); });

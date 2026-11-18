@@ -167,14 +167,22 @@ export async function runNative(S, userText, opts) {
     else if (res.documents?.length) for (const d of res.documents) showDocument(d);   // mode plan : rien n'est écrit, le document est seulement montré
     const calls = res.toolCalls || [];
     if (!calls.length) break;
+    // dernière étape autorisée : ces appels ne sont PAS exécutés. Leurs résultats ne pourraient pas être renvoyés, et France Student
+    // les rejoue alors comme « non exécutés » → /continue les fait faire une fois, à juste titre (avant : faits ET refaits)
+    if (steps === maxSteps - 1) { hitLimit = true; break; }
 
     // exécution des appels, dans l'ordre ; tous reçoivent une réponse (exigé par FS)
     results = [];
     let total = 0;
+    const done = [];                                                    // actions vraiment faites de ce lot (pour Ctrl+C)
     for (const call of calls.slice(0, 32)) {
-      if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
+      if (signal.aborted) {
+        if (done.length) S.notes.push(`Avant l'interruption par l'utilisateur, ces actions ont VRAIMENT été exécutées (ne les refais pas) : ${done.join(' ; ')}.`);
+        throw Object.assign(new Error('annulé'), { name: 'AbortError' });
+      }
       nTools++;
       let r = await execNative(S, call, { signal, ask, root });
+      { const a = parseArgs(call.arguments); done.push(`${call.name}${a.path ? ' ' + a.path : a.command ? ' « ' + String(a.command).slice(0, 80) + ' »' : ''} (${r.isError ? 'échec' : 'ok'})`); }
       if (total + r.output.length > MAX_TOTAL) r = { ...r, output: r.output.slice(0, Math.max(500, MAX_TOTAL - total)) + '\n[… coupé : lis une plage plus étroite]' };
       total += r.output.length; results.push(r);
     }
@@ -184,7 +192,6 @@ export async function runNative(S, userText, opts) {
       try { resultFiles.push(await uploadFile(fs.readFileSync(img.file), path.basename(img.file), img.mime)); } catch {}
     }
     if (resultFiles.length) ui.toolNote(`📷 ${resultFiles.length} capture${resultFiles.length > 1 ? 's' : ''} transmise${resultFiles.length > 1 ? 's' : ''} au modèle`);
-    if (steps === maxSteps - 1) hitLimit = true;
   }
   if (visible) S.lastResponse = visible;
   if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; cfg.toolRefusals = r; saveCfg(); }

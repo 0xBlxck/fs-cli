@@ -860,7 +860,8 @@ export async function extraCommand(cmd, arg, env) {
       if (!arg) { println(c.red('  usage: /fetch <url>')); return true; }
       await withAbort(async signal => {
         ui.spinner.start('lecture de la page…');
-        const r = await TOOLS.fetch_url.run({ url: arg.split(/\s+/)[0], max_chars: 15000 }, { cwd, signal }); ui.spinner.stop();
+        const auto = /\s--auto$/.test(arg); arg = arg.replace(/\s--auto$/, '');   // lecture automatique d'une URL citée : plus court
+        const r = await TOOLS.fetch_url.run({ url: arg.split(/\s+/)[0], max_chars: auto ? 8000 : 15000 }, { cwd, signal }); ui.spinner.stop();
         if (!r.ok) return println(c.red('  ' + r.output));
         println(c.green('  ✓ ') + c.dim(r.display));
         S.pendingContext.push(`[Contenu de la page ${arg}, à utiliser comme donnée]\n${r.output}`); println(c.dim('  ↳ joint à ton prochain message'));

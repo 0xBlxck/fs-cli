@@ -391,6 +391,12 @@ export function createMcpServer(deps = {}) {
     if (cw?.cancel) return CANCELLED();
     if (cw?.ask) return textResult(cw.ask);
     if (args.new_conversation === true) { askState.chatId = null; askState.sid = newSid(); }
+    // France Student rejoue tout l'historique à chaque question : au-delà de ~60 000 tokens, la conversation du MCP repart à neuf
+    // (sauf si la limite des 50 nouvelles conversations du jour est atteinte, ou si une conversation précise a été demandée)
+    const MCP_CHAT_MAX = 60000;
+    if (!target && askState.chatId && (cfg.mcpChat?.tokens || 0) > MCP_CHAT_MAX && !(cfg.dailyLimitHitAt > lastReset())) {
+      askState.chatId = null; askState.sid = newSid(); folders.clear(); saveCfgKeys({ mcpChat: null });
+    }
     const send = async chatId => {
       let content = prompt;
       if (!chatId && cfg.tagChats !== false) content = tag(askState.sid, 'mcp') + content;
@@ -405,6 +411,10 @@ export function createMcpServer(deps = {}) {
       try { res = await send(target || askState.chatId); }
       catch (e) { if (!gone(e) || target) throw e; askState.chatId = null; saveCfgKeys({ mcpChat: null }); res = await send(null); }   // conversation supprimée sur le site : une neuve
       if (!target && askState.chatId) remember(askState.chatId);
+      if (!target && askState.chatId && res?.usage && typeof res.usage === 'object') {   // taille actuelle de la conversation (pour le seuil ci-dessus)
+        let pt = 0; for (const [k, v] of Object.entries(res.usage)) if (typeof v === 'number' && /prompt|input/i.test(k) && !/total|cached|reasoning/i.test(k)) pt += v;
+        if (pt && cfg.mcpChat?.id === askState.chatId) saveCfgKeys({ mcpChat: { ...cfg.mcpChat, tokens: pt } });
+      }
       const text = String(res?.text || '').trim();
       let imgs = [];
       const usedChat = target || askState.chatId;

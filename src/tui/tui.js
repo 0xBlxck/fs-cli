@@ -198,14 +198,27 @@ export class Tui {
 
     if (this.select_) {
       const s = this.select_;
+      lines.length = 0;                                                 // menu ouvert : ni file d'attente ni tâches au-dessus (place pour les options)
       lines.push(this.rule(c.bold(s.title), c.accent, W));
       if (s.tabs?.length) {                                            // onglets, comme la fenêtre de l'horloge de l'IDE
         const bar = s.tabs.map((t, i) => (i === s.tab ? c.accent(c.bold(`▌ ${t} ▐`)) : c.dim(`  ${t}  `))).join('  ');
         lines.push('  ' + bar + c.dim('     ← → changer d\'onglet'));
       }
-      for (const l of String(s.detail || '').split('\n').slice(0, 8)) if (l.trim()) lines.push('  ' + c.dim(l));
+      const fixed = lines.length + 4;                                   // titre/onglets + vide + règle + aide
+      const optRoom = Math.max(3, maxRows - 1 - fixed);
+      const detailMax = Math.max(0, Math.min(8, maxRows - 1 - fixed - Math.min(s.options.length, optRoom)));
+      for (const l of String(s.detail || '').split('\n').filter(x => x.trim()).slice(0, detailMax)) lines.push('  ' + c.dim(l));
       lines.push('');
-      s.options.forEach((o, i) => lines.push(i === s.idx ? '  ' + c.accent(`❯ ${i + 1}. ${o}`) : `    ${i + 1}. ${o}`));
+      // fenêtre d'options autour de la sélection quand tout ne tient pas (la dernière, souvent « Annuler », reste atteignable)
+      const room = Math.max(3, maxRows - 1 - lines.length - 2);
+      let from = 0, to = s.options.length;
+      if (s.options.length > room) {
+        const shown = room - 2;                                         // 2 lignes pour « ↑ n de plus » / « ↓ n de plus »
+        from = Math.max(0, Math.min(s.idx - Math.floor(shown / 2), s.options.length - shown)); to = from + shown;
+      }
+      if (from > 0) lines.push('    ' + c.dim(`↑ ${from} de plus`));
+      s.options.slice(from, to).forEach((o, k) => { const i = from + k; lines.push(i === s.idx ? '  ' + c.accent(`❯ ${i + 1}. ${o}`) : `    ${i + 1}. ${o}`); });
+      if (to < s.options.length) lines.push('    ' + c.dim(`↓ ${s.options.length - to} de plus`));
       lines.push(this.rule('', c.accent, W));
       lines.push('  ' + c.dim((s.tabs?.length ? '←→ onglet · ' : '') + '↑↓ choisir · 1-' + s.options.length + ' · Entrée valider · Échap = ' + (s.tabs?.length ? 'fermer' : 'refuser')));
       return { lines, caret: { row: lines.length - 1, col: 0 }, hideCursor: true };
@@ -453,8 +466,15 @@ export class Tui {
     this.lastEsc = now;
     if (this.sug.items.length) { this.sugOff = this.buf; this.sug = { items: [], idx: -1, start: 0 }; return this.render(); }
     if (this.ask) return this.finishAsk(null);
-    if (this.busy) return this.emit('interrupt');
-    if (this.buf) this.clearInput();
+    if (this.busy) { this.lastEsc = 0; return this.emit('interrupt'); }   // Échap ×2 pour arrêter le modèle n'ouvre plus /rewind
+    if (this.buf) {
+      // un seul Échap n'efface plus tout (audit 17/11) : il faut le redoubler, et ↑ rend le texte effacé
+      if (now - (this.lastEscClear || 0) > 1500) { this.lastEscClear = now; this.lastEsc = 0; return this.flash('Échap encore pour effacer la saisie'); }
+      this.lastEscClear = 0; this.lastEsc = 0;
+      this.flashText = ''; clearTimeout(this.flashTimer);               // le rappel « Échap encore » n'a plus lieu d'être
+      if (this.hist[this.hist.length - 1] !== this.buf) this.hist.push(this.buf);   // récupérable avec ↑ (pas enregistré dans l'historique du disque)
+      this.clearInput();
+    }
   }
   ctrlC() {
     if (this.ask) { this.cancelAllUi(); this.emit('interrupt'); return; }

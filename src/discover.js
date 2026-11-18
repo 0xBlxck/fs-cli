@@ -308,7 +308,21 @@ export function skillCatalog(list, { budget = 24000, bodyOnly = false } = {}) {
   const head = `[Guides (skills) de l'utilisateur sur ce PC : ${list.length} fichiers SKILL.md, chacun décrit une méthode pour un type de tâche. `
     + `Quand l'un d'eux correspond vraiment au SUJET d'une demande (pas seulement un mot en commun), lis son SKILL.md avec read_file avant de commencer et applique-le (ses autres fichiers sont dans le même dossier) ; `
     + `sinon ignore cette liste. Ces dossiers se lisent sans demander d'accord.`;
-  if (bodyOnly) { const text = build(110); return { text, count: list.length, sig: 'cat-' + hash36(text) }; }   // contenu du fichier d'index (skillIndex)
+  if (bodyOnly) {                                                     // contenu du fichier d'index (skillIndex) : compact, lu par le modèle
+    // regroupés par dossier parent (le chemin n'est écrit qu'une fois), descriptions à 80 caractères (audit 17/11 : 28 600 → ~10 000 caractères)
+    const byParent = new Map();
+    for (const s of list) { const p = path.dirname(s.dir); if (!byParent.has(p)) byParent.set(p, []); byParent.get(p).push(s); }
+    const out = [];
+    for (const [parent, items] of byParent) {
+      out.push(`${parent}${path.sep}<dossier>${path.sep}SKILL.md :`);
+      for (const s of items) {
+        const folder = path.basename(s.dir);
+        out.push(`- ${s.name}${folder.toLowerCase() !== s.name.toLowerCase() ? ` [dossier ${folder}]` : ''}${s.description ? ' — ' + cut(s.description, 80) : ''}`);
+      }
+    }
+    const text = out.join('\n');
+    return { text, count: list.length, sig: 'cat-' + hash36(text) };
+  }
   let body = '';
   for (const n of [110, 80, 50, 0]) { body = build(n); if (head.length + body.length <= budget) break; }
   if (head.length + body.length > budget) { let max = list.length; while (max > 10 && head.length + body.length > budget) { max = Math.floor(max * 0.8); body = build(0, max); } }

@@ -1,6 +1,14 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.46.2', items: [
+    'Moins de tokens : sélection de l\'IDE, pages web et outils MCP envoyés une seule fois par conversation',
+    'Index des skills un tiers plus léger ; conversation du MCP renouvelée au-delà de 60 000 tokens',
+    'Limite d\'étapes : le modèle ne refait plus des actions déjà faites',
+    'Coupure réseau : FS-CLI ne reste plus bloqué ; /new repart vraiment de zéro',
+    'Terminal : menus trop grands défilent (Annuler toujours visible), Échap ×2 pour effacer la saisie (↑ la rend)',
+    'IDE : une confirmation ne se cache plus derrière une fenêtre',
+  ] },
   { version: '3.46.1', items: [
     'Recherche dans les fichiers : les .env et clés ne sont plus jamais lus ni envoyés',
     'Fichiers en Latin-1 / Windows-1252 (CSV d\'Excel…) et UTF-16 modifiés sans abîmer les accents',

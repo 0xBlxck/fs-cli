@@ -684,6 +684,11 @@
   };
   const MCP = { el: null, list: null, filter: null, data: null, open: new Set() };
   function mcpClose() { if (MCP.el) { MCP.el.remove(); MCP.el = null; ta.focus(); } }
+  /** ferme toutes les fenêtres par-dessus le fil (Serveurs MCP, Agents, Skills, horloge, palette, cartes /usage, image agrandie) */
+  function closeOverlays() {
+    try { mcpClose(); agClose(); skClose(); histClose(); palClose(); } catch {}
+    for (const m of document.querySelectorAll('.modal-bg')) m.remove();
+  }
   function mcpPanel(ov) {
     MCP.data = ov;
     if (!MCP.el) {
@@ -1307,7 +1312,7 @@
         showFlash('✓ ' + (ev.message || 'fichier restauré'));
         break;
       }
-      case 'select': mcpClose(); selectCard(ev); break;
+      case 'select': closeOverlays(); selectCard(ev); break;   // une question ne se cache jamais derrière une fenêtre (Agents, Skills, Consommation…)
       case 'mcpPanel': mcpPanel(ev); break;
       case 'models': if (Array.isArray(ev.models) && ev.models.length) S.models = ev.models; break;
       case 'card': card(ev); break;
@@ -1342,7 +1347,7 @@
       case 'transcript': transcript(ev); break;
       case 'mcpStatus': mcpStatus(ev); break;
       case 'mcpLoginUrl': mcpStatus({ name: ev.name, loginUrl: ev.url }); break;
-      case 'ask': askCard(ev); break;
+      case 'ask': closeOverlays(); askCard(ev); break;
       case 'flash': showFlash(ev.text); break;
       case 'insert': insert(ev.text); break;
       case 'clear': S.ai = null; S.tool = null; S.think = null; agReset(); showWelcome(); break;

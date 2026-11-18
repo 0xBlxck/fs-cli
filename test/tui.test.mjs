@@ -274,3 +274,18 @@ test('deux confirmations en même temps : la 2e attend son tour, aucune ne reste
   assert.equal(tui.select_, null); assert.equal(tui.ask, null);
   tui.stop();
 });
+
+test('menu plus haut que la fenêtre : options dans une fenêtre autour de la sélection, aide toujours visible, dernière option atteignable', async () => {
+  const { tui, stdin, sim } = make({ rows: 12 });
+  const p = tui.select({ title: 'Long', detail: 'une ligne\nune autre', options: Array.from({ length: 20 }, (_, i) => `choix ${i + 1}`).concat(['Annuler']) });
+  await new Promise(r => setTimeout(r, 20));
+  let scr = strip(sim.screen ? sim.screen() : '');
+  assert.match(scr, /↓ \d+ de plus/); assert.match(scr, /Entrée valider/);
+  for (let i = 0; i < 20; i++) stdin.emit('data', `${ESC}[B`);
+  await new Promise(r => setTimeout(r, 20));
+  scr = strip(sim.screen());
+  assert.match(scr, /❯ 21\. Annuler/); assert.match(scr, /↑ \d+ de plus/);
+  stdin.emit('data', '\r');
+  assert.equal(await p, 20);
+  tui.stop();
+});
