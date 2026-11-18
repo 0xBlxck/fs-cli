@@ -169,6 +169,17 @@ FS-CLI démarre une petite passerelle locale (127.0.0.1, avec un jeton tiré au 
 
 Attention : `fs-cli claude` lance maintenant Claude Code. Pour envoyer le mot « claude » comme demande à FS-CLI, tape `fs-cli -- claude`.
 
+**Régler une fois pour toutes** : ajoute `--fs-garder` une seule fois, tes options sont enregistrées et `fs-cli claude` tout court les reprend ensuite.
+
+```bash
+fs-cli claude --fs-garder --model gpt-6-astra --fs-projet "Mon projet" --permission-mode acceptEdits
+fs-cli claude                  # ensuite : reprend ces réglages (une option tapée remplace la même option enregistrée)
+fs-cli claude --fs-garder      # voir les réglages enregistrés
+fs-cli claude --fs-oublier     # les effacer
+```
+
+Sont enregistrées les options `--fs-*` et `--model` / `--permission-mode` de Claude Code ; jamais `-p`, `-c` ou `--resume`. Les options `--fs-*` enregistrées servent aussi à `fs-cli gateway`.
+
 **Options de FS-CLI** (toutes commencent par `--fs-`, le reste part à Claude Code) :
 
 | Option | Effet |

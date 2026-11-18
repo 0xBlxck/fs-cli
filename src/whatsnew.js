@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.49.0', items: [
+    '`fs-cli claude --fs-garder --model gpt-6-astra --fs-projet "Mon projet"` : tes options sont enregistrées, ensuite `fs-cli claude` tout court suffit',
+    '`fs-cli claude --fs-garder` seul montre tes réglages, `--fs-oublier` les efface',
+  ] },
   { version: '3.48.2', items: [
     'GPT-6 Astra avec la recherche web : quand OpenAI échoue juste après la recherche (erreur 502), la demande repart toute seule sans recherche web',
   ] },

@@ -91,6 +91,7 @@ const DEFAULTS = {
   theme: 'cyan',
   showThinking: false,
   maxSteps: 40,
+  claudeDefaults: [], // fs-cli claude --fs-garder : options reprises à chaque « fs-cli claude » (--fs-* et --model / --permission-mode)
 };
 export const cfg = { ...DEFAULTS };
 try {

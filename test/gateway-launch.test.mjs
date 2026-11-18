@@ -440,8 +440,12 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.48.2 en tête, puis 3.48.1 et 3.48.0', () => {
-  const [w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.49.0 en tête, puis 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [g, w, n, v] = WHATS_NEW;
+  assert.equal(g.version, '3.49.0');
+  assert.equal(g.items.length, 2);
+  assert.match(g.items[0], /--fs-garder/);
+  assert.match(g.items[1], /--fs-oublier/);
   assert.equal(w.version, '3.48.2');
   assert.equal(w.items.length, 1);
   assert.match(w.items[0], /recherche web/);
@@ -455,4 +459,59 @@ test('nouveautés : entrée 3.48.2 en tête, puis 3.48.1 et 3.48.0', () => {
   assert.match(v.items[1], /`fs-cli gateway`/);
   assert.match(v.items[2], /`--fs-mcp`/);
   assert.match(v.items[3], /`fs-cli -- claude`/);
+});
+
+// ── réglages enregistrés : --fs-garder / --fs-oublier ──
+
+test('keptArgs / withSaved : --fs-* et --model / --permission-mode gardés ; -p, -c… jamais ; ce qui est tapé l\'emporte', () => {
+  assert.deepEqual(L.keptArgs(['--model', 'gpt-6-astra', '--fs-projet', 'SandBox Test', '--fs-web', '--permission-mode=acceptEdits', '-p', 'salut', '-c', '--fs-journal', '--fs-sous-agents', '5', '--', '--model', 'x']),
+    ['--model', 'gpt-6-astra', '--fs-projet', 'SandBox Test', '--fs-web', '--permission-mode=acceptEdits', '--fs-sous-agents', '5']);
+  assert.deepEqual(L.keptArgs(['--model']), [], 'valeur absente : rien');
+  const saved = ['--model', 'gpt-6-astra', '--fs-projet', 'SandBox Test', '--permission-mode', 'acceptEdits', '--fs-web'];
+  assert.deepEqual(L.withSaved(saved, ['-p', 'yo']), [...saved, '-p', 'yo']);
+  assert.deepEqual(L.withSaved(saved, ['--model=sonnet', '--fs-web=off']), ['--fs-projet', 'SandBox Test', '--permission-mode', 'acceptEdits', '--model=sonnet', '--fs-web=off']);
+  assert.deepEqual(L.withSaved(saved, [], { claude: false }), ['--fs-projet', 'SandBox Test', '--fs-web'], 'passerelle seule : seulement les --fs-*');
+  assert.deepEqual(L.withSaved(saved, ['--', '--model', 'x']), [...saved, '--', '--model', 'x'], 'après « -- » : rien n\'est une option');
+  assert.equal(L.showArgs(['--fs-projet', 'SandBox Test', '--fs-web']), '--fs-projet "SandBox Test" --fs-web');
+});
+
+test('runClaude --fs-garder : enregistre puis lance ; ensuite « fs-cli claude » seul reprend les réglages ; --fs-oublier efface', async () => {
+  let store = [];
+  const over = { savedDefaults: () => store.slice(), saveDefaults: l => { store = l.slice(); } };
+  let h = harness(over);
+  let run = L.runClaude(['--fs-garder', '--model', 'gpt-6-astra', '--fs-projet', 'SandBox Test', '--permission-mode', 'acceptEdits', '-p', 'yo'], h.io);
+  await h.spawned.promise;
+  assert.deepEqual(store, ['--model', 'gpt-6-astra', '--fs-projet', 'SandBox Test', '--permission-mode', 'acceptEdits'], '-p jamais enregistré');
+  assert.match(h.rec.err, /Réglages enregistrés : --model gpt-6-astra --fs-projet "SandBox Test" --permission-mode acceptEdits\n.*« fs-cli claude » suffit/);
+  assert.deepEqual(h.rec.spawns[0].args.slice(-6), ['--model', 'gpt-6-astra', '--permission-mode', 'acceptEdits', '-p', 'yo'], '--fs-garder ne part pas à Claude Code');
+  h.child.emit('exit', 0, null); await run;
+
+  h = harness(over);
+  run = L.runClaude([], h.io);
+  await h.spawned.promise;
+  assert.deepEqual(h.rec.projects, ['SandBox Test']);
+  assert.deepEqual(h.rec.spawns[0].args.slice(-4), ['--model', 'gpt-6-astra', '--permission-mode', 'acceptEdits']);
+  assert.match(h.rec.err, /^Réglages enregistrés : --model gpt-6-astra --fs-projet "SandBox Test" --permission-mode acceptEdits  \(--fs-oublier pour les effacer\)\n/m);
+  h.child.emit('exit', 0, null); await run;
+
+  h = harness(over);
+  run = L.runClaude(['--model', 'sonnet'], h.io);
+  await h.spawned.promise;
+  assert.deepEqual(h.rec.spawns[0].args.filter(a => /astra|sonnet/.test(a)), ['sonnet'], 'le modèle tapé remplace celui enregistré');
+  h.child.emit('exit', 0, null); await run;
+
+  h = harness(over);
+  assert.equal(await L.runClaude(['--fs-garder'], h.io), 0);
+  assert.match(h.rec.out, /^Réglages enregistrés : --model gpt-6-astra/);
+  assert.equal(h.rec.starts.length, 0);
+
+  h = harness(over);
+  assert.equal(await L.runClaude(['--fs-oublier'], h.io), 0);
+  assert.deepEqual(store, []);
+  assert.match(h.rec.err, /effacés/);
+  assert.equal(h.rec.starts.length, 0);
+
+  h = harness(over);
+  assert.equal(await L.runClaude(['--fs-garder', '--fs-retour', 'bof'], h.io), 2, 'réglage invalide : rien enregistré');
+  assert.deepEqual(store, []);
 });

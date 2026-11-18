@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import util from 'node:util';
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
-import { HOME_DIR, cfg } from '../config.js';
+import { HOME_DIR, cfg, saveCfgKeys } from '../config.js';
 import { createModels } from './models.js';
 import { quotaState } from './recover.js';
 
@@ -94,6 +94,86 @@ export function splitArgs(argv) {
   out.claudeModel = claudeOption(rest, '--model');
   out.claudeSettings = claudeOption(rest, '--settings');
   return { fs: out, rest };
+}
+
+// ── Réglages enregistrés (--fs-garder / --fs-oublier) ─────────────────────────
+
+/** Options jamais enregistrées (ponctuelles). */
+const NOT_KEPT = new Set(['--fs-journal', '--fs-nouveau-jeton']);
+/** Options de Claude Code enregistrables (avec leur valeur) : le reste (-p, -c, --resume…) est propre à une exécution. */
+const CC_KEPT = ['--model', '--permission-mode'];
+const flagOf = a => { const eq = a.indexOf('='); return eq < 0 ? a : a.slice(0, eq); };
+/** l'option prend-elle l'argument suivant comme valeur ? (« --model x », pas « --model=x » ni « --fs-web ») */
+const takesNext = a => !a.includes('=') && (FS_FLAGS[flagOf(a)] ? FS_FLAGS[flagOf(a)].type !== 'bool' : CC_KEPT.includes(flagOf(a)));
+export const showArgs = list => list.map(a => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ');
+
+/** Options de argv à enregistrer : les --fs-* (sauf ponctuelles) et --model / --permission-mode, avec leur valeur, avant « -- ». */
+export function keptArgs(argv) {
+  const list = (argv || []).map(String), out = [];
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (a === '--') break;
+    const f = flagOf(a);
+    if (!FS_FLAGS[f] && !CC_KEPT.includes(f)) continue;
+    const v = takesNext(a) ? list[++i] : undefined;
+    if (NOT_KEPT.has(f) || (takesNext(a) && v === undefined)) continue;
+    out.push(a, ...(v !== undefined ? [v] : []));
+  }
+  return out;
+}
+
+/** Réglages enregistrés placés devant ce qui est tapé ; une option tapée remplace la même option enregistrée.
+ *  claude=false (fs-cli gateway) : seulement les --fs-*. */
+export function withSaved(saved, argv, { claude = true } = {}) {
+  const list = (argv || []).map(String);
+  const end = list.indexOf('--');
+  const typed = new Set((end < 0 ? list : list.slice(0, end)).map(flagOf));
+  const out = [];
+  const s = (saved || []).map(String);
+  for (let i = 0; i < s.length; i++) {
+    const a = s[i], f = flagOf(a);
+    const v = takesNext(a) ? s[++i] : undefined;
+    if (!FS_FLAGS[f] && !(claude && CC_KEPT.includes(f))) continue;
+    if (NOT_KEPT.has(f) || typed.has(f)) continue;
+    out.push(a, ...(v !== undefined ? [v] : []));
+  }
+  return [...out, ...list];
+}
+
+const savedDefaults = () => (Array.isArray(cfg.claudeDefaults) ? cfg.claudeDefaults.map(String) : []);
+
+/** --fs-garder / --fs-oublier, puis réglages enregistrés ajoutés. → { argv } ou { done } */
+async function applySaved(h, argv, { claude = true } = {}) {
+  const list = (argv || []).map(String);
+  const end = list.indexOf('--');
+  const head = end < 0 ? list : list.slice(0, end);
+  const keep = head.includes('--fs-garder'), forget = head.includes('--fs-oublier');
+  const clean = list.filter((a, i) => !((end < 0 || i < end) && (a === '--fs-garder' || a === '--fs-oublier')));
+  if ((keep || forget) && !claude) return { done: await h.fail(2, 'Les réglages s\'enregistrent avec fs-cli claude --fs-garder (ils servent aussi à fs-cli gateway).') };
+  if (forget) {
+    h.saveDefaults([]);
+    h.err('Réglages de fs-cli claude effacés : retour aux options par défaut.\n');
+    if (!keep) return { done: await h.exit(0) };
+  }
+  if (keep) {
+    const k = keptArgs(clean);
+    if (!k.length) {
+      const cur = h.savedDefaults();
+      h.out(cur.length ? `Réglages enregistrés : ${showArgs(cur)}\n(fs-cli claude --fs-oublier pour les effacer)\n`
+        : 'Aucun réglage enregistré. Exemple : fs-cli claude --fs-garder --model gpt-6-astra --fs-projet "Mon projet" --permission-mode acceptEdits\n');
+      return { done: await h.exit(0) };
+    }
+    const chk = splitArgs(k);
+    if (chk.fs.errors.length) return { done: await h.fail(2, chk.fs.errors.join('\n')) };
+    h.saveDefaults(k);
+    h.err(`Réglages enregistrés : ${showArgs(k)}\nLa prochaine fois, « fs-cli claude » suffit (--fs-oublier pour les effacer).\n`);
+    return { argv: clean };
+  }
+  const saved = h.savedDefaults();
+  const merged = withSaved(saved, clean, { claude });
+  const used = merged.slice(0, merged.length - clean.length);
+  if (used.length) h.err(`Réglages enregistrés : ${showArgs(used)}  (--fs-oublier pour les effacer)\n`);
+  return { argv: merged };
 }
 
 // ── Recherche de Claude Code ──────────────────────────────────────────────────
@@ -392,6 +472,8 @@ function makeHost(io) {
     startGateway: async a => (await import('./index.js')).startGateway(a),
     deps: realDeps,
     project: useFsProject,
+    savedDefaults,
+    saveDefaults: list => saveCfgKeys({ claudeDefaults: list }),
     openLog,
     silence,
     onSignal: (sig, fn) => { try { process.on(sig, fn); } catch {} },
@@ -424,7 +506,9 @@ async function startOrFail(h, args, failText) {
  */
 export async function runClaude(argv, io = {}) {
   const h = makeHost(io);
-  const p = await prepare(h, argv);
+  const sv = await applySaved(h, argv, { claude: true });
+  if ('done' in sv) return sv.done;
+  const p = await prepare(h, sv.argv);
   if ('done' in p) return p.done;
   const { o, rest } = p;
   if (!(await h.token()) && !(h.isTTY && await h.login())) return h.fail(1, NO_SESSION);
@@ -489,7 +573,9 @@ export async function runClaude(argv, io = {}) {
  */
 export async function runGatewayCmd(argv, io = {}) {
   const h = makeHost(io);
-  const p = await prepare(h, argv);
+  const sv = await applySaved(h, argv, { claude: false });
+  if ('done' in sv) return sv.done;
+  const p = await prepare(h, sv.argv);
   if ('done' in p) return p.done;
   const { o, rest } = p;
   if (rest.length) h.err(`Arguments ignorés par fs-cli gateway : ${rest.join(' ')}\n`);
