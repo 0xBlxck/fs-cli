@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 // Client API France Student AI (SSE)
 import https from 'node:https';
-import { TOKEN, VERSION, cfg, saveCfg } from './config.js';
+import { TOKEN, VERSION, cfg, saveCfg, saveCfgKeys } from './config.js';
 import { register as registerChat, localTime } from './chats.js';
 
 const HOST = 'api.francestudent.org';                       // adresse utilisée par le site officiel (l'ancienne, .ai, répond parfois en 30 s)
@@ -52,121 +52,241 @@ export async function uploadFile(buffer, filename, mime = 'application/octet-str
   return String(id);
 }
 
-function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning, onChat, onEvent, register, clientTools, toolResults, files }) {
-  return new Promise((resolve, reject) => {
-    // Outils client : nouveau chat → POST /chats/stream (initialContent + clientTools) ; chat existant → POST /chats/{id} (content + clientTools / toolResults)
-    const native = !!(clientTools || toolResults);
-    let urlPath = '/chats/stream', body;
-    if (native && chatId) {
-      urlPath = `/chats/${encodeURIComponent(chatId)}`;
-      body = { agentId, ...(content ? { content } : {}), ...(files?.length ? { files } : {}), ...(clientTools ? { clientTools } : {}), ...(toolResults ? { toolResults } : {}), ...(webSearch ? { enableWebSearch: true } : {}) };
-    } else {
-      body = {
-        agentId, chatId: chatId || null, enableCanvas: false, enableWebSearch: !!webSearch,
-        images: [], files: files?.length ? files : [], initialContent: content, isIncognito: false, isPrivate: true,
-        ...(clientTools ? { clientTools } : {}),
+/**
+ * Un bloc SSE (lignes entre deux lignes vides) → { id, event, data }. Règles du format Server-Sent Events :
+ * commentaires « : » ignorés (ex. « : keepalive »), une espace après « champ: » retirée, lignes data jointes par \n.
+ * id : null si absent · event : '' si absent · data : null si aucune ligne data.
+ */
+export function parseSseBlock(block) {
+  let id = null, event = '', data = null;
+  for (const raw of String(block ?? '').split('\n')) {
+    const l = raw.replace(/\r$/, '');
+    if (!l || l.startsWith(':')) continue;
+    const i = l.indexOf(':');
+    const field = i < 0 ? l : l.slice(0, i);
+    let value = i < 0 ? '' : l.slice(i + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    if (field === 'data') data = data === null ? value : `${data}\n${value}`;
+    else if (field === 'event') event = value.trim();
+    else if (field === 'id' && !value.includes('\0')) id = value.trim();
+  }
+  return { id, event, data };
+}
+
+/** appel d'un rappel de l'appelant qui ne doit jamais casser la lecture du flux */
+const safely = (fn, ...a) => { try { fn?.(...a); } catch {} };
+
+/**
+ * Lecteur du flux SSE d'un tour France Student, sans réseau (partagé par once et resumeStream, testable seul).
+ * h : onEvent(type, d), onText(delta, stop), onReasoning, onChat, onEventId(id) (lignes « id: »), onUserMessageId (response.created),
+ *     onFirstChat(chatId) (1er chat_id vu), onStop(partiel) (l'appelant a demandé l'arrêt avec stop()).
+ * → { push(morceau), end(), result() (FsResult, ou lève une ApiError), chatId, lastEventId, userMessageId, stopped }
+ */
+export function createSseReader(h = {}, { chatId = null } = {}) {
+  let buf = '', text = '', usage = null, toolCalls = [], images = [], documents = [];
+  let sawImage = false, sawCompleted = false, cancelled = false, stopped = false, opened = false, streamError = null;
+  let seenChatId = chatId || null, lastEventId = null, userMessageId = null;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true; h.onStop?.({ text, usage, stopped: true });
+  };
+  function handle(block) {
+    if (stopped) return;
+    const { id, event, data } = parseSseBlock(block);
+    if (id) { lastEventId = id; safely(h.onEventId, id); }             // reprise possible à partir de cet événement (Last-Event-ID)
+    if (!data || data === '[DONE]') return;
+    let d; try { d = JSON.parse(data); } catch { return; }
+    if (!d || typeof d !== 'object') return;
+    const type = d.type || event;
+    safely(h.onEvent, type, d);                                         // activité en direct (recherche web, outils du site…)
+    if (/image_?generation/i.test(type) || d.item?.type === 'image_generation_call') sawImage = true;   // image générée côté serveur
+    if (d.chat_id) {
+      seenChatId = d.chat_id;
+      if (!opened) { opened = true; h.onFirstChat?.(d.chat_id); }
+      h.onChat?.(d.chat_id);
+    }
+    if (type === 'response.created') {                                  // message de l'utilisateur enregistré par France Student
+      const mid = d.user_message_id ?? d.userMessageId;
+      if (mid != null && mid !== '') { userMessageId = String(mid); safely(h.onUserMessageId, userMessageId); }
+    }
+    if (type === 'response.output_text.delta' && typeof d.delta === 'string') {
+      text += d.delta;
+      h.onText?.(d.delta, stop);
+    } else if (type === 'response.reasoning_summary_text.delta' && typeof d.delta === 'string') {
+      h.onReasoning?.(d.delta);
+    } else if (type === 'completed') {
+      sawCompleted = true;
+      usage = d.message?.tokenUsage || null;
+      if (Array.isArray(d.message?.toolCalls)) toolCalls = d.message.toolCalls;      // seule source de vérité des appels à exécuter
+      if (Array.isArray(d.message?.parts)) { images = imagesOf(d.message.parts); documents = documentsOf(d.message.parts); }
+    } else if (type === 'cancelled') {
+      cancelled = true;
+    } else if (type === 'error' || type === 'response.failed' || type === 'response.error') {
+      streamError = {
+        message: d.message || d.error?.message || d.error || JSON.stringify(d).slice(0, 200),
+        code: d.code || d.error?.code, retryable: d.retryable, chatFlagged: d.chat_flagged, accountDisabled: d.account_disabled,
       };
     }
-    const payload = JSON.stringify(body);
-    let images = [], sawImage = false, documents = [];
-    let text = '', usage = null, toolCalls = [], opened = false, settled = false, stopped = false, sawCompleted = false, streamError = null, seenChatId = chatId || null;
-    const finish = (fn, v) => { if (settled) return; settled = true; fn(v); };
+  }
+  return {
+    push(chunk) {
+      buf += chunk;
+      if (buf.includes('\r')) buf = buf.replace(/\r\n|\r(?!$)/g, '\n');   // CRLF ou CR seul ; un CR final attend le morceau suivant
+      let i;
+      while (!stopped && (i = buf.indexOf('\n\n')) >= 0) { const b = buf.slice(0, i); buf = buf.slice(i + 2); handle(b); }
+    },
+    end() {
+      if (buf.trim()) handle(buf.replace(/\r$/, ''));
+      buf = '';
+    },
+    result() {
+      if (streamError) {
+        const e = new ApiError(`Erreur du serveur: ${streamError.message}`);
+        for (const k of ['code', 'retryable', 'chatFlagged', 'accountDisabled']) if (streamError[k] !== undefined) e[k] = streamError[k];
+        e.serverError = true;                                           // rendue par le serveur (pas une coupure réseau)
+        throw e;
+      }
+      if (!sawCompleted && !text) {
+        const e = new ApiError('Réponse vide / flux interrompu');
+        if (cancelled) e.code = 'CANCELLED';
+        throw e;
+      }
+      return { text, usage, toolCalls, stopped: false, images, documents, sawImage: sawImage || images.length > 0, chatId: seenChatId, completed: sawCompleted };
+    },
+    get chatId() { return seenChatId; },
+    get lastEventId() { return lastEventId; },
+    get userMessageId() { return userMessageId; },
+    get stopped() { return stopped; },
+  };
+}
 
-    const req = https.request({
-      hostname: HOST, path: urlPath, method: 'POST', signal,
-      headers: {
-        ...baseHeaders(),
-        'Accept': 'text/event-stream',
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-      },
-    }, (res) => {
+/** corps et route d'un envoi : nouveau chat → POST /chats/stream (initialContent + clientTools) ;
+ *  chat existant en mode outils client → POST /chats/{id} (content + clientTools / toolResults) ; mode texte → POST /chats/stream avec chatId */
+function chatRequest({ agentId, chatId, content, webSearch, clientTools, toolResults, files }) {
+  const native = !!(clientTools || toolResults);
+  if (native && chatId) {
+    return {
+      native, urlPath: `/chats/${encodeURIComponent(chatId)}`,
+      body: { agentId, ...(content ? { content } : {}), ...(files?.length ? { files } : {}), ...(clientTools ? { clientTools } : {}), ...(toolResults ? { toolResults } : {}), ...(webSearch ? { enableWebSearch: true } : {}) },
+    };
+  }
+  return {
+    native, urlPath: '/chats/stream',
+    body: {
+      agentId, chatId: chatId || null, enableCanvas: false, enableWebSearch: !!webSearch,
+      images: [], files: files?.length ? files : [], initialContent: content, isIncognito: false, isPrivate: true,
+      ...(clientTools ? { clientTools } : {}),
+    },
+  };
+}
+
+/** réponse HTTP ≥ 300 d'un flux → ApiError claire (status, code, body) */
+function httpError(st, b, { native = false } = {}) {
+  // limite quotidienne de nouvelles conversations : inutile de réessayer, on explique
+  const daily = st === 429 ? parseDailyLimit(b) : null;
+  if (daily) { try { saveCfgKeys({ dailyLimitHitAt: Date.now() }); } catch {} return daily; }
+  // page HTML (pare-feu, Cloudflare, proxy) : un 403 passager, pas le drapeau des outils client
+  const firewall = st === 403 && (/^\s*</.test(b || '') || /cloudflare|cf-ray|attention required|just a moment/i.test(b || ''));
+  if (native && !firewall && (st === 403 || (st === 400 && /Client tools are not supported/i.test(b)))) {       // flag désactivé ou modèle sans outils client (ex. Gemini)
+    const e = new ApiError(st === 403 ? 'Le mode « outils client » n\'est pas activé sur ce compte (403).' : 'Ce modèle ne gère pas les outils client (essaie un modèle Claude ou GPT avec /model).', { status: st });
+    e.code = 'NATIVE_UNSUPPORTED';
+    return e;
+  }
+  const msg = st === 401 ? '401 — token de session expiré (récupère un nouveau cookie next-auth.session-token)'
+    : st === 403 ? '403 — accès refusé (token invalide ?)'
+    : st === 429 ? '429 — trop de requêtes, patiente quelques secondes'
+    : `HTTP ${st}: ${b.slice(0, 200)}`;
+  const e = new ApiError(msg, { status: st, retry: st === 429 || st >= 500 });
+  e.body = b.slice(0, 2000);                                          // ex. 400 « missing: … » / « pending », 409 : lus par la passerelle Claude Code
+  return e;
+}
+
+/**
+ * Requête SSE vers France Student (POST d'un message ou GET de rattachement), lue par createSseReader.
+ * Toutes les erreurs portent e.accepted : true dès que le serveur a répondu 2xx. Après un 2xx, jamais de nouvel essai
+ * (retry: false) : le message est déjà enregistré, le renvoyer le dupliquerait. On se rattache alors avec resumeStream.
+ */
+function sseRequest({ urlPath, method, payload = null, chatId = null, h, native = false, onFirstChat, cancelOnAbort = true }) {
+  return new Promise((resolve, reject) => {
+    const { signal } = h;
+    let accepted = false, settled = false, req = null;
+    const finish = (fn, v) => { if (settled) return; settled = true; fn(v); };
+    const reader = createSseReader({
+      onEvent: h.onEvent, onText: h.onText, onReasoning: h.onReasoning, onChat: h.onChat,
+      onEventId: h.onEventId, onUserMessageId: h.onUserMessageId, onFirstChat,
+      onStop: partial => { finish(resolve, partial); req?.destroy(); },
+    }, { chatId });
+    const fail = e => {
+      if (e && typeof e === 'object') {
+        e.accepted = accepted;
+        if (accepted && reader.chatId && e.chatId == null) e.chatId = reader.chatId;
+        if (accepted && reader.lastEventId && e.lastEventId == null) e.lastEventId = reader.lastEventId;
+      }
+      finish(reject, e);
+    };
+    const onNetError = e => {
+      if (settled || reader.stopped) return;
+      if (signal?.aborted || e?.name === 'AbortError' || e?.code === 'ABORT_ERR') {
+        if (cancelOnAbort && reader.chatId) cancelStream(reader.chatId);   // Ctrl+C : on arrête aussi la génération côté serveur (sinon elle continue et consomme)
+        return fail(Object.assign(new Error('annulé'), { name: 'AbortError' }));
+      }
+      fail(e instanceof ApiError ? e : new ApiError(`Réseau: ${e?.message || e}`, { retry: !accepted }));
+    };
+    const headers = { ...baseHeaders(), 'Accept': 'text/event-stream', ...h.headers };
+    if (payload !== null) Object.assign(headers, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) });
+
+    req = https.request({ hostname: HOST, path: urlPath, method, signal, headers }, (res) => {
       const st = res.statusCode || 0;
       if (st >= 300) {
         let b = ''; res.setEncoding('utf8');
         res.on('data', d => b += d);
-        res.on('end', () => {
-          // limite quotidienne de nouvelles conversations : inutile de réessayer, on explique
-          const daily = st === 429 ? parseDailyLimit(b) : null;
-          if (daily) { try { cfg.dailyLimitHitAt = Date.now(); saveCfg(); } catch {} return finish(reject, daily); }
-          if (native && (st === 403 || (st === 400 && /Client tools are not supported/i.test(b)))) {       // flag désactivé ou modèle sans outils client (ex. Gemini)
-            const e = new ApiError(st === 403 ? 'Le mode « outils client » n\'est pas activé sur ce compte (403).' : 'Ce modèle ne gère pas les outils client (essaie un modèle Claude ou GPT avec /model).', { status: st });
-            e.code = 'NATIVE_UNSUPPORTED';
-            return finish(reject, e);
-          }
-          const msg = st === 401 ? '401 — token de session expiré (récupère un nouveau cookie next-auth.session-token)'
-            : st === 403 ? '403 — accès refusé (token invalide ?)'
-            : st === 429 ? '429 — trop de requêtes, patiente quelques secondes'
-            : `HTTP ${st}: ${b.slice(0, 200)}`;
-          finish(reject, new ApiError(msg, { status: st, retry: st === 429 || st >= 500 }));
-        });
+        res.on('end', () => fail(httpError(st, b, { native })));
+        res.on('error', onNetError);
         return;
       }
+      accepted = true;                                                  // 2xx : le message est enregistré, ne plus jamais le renvoyer
+      safely(h.onAccepted);
       res.setEncoding('utf8');
-      let buf = '';
-      const handle = (block) => {
-        let ev = '', data = [];
-        for (const l of block.split('\n')) {
-          const t = l.replace(/\r$/, '');
-          if (t.startsWith('event:')) ev = t.slice(6).trim();
-          else if (t.startsWith('data:')) data.push(t.slice(5).trimStart());
-        }
-        const pl = data.join('\n');
-        if (!pl || pl === '[DONE]') return;
-        let d; try { d = JSON.parse(pl); } catch { return; }
-        const type = d.type || ev;
-        try { onEvent?.(type, d); } catch {}                              // activité en direct (recherche web, outils du site…)
-        if (/image_?generation/i.test(type) || d.item?.type === 'image_generation_call') sawImage = true;   // image générée côté serveur
-        if (d.chat_id) {
-          seenChatId = d.chat_id;
-          if (!opened) {
-            opened = true;
-            if (!chatId && register) registerChat(d.chat_id, register);   // nouvelle conversation → registre
-            if (!chatId) attachToFsProject(d.chat_id);                       // et rangement dans le Projet FS du CLI
-          }
-          onChat?.(d.chat_id);
-        }
-        if (type === 'response.output_text.delta' && typeof d.delta === 'string') {
-          text += d.delta;
-          onText?.(d.delta, () => {
-            if (stopped) return;
-            stopped = true; finish(resolve, { text, usage, stopped: true }); req.destroy();
-          });
-        } else if (type === 'response.reasoning_summary_text.delta' && typeof d.delta === 'string') {
-          onReasoning?.(d.delta);
-        } else if (type === 'completed') {
-          sawCompleted = true;
-          usage = d.message?.tokenUsage || null;
-          if (Array.isArray(d.message?.toolCalls)) toolCalls = d.message.toolCalls;      // seule source de vérité des appels à exécuter
-          if (Array.isArray(d.message?.parts)) { images = imagesOf(d.message.parts); documents = documentsOf(d.message.parts); }
-        } else if (type === 'error' || type === 'response.failed' || type === 'response.error') {
-          streamError = d.message || d.error?.message || d.error || JSON.stringify(d).slice(0, 200);
-        }
-      };
-      res.on('data', chunk => {
-        buf += chunk;
-        let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) { const b = buf.slice(0, i); buf = buf.slice(i + 2); handle(b); }
-      });
+      res.on('data', chunk => reader.push(chunk));
       res.on('end', () => {
-        if (buf.trim()) handle(buf);
-        if (stopped) return;
-        if (streamError) return finish(reject, new ApiError(`Erreur du serveur: ${streamError}`));
-        if (!sawCompleted && !text) return finish(reject, new ApiError('Réponse vide / flux interrompu', { retry: !opened }));
-        finish(resolve, { text, usage, toolCalls, stopped: false, images, documents, sawImage: sawImage || images.length > 0, chatId: seenChatId });
+        reader.end();
+        if (reader.stopped) return;
+        try { finish(resolve, reader.result()); } catch (e) { fail(e); }
       });
-      res.on('error', e => { if (!stopped) finish(reject, e); });
+      res.on('error', onNetError);
+      res.on('close', () => { if (!res.complete) onNetError(new ApiError('Réseau: flux coupé avant la fin', { retry: false })); });
     });
-    req.setTimeout(150_000, () => req.destroy(new ApiError('Délai dépassé (aucune donnée depuis 150 s)', { retry: !opened })));
-    req.on('error', e => {
-      if (stopped) return;
-      if (e.name === 'AbortError' || e.code === 'ABORT_ERR') {
-        if (seenChatId) cancelStream(seenChatId);                        // Ctrl+C : on arrête aussi la génération côté serveur (sinon elle continue et consomme)
-        return finish(reject, Object.assign(new Error('annulé'), { name: 'AbortError' }));
-      }
-      finish(reject, e instanceof ApiError ? e : new ApiError(`Réseau: ${e.message}`, { retry: !opened }));
-    });
-    req.write(payload); req.end();
+    req.setTimeout(150_000, () => req.destroy(new ApiError('Délai dépassé (aucune donnée depuis 150 s)', { retry: !accepted })));
+    req.on('error', onNetError);
+    if (payload !== null) req.write(payload);
+    req.end();
+  });
+}
+
+function once(opts) {
+  const { chatId, register } = opts;
+  const { urlPath, body, native } = chatRequest(opts);
+  return sseRequest({
+    urlPath, method: 'POST', payload: JSON.stringify(body), chatId, h: opts, native,
+    onFirstChat: id => {
+      if (!chatId && register) registerChat(id, register);             // nouvelle conversation → registre
+      if (!chatId) attachToFsProject(id);                                // et rangement dans le Projet FS du CLI
+    },
+  });
+}
+
+/**
+ * Se rattache à la génération en cours (ou qui vient de finir) d'un chat : GET /chats/{id}/stream avec Last-Event-ID.
+ * France Student rejoue les événements d'id supérieur puis continue en direct : text ne contient que la suite rejouée.
+ * handlers : mêmes rappels que streamChat (signal, onText, onEventId, onAccepted…). Résultat : comme streamChat.
+ * Une annulation (signal) n'arrête pas la génération côté serveur : c'est à l'appelant de décider (cancelStream).
+ */
+export function resumeStream(chatId, lastEventId = null, handlers = {}) {
+  if (!chatId) return Promise.reject(Object.assign(new ApiError('resumeStream : chatId manquant'), { accepted: false }));
+  const last = lastEventId == null ? '' : String(lastEventId).replace(/[^\x21-\x7e]/g, '');
+  return sseRequest({
+    urlPath: `/chats/${encodeURIComponent(chatId)}/stream`, method: 'GET', chatId, cancelOnAbort: false,
+    h: { ...handlers, headers: last ? { 'Last-Event-ID': last } : {} },
   });
 }
 
@@ -216,6 +336,38 @@ export function requestJson(method, p, body, timeout = 15000) {
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+/** Conversations dont le titre ou le contenu contient query (GET /chats/search) → [{ id, title, … }] ; [] en cas d'échec (jamais d'exception). */
+export async function searchChats(query, limit = 10) {
+  const q = String(query ?? '').trim();
+  if (!q) return [];
+  const n = Math.min(50, Math.max(1, Number.parseInt(limit, 10) || 10));
+  try {
+    const r = await requestJson('GET', `/chats/search?query=${encodeURIComponent(q)}&limit=${n}`);
+    if (r.status < 200 || r.status >= 300) return [];
+    const arr = Array.isArray(r.data) ? r.data : (r.data?.chats || r.data?.data);
+    return Array.isArray(arr) ? arr.filter(c => c && typeof c === 'object') : [];
+  } catch { return []; }
+}
+
+/** Fait résumer l'historique d'un chat par le fournisseur (POST /chats/{id}/context) → { status, data } ; jamais d'exception.
+ *  status 409 : génération en cours ou chat vide · 422 : le modèle ne le permet pas · 0 : réseau. */
+export async function compactChat(chatId) {
+  if (!chatId) return { status: 0, data: null };
+  try { return await requestJson('POST', `/chats/${encodeURIComponent(chatId)}/context`, undefined, 120000); }
+  catch { return { status: 0, data: null }; }
+}
+
+/** Liste complète des agents (ModelDto : id, name, model, namespace, modelProvider, contextWindow, isActive…) de GET /chats/agents.
+ *  Accepte un tableau ou { data } / { agents } ; null si indisponible (jamais d'exception). Les agents inactifs sont gardés. */
+export async function fetchAgentsFull() {
+  try {
+    const r = await requestJson('GET', '/chats/agents');
+    if (r.status < 200 || r.status >= 300) return null;
+    const arr = Array.isArray(r.data) ? r.data : (r.data?.data || r.data?.agents);
+    return Array.isArray(arr) ? arr.filter(a => a && typeof a === 'object') : null;
+  } catch { return null; }
 }
 
 /** Arrête la génération en cours côté serveur (POST /chats/{id}/stream/cancel, idempotent). */

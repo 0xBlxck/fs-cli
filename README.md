@@ -145,6 +145,74 @@ Pour l'ouvrir : l'icône ✻ dans la barre latérale, ou **Ctrl+Alt+I** pour un 
 
 ---
 
+## Utiliser Claude Code avec France Student
+
+FS-CLI peut faire tourner **le vrai Claude Code** avec un modèle de ton compte France Student : tu gardes l'interface, les outils, les permissions, les diffs et `/rewind` de Claude Code, et c'est le modèle France Student qui répond.
+
+**1. Installe Claude Code** (une fois) :
+
+```bash
+npm i -g @anthropic-ai/claude-code
+```
+
+(ou l'installeur de https://code.claude.com). FS-CLI doit déjà être connecté à France Student (`fs-cli --login`).
+
+**2. Lance-le à travers FS-CLI**, dans le dossier de ton projet :
+
+```bash
+fs-cli claude
+fs-cli claude --model gpt-6-astra          # un autre modèle France Student
+fs-cli claude -p "explique ce projet"      # toutes les options de Claude Code passent telles quelles
+```
+
+FS-CLI démarre une petite passerelle locale (127.0.0.1, avec un jeton tiré au hasard), lance Claude Code branché dessus, puis s'efface : l'écran est à Claude Code. Le journal est dans `~/.fs-cli/gateway/gateway.log`.
+
+Attention : `fs-cli claude` lance maintenant Claude Code. Pour envoyer le mot « claude » comme demande à FS-CLI, tape `fs-cli -- claude`.
+
+**Options de FS-CLI** (toutes commencent par `--fs-`, le reste part à Claude Code) :
+
+| Option | Effet |
+|---|---|
+| `--fs-projet "Nom"` | range les conversations dans ce projet du site |
+| `--fs-web` | recherche web de France Student (et réponses à WebSearch) |
+| `--fs-claude-md` | envoie aussi le CLAUDE.md du projet aux modèles GPT |
+| `--fs-retour auto\|note\|chat` | comment traiter un retour en arrière (`auto` par défaut) |
+| `--fs-sous-agents N` | sous-agents au plus par session (3 par défaut) |
+| `--fs-flux N` | réponses France Student en même temps (3 par défaut) |
+| `--fs-demander` | Claude Code demande ta confirmation avant chaque commande |
+| `--fs-journal` | affiche le chemin du journal |
+| `--fs-mcp` | garde tes serveurs MCP (coupés par défaut : le modèle FS ne s'en sert pas) |
+| `--fs-debug` | garde les échanges (masqués) dans `~/.fs-cli/gateway/debug/` |
+
+**Passerelle seule** (Claude Code lancé à la main, ou l'extension VS Code de Claude Code) :
+
+```bash
+fs-cli gateway                 # port 8787 ; --fs-port N pour en changer, --fs-nouveau-jeton pour changer de jeton
+```
+
+Elle affiche les deux variables à définir avant de lancer `claude` :
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 ANTHROPIC_AUTH_TOKEN=<jeton affiché> claude
+```
+
+En PowerShell : `$env:ANTHROPIC_BASE_URL="http://127.0.0.1:8787"; $env:ANTHROPIC_AUTH_TOKEN="<jeton>"; claude`. Pour l'extension VS Code, mets ces deux variables dans le réglage « claudeCode.environmentVariables ».
+
+**À savoir avant de t'en servir :**
+
+1. **Six actions seulement.** Le modèle France Student peut lister, lire, chercher, modifier et écrire des fichiers, et lancer des commandes. Il ne peut pas utiliser les sous-agents, la liste de tâches, WebFetch, les skills, les notebooks, les tâches planifiées, les worktrees ni les serveurs MCP ajoutés à Claude Code. Les commandes slash qui en dépendent (`/review`, `/security-review`, `/init` avec sous-agents) marchent mal.
+2. **Les actions arrivent à la fin de chaque réponse** du modèle, pas au fil de l'eau. Avec GPT, le début du texte est retenu un instant pour détecter un refus.
+3. **Quota de 50 nouvelles conversations par jour.** Une session neuve coûte 1. Un refus de GPT au 1er message peut coûter 1 de plus. Un retour en arrière coûte 1 tant qu'il en reste plus de 10, ensuite c'est une note dans la même conversation. Chaque sous-agent coûte 1. Les titres, suggestions, résumés et `/compact` ne coûtent rien. Quand la limite est atteinte, la passerelle continue dans une conversation existante. Chaque tour d'outil compte aussi comme un message dans les limites de France Student : les longues sessions coûtent cher.
+4. **Le prompt système de Claude Code n'est pas transmis.** Le CLAUDE.md du projet n'est envoyé qu'aux modèles Claude (un extrait). Ta mémoire automatique et ton e-mail ne sont jamais envoyés. Le contenu des fichiers lus et la sortie des commandes, eux, partent tels quels.
+5. **Permissions : ce sont celles de Claude Code.** Si tes réglages autorisent toutes les commandes Bash (`"allow": ["Bash"]`), les commandes proposées par le modèle France Student s'exécuteront **sans te demander**. Ajoute `--fs-demander` pour confirmer chaque commande.
+6. **`/context` et le coût affichés par Claude Code** sont des estimations, pas la facturation France Student. Après `/compact`, France Student garde toute la conversation.
+7. **GPT** peut encore refuser malgré la récupération automatique ; **Gemini** répond en texte seul. Dans `/model`, les modèles qui ne sont pas des Claude apparaissent sous `claude-fs/…`.
+8. Pas de réflexion visible, pas d'images en sortie.
+9. La recherche web passe seulement par `--fs-web`.
+10. Prévu pour Claude Code 2.1.2xx : une mise à jour de Claude Code peut demander une mise à jour de FS-CLI. La passerelle n'écoute qu'en local, avec un jeton. Client communautaire non officiel, soutenu ni par Anthropic ni par France Student.
+
+---
+
 ## Utiliser France Student depuis un autre agent (Claude Code, VS Code, opencode, Cursor, Antigravity…)
 
 FS-CLI peut servir de **serveur MCP** : un autre agent (Claude Code, Claude Desktop, VS Code avec Copilot, opencode, Cursor, Windsurf, Codex, Gemini CLI, Antigravity…) peut alors interroger les modèles France Student ou leur confier une tâche de code. Les modèles FS y apparaissent comme des **outils** (pas comme le modèle principal de l'agent).

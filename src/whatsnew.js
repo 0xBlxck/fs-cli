@@ -1,6 +1,12 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.48.0', items: [
+    'Claude Code avec ton compte France Student : `fs-cli claude` (le modèle FS, les outils et l\'interface de Claude Code)',
+    '`fs-cli gateway` : la passerelle seule, pour brancher Claude Code lancé à la main ou depuis VS Code',
+    'Tes serveurs MCP sont coupés dans `fs-cli claude` (le modèle FS ne s’en sert pas) : `--fs-mcp` pour les garder',
+    'Attention : `fs-cli claude` lance désormais Claude Code ; pour envoyer le mot « claude » comme demande, tape `fs-cli -- claude`',
+  ] },
   { version: '3.47.1', items: [
     'On voit le modèle travailler : « recherche sur le web… », « le modèle écrit un document · 12,4k caractères »',
     'Recherches web affichées (requête et nombre de sources), marqueurs « citeturn… » retirés du texte',

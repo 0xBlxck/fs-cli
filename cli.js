@@ -35,6 +35,7 @@ import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_S
 import { discoverMcpServers, discoverSkills, autoSkills, skillIndex } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
+import { FALLBACK_AGENTS } from './src/agents-table.js';
 import { stripEditorContext } from './src/editor-context.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow } from './src/extra-commands.js';
 import { runTeam } from './src/team.js';
@@ -49,6 +50,12 @@ import { getMcp, activeServers } from './src/mcp-runtime.js';
 import * as ui from './src/ui.js';
 import { c, println, THEMES } from './src/ui.js';
 
+// fs-cli claude / fs-cli gateway : Claude Code branché sur France Student (passerelle locale) ; « fs-cli -- claude » reste une demande
+const sub = process.argv[2];
+if (['claude', '--claude', 'gateway', '--gateway'].includes(sub)) {
+  const L = await import('./src/gateway/launch.js');
+  await (sub.includes('claude') ? L.runClaude : L.runGatewayCmd)(process.argv.slice(3));
+}
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -72,6 +79,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--login') opts.login = true;
   else if (a === '-h' || a === '--help') opts.help = true;
   else if (a === '-v' || a === '--version') opts.version = true;
+  else if (a === '--') { opts.prompt.push(...argv.slice(i + 1)); break; }   // « fs-cli -- claude » : tout ce qui suit est la demande
   else opts.prompt.push(a);
 }
 if (opts.mcp) {                                                     // stdout = JSON-RPC uniquement (tout le reste est redirigé sur stderr) ; pas d'assistant de connexion
@@ -106,6 +114,8 @@ if (opts.help) {
   --login                  (re)configurer ta clé de session France Student
   --mcp                    serveur MCP (stdio) : Antigravity, Claude Code, Codex… utilisent France Student via FS-CLI
   --install-mcp            inscrit ce serveur MCP (« france-student ») dans les agents trouvés sur le PC
+  fs claude [options]      Claude Code avec ton compte France Student (options --fs-*, le reste va à Claude Code)
+  fs gateway               la passerelle seule (port 8787), pour Claude Code lancé à la main ou depuis VS Code
   -h, --help  -v, --version`);
   process.exit(0);
 }
@@ -134,10 +144,7 @@ if (opts.web) cfg.webSearch = true;
 ui.theme.name = THEMES[cfg.theme] ? cfg.theme : 'cyan';
 
 // ── État ──────────────────────────────────────────────────────────────────────
-let AGENTS = {
-  '-1002': 'GPT-6 Luna', '-1003': 'GPT-6.1 Sol', '-1004': 'GPT-6 Astra',
-  '-2001': 'Claude Opus 5.5', '-2002': 'Claude Haiku 5.5', '-2003': 'Claude Sonnet 5.5', '-2005': 'Claude Fable 5.2',
-};
+let AGENTS = { ...FALLBACK_AGENTS };
 const S = {
   chatId: null, agentId: cfg.agentId, primed: false,
   cwd: opts.cwd ? path.resolve(opts.cwd) : (process.env.FS_WORKDIR || process.cwd()),
@@ -486,6 +493,7 @@ const HELP_ROWS = [
     ['/webhook [url|off|test]', 'adresse appelée à la fin de chaque demande (CI, notifications…)'],
     ['/resume', 'choisir une conversation ou un projet (toutes · ce dossier · projets), comme l\'horloge du panneau'], ['/rename <titre>', 'renommer la conversation (aussi sur le site)'], ['/status', 'configuration actuelle'], ['/tools', 'outils disponibles'],
     ['/think', 'afficher/masquer le raisonnement'], ['/steps <n>', 'étapes max par demande'], ['/theme <nom>', Object.keys(THEMES).join(' · ')],
+    ...(opts.stdio ? [] : [['/claude', 'Claude Code avec ton compte France Student : la commande à lancer dans un autre terminal']]),   // masquée du panneau (absente de SLASH)
     ['/clear', 'effacer l\'écran'], ['/quit', 'quitter'],
     ['!<commande>', 'exécuter une commande shell directement (sans le modèle)'], ['\\ en fin de ligne', 'continuer sur la ligne suivante'],
 ];
@@ -789,6 +797,8 @@ async function command(line) {
       return println(c.dim(`\n  Tout l'historique : https://github.com/0xBlxck/fs-cli/releases · /update pour mettre à jour\n`));
     }
     case '/help': case '/?': return help();
+    case '/claude':                                                  // Claude Code a besoin du terminal entier : il se lance à côté, pas ici
+      return println(c.dim('  Dans un autre terminal, ouvert dans ton projet : ') + c.accent('fs-cli claude') + c.dim('  (passerelle seule : fs-cli gateway)'));
     case '/clear': input.clearScreen(); return banner();
     case '/status': return status();
     case '/update': case '/maj': return runUpdate();

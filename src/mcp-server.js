@@ -8,7 +8,8 @@ import path from 'node:path';
 import util from 'node:util';
 import readline from 'node:readline';
 import { TOKEN, VERSION, cfg, saveCfgKeys, setToken, FILES, ROOT, HOME_DIR } from './config.js';
-import { streamChat, fetchAgents, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat, isBrokenHistory, isLockedChat, withDocumentContents } from './api.js';
+import { FALLBACK_AGENTS } from './agents-table.js';               // modèles connus si /chats/agents ne répond pas (mêmes valeurs que cli.js)
+import { streamChat, fetchAgents, fetchAgentsFull, requestJson, lastMessageImages, fetchApiFile, setProjectOverride, fetchChatsList, listFsProjects, uploadFile, fetchChat, isBrokenHistory, isLockedChat, withDocumentContents } from './api.js';
 import { fetchUserUsage } from './account.js';
 import { sensitivePathReason } from './permissions.js';
 import { newSid, tag, lastReset, createdToday, DAILY_LIMIT } from './chats.js';
@@ -19,12 +20,6 @@ import * as ui from './ui.js';
 export const PROTOCOL_VERSION = '2025-06-18';
 const SUPPORTED_VERSIONS = [PROTOCOL_VERSION, '2025-03-26', '2024-11-05'];
 export const SERVER_NAME = 'france-student';
-
-// modèles connus si /chats/agents ne répond pas (mêmes valeurs que cli.js)
-const FALLBACK_AGENTS = {
-  '-1002': 'GPT-6 Luna', '-1003': 'GPT-6.1 Sol', '-1004': 'GPT-6 Astra',
-  '-2001': 'Claude Opus 5.5', '-2002': 'Claude Haiku 5.5', '-2003': 'Claude Sonnet 5.5', '-2005': 'Claude Fable 5.2',
-};
 
 const NO_TOKEN = 'Aucune clé de session France Student n\'est configurée pour FS-CLI. ' +
   'Lance « fs-cli » une fois dans un terminal pour te connecter (assistant de connexion), puis rappelle l\'outil (inutile de redémarrer l\'application de l\'agent).';
@@ -270,7 +265,7 @@ export function createMcpServer(deps = {}) {
     },
     stream: streamChat,
     fetchAgents,
-    fetchAgentsFull: async () => (await requestJson('GET', '/chats/agents').catch(() => ({}))).data,   // { data: [...] } déballé
+    fetchAgentsFull,                                                   // liste ModelDto (tableau), null si indisponible
     fetchApiFile,
     listChats: n => fetchChatsList(n),
     listProjects: listFsProjects,
