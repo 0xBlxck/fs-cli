@@ -132,6 +132,8 @@ export const spinner = {
     sp.timer = setInterval(draw, 90);
   },
   label(l) { if (sp) { sp.label = l; sink?.event?.('spinner', { label: l }); } },
+  /** activité en direct : met à jour l'étiquette, ou relance l'indicateur s'il a été arrêté par du texte (le modèle écrit encore) */
+  show(l) { if (sp) this.label(l); else this.start(l); },
   stop() {
     if (!sp) return;
     clearInterval(sp.timer); sp = null;

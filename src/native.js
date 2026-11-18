@@ -61,12 +61,22 @@ async function execNative(S, call, io) {
 /** titre d'un document du site utilisable comme fichier du dossier de travail (« carla_env.py », « src/app.js ») ; sinon null */
 export function documentFileName(d) {
   let t = String(d?.title || '').trim().replace(/^[`"'«\s]+|[`"'»\s]+$/g, '');
-  const head = t.match(/^(\S+\.[A-Za-z0-9]{1,10})\s+[—–\-:|·]\s+\S/);   // « index.html — Nébula » → index.html
-  if (head) t = head[1];
+  // « index.html — Nébula » ou « OFFGRID — index.html » → index.html (la partie qui ressemble à un nom de fichier)
+  const parts0 = t.split(/\s+[—–\-:|·]\s+/);
+  if (parts0.length > 1) { const hit = parts0.find(p => /^[^\s]+\.[A-Za-z0-9]{1,10}$/.test(p.trim())); if (hit) t = hit.trim(); }
   if (!t || t.length > 200 || path.isAbsolute(t) || /^[A-Za-z]:/.test(t)) return null;
   const parts = t.split(/[\\/]+/);
   if (parts.some(p => !p || p === '..' || p === '.' || /[<>:"|?*\x00-\x1f]/.test(p))) return null;
   return /\.[A-Za-z0-9]{1,10}$/.test(parts.at(-1)) ? parts.join('/') : null;
+}
+
+/** page HTML du site sans nom de fichier (« ORBIT — Studio créatif ») : index.html si libre, sinon un nom tiré du titre */
+export function htmlDocumentName(d, root) {
+  const html = /^html?$/i.test(String(d?.kind || '')) || /^\s*<!doctype html|^\s*<html[\s>]/i.test(String(d?.content || ''));
+  if (!html) return null;
+  if (root && !fs.existsSync(path.join(root, 'index.html'))) return 'index.html';
+  const slug = String(d?.title || 'page').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'page';
+  return `${slug}.html`;
 }
 
 /** document qui n'est pas un fichier (« Rapport », mise à jour sans contenu…) : montré dans le terminal, sinon l'utilisateur ne le voit nulle part */
@@ -84,7 +94,7 @@ function showDocument(d) {
  */
 async function takeDocuments(S, docs, io) {
   for (const d of docs) {
-    const name = documentFileName(d);
+    const name = documentFileName(d) || htmlDocumentName(d, io.root);
     if (!name || typeof d.content !== 'string') {
       showDocument(d);
       S.notes.push(`Le document « ${d.title || 'sans titre'} » est resté dans le panneau de documents du site, que l'utilisateur ne voit pas ici. Pour un fichier, utilise write_file ou edit_file dans le dossier de travail.`);
@@ -96,6 +106,53 @@ async function takeDocuments(S, docs, io) {
       ? `Ton document « ${d.title} » (panneau de documents du site) a été écrit sur le PC de l'utilisateur dans ${name}. Pour les fichiers, utilise directement write_file et edit_file : l'utilisateur ne voit pas ce panneau.`
       : `Ton document « ${d.title} » n'a pas été écrit sur le PC (${String(r.output || '').slice(0, 200)}). Pour les fichiers, utilise write_file et edit_file.`);
   }
+}
+
+// ── Affichage pendant que le modèle travaille ─────────────────────────────────────────────────────────────
+// Marqueurs de citation de la recherche web (caractères privés « cite turn…search1 ») : jamais affichés.
+export const cleanText = t => (t == null ? t : String(t).replace(/\uE200[^\uE201]*\uE201/g, '').replace(/[\uE000-\uF8FF]/g, '').replace(/([^\n\s])(- \[[ x~]\] )/g, '$1\n$2'));
+/** filtre du texte reçu morceau par morceau : citations retirées, « …HTML.- [x] étape » remis à la ligne (même coupé entre deux morceaux) */
+export function textCleaner() {
+  let inCite = false, hold = '';
+  const push = d => {
+    let out = '';
+    for (const ch of String(d || '')) {
+      if (ch === '\uE200') { inCite = true; continue; }
+      if (ch === '\uE201') { inCite = false; continue; }
+      if (inCite || (ch >= '\uE000' && ch <= '\uF8FF')) continue;
+      out += ch;
+    }
+    let t = (hold + out).replace(/([^\n\s])(- \[[ x~]\] )/g, '$1\n$2');
+    hold = t.slice(-6); return t.slice(0, -6);                         // les 6 derniers caractères attendent la suite (« u.- [x] » coupé n'importe où)
+  };
+  const flush = () => { const t = hold.replace(/([^\n\s])(- \[[ x~]\] )/g, '$1\n$2'); hold = ''; return t; };
+  return { push, flush };
+}
+// ce que fait le modèle, montré en direct (comme le site : « 31 sites consultés », « Exécution de createDocument 19 s »)
+const WRITING = { createDocument: 'le modèle écrit un document', updateDocument: 'le modèle modifie un document', write_file: 'le modèle écrit un fichier', edit_file: 'le modèle prépare une modification', run_command: 'le modèle prépare une commande', imageGeneration: 'génération de l\'image', image_generation: 'génération de l\'image' };
+function activityTracker() {
+  let fn = null, chars = 0, last = 0;
+  const fmt = n => (n >= 1000 ? (n / 1000).toFixed(1).replace('.', ',') + 'k' : String(n));
+  return (type, d) => {
+    if (/^response\.web_search_call\.(in_progress|searching)$/.test(type)) return ui.spinner.show('recherche sur le web…');
+    const it = d?.item || {};
+    if (type === 'response.output_item.added' && it.type === 'reasoning') return;   // réflexion : l'indicateur affiche déjà un verbe d'attente
+    if (type === 'response.output_item.done' && it.type === 'web_search_call') {
+      const a = it.action || {};
+      const q = a.query || (Array.isArray(a.queries) ? a.queries[0] : '') || '';
+      const n = Array.isArray(a.sources) ? a.sources.length : 0;
+      ui.toolNote(`⌕ recherche web${q ? ` : « ${String(q).slice(0, 80)} »` : ''}${n ? ` · ${n} source${n > 1 ? 's' : ''}` : ''}`);
+      return ui.spinner.show('réflexion…');
+    }
+    if (type === 'response.output_item.added' && it.type === 'function_call') { fn = it.name || 'outil'; chars = 0; last = 0; return ui.spinner.show(WRITING[fn] || `le modèle prépare ${fn}`); }
+    if (type === 'response.function_call_arguments.delta' && fn) {
+      chars += String(d.delta || '').length;
+      const now = Date.now(); if (now - last < 250) return; last = now;   // pas plus de 4 mises à jour par seconde
+      return ui.spinner.show(`${WRITING[fn] || `le modèle prépare ${fn}`} · ${fmt(chars)} caractères`);
+    }
+    if (type === 'response.output_item.done' && it.type === 'function_call') { fn = null; return ui.spinner.show('réflexion…'); }
+    if (type === 'response.image_generation_call.generating' || type === 'response.image_generation_call.in_progress') return ui.spinner.show('génération de l\'image…');
+  };
 }
 
 /** Tour complet : message → (appels d'outils → résultats)* → réponse finale */
@@ -126,6 +183,8 @@ export async function runNative(S, userText, opts) {
   for (; steps < maxSteps; steps++) {
     if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     const md = new ui.MdStream({ collapse: false });
+    const clean = textCleaner();                                       // citations du web retirées, listes de tâches remises à la ligne
+    const activity = activityTracker();                                // « Recherche sur le web… », « Le modèle écrit un document · 12 400 caractères »…
     let thinkBuf = '';
     ui.spinner.start(results ? 'réflexion…' : 'réflexion…');
     let res;
@@ -134,7 +193,8 @@ export async function runNative(S, userText, opts) {
         agentId: S.agentId, chatId: S.chatId, signal, webSearch: cfg.webSearch, register: { sid: S.sid, role: 'main' },
         clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results, files: resultFiles } : { content, files: S.pendingFileIds }),   // images : avec le message, ou avec les résultats (captures d'outils)
         onChat: id => { if (!S.chatId) S.chatId = id; },
-        onText: d => md.push(d),
+        onText: d => { const t = clean.push(d); if (t) md.push(t); },
+        onEvent: (type, d) => activity(type, d),
         onReasoning: d => {
           ui.rememberThinking(d);                                       // gardée pour Ctrl+O
           if (!cfg.showThinking) return;
@@ -143,6 +203,7 @@ export async function runNative(S, userText, opts) {
         },
       });
     } finally { ui.spinner.stop(); }
+    { const t = clean.flush(); if (t) md.push(t); }
     md.finish(); nReq++;
     const u = res.usage;
     let reqIn = 0;
@@ -151,7 +212,7 @@ export async function runNative(S, userText, opts) {
       if (/prompt|input/i.test(k)) { tokensIn += v; reqIn += v; } else if (/candidate|compl|output/i.test(k)) tokensOut += v;
     }
     if (reqIn) S.lastPromptTokens = reqIn;                              // taille du contexte envoyé à cette requête (résumé auto au-delà du seuil)
-    visible = res.text?.trim() || visible;
+    visible = cleanText(res.text)?.trim() || visible;
     if (res.sawImage && S.chatId) {                                     // image générée par France Student : enregistrée sur le PC et montrée
       const imgs = res.images?.length ? res.images : await lastMessageImages(S.chatId).catch(() => []);
       for (const im of imgs) {

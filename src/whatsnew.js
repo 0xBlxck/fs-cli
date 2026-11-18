@@ -1,6 +1,12 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.47.1', items: [
+    'On voit le modèle travailler : « recherche sur le web… », « le modèle écrit un document · 12,4k caractères »',
+    'Recherches web affichées (requête et nombre de sources), marqueurs « citeturn… » retirés du texte',
+    'Listes de tâches qui se collaient (« …aperçu.- [x] étape ») remises à la ligne',
+    'Site créé par le modèle : « OFFGRID — index.html » écrit dans index.html, page sans nom → index.html',
+  ] },
   { version: '3.47.0', items: [
     'Un fichier existant jamais lu n\'est plus écrasé à l\'aveugle : le modèle le lit d\'abord',
     'Recherche plus intelligente : casse ignorée en minuscules, .gitignore respecté, plus de blocage',

@@ -52,7 +52,7 @@ export async function uploadFile(buffer, filename, mime = 'application/octet-str
   return String(id);
 }
 
-function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning, onChat, register, clientTools, toolResults, files }) {
+function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning, onChat, onEvent, register, clientTools, toolResults, files }) {
   return new Promise((resolve, reject) => {
     // Outils client : nouveau chat → POST /chats/stream (initialContent + clientTools) ; chat existant → POST /chats/{id} (content + clientTools / toolResults)
     const native = !!(clientTools || toolResults);
@@ -115,6 +115,7 @@ function once({ agentId, chatId, content, webSearch, signal, onText, onReasoning
         if (!pl || pl === '[DONE]') return;
         let d; try { d = JSON.parse(pl); } catch { return; }
         const type = d.type || ev;
+        try { onEvent?.(type, d); } catch {}                              // activité en direct (recherche web, outils du site…)
         if (/image_?generation/i.test(type) || d.item?.type === 'image_generation_call') sawImage = true;   // image générée côté serveur
         if (d.chat_id) {
           seenChatId = d.chat_id;

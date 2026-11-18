@@ -261,3 +261,31 @@ test('refus de Claude au 1er message, ou de GPT plus tard dans la conversation :
   assert.equal(f2.st.reqs[1].chatId, 'conv-g');
   assert.match(f2.st.reqs[1].content, /outils client officiels de France Student/);
 });
+
+test('affichage : citations de la recherche web retirées, listes de tâches collées remises à la ligne (même coupées entre deux morceaux)', async () => {
+  const { textCleaner, cleanText } = await import('../src/native.js');
+  const c = textCleaner();
+  const parts = ['Je pars sur OFFGRID. ', 'citeturn546988', 'search1', 'Fin.\n- [~] Poser une direction.\n- [ ] Livrer le site.', '- ', '[x] Poser une direction.'];
+  const out = parts.map(p => c.push(p)).join('') + c.flush();
+  assert.doesNotMatch(out, /cite|turn546988|search1|[-]/);
+  assert.match(out, /Livrer le site\.\n- \[x\] Poser/);
+  assert.equal(cleanText('acitexb.- [ ] c'), 'ab.\n- [ ] c');
+  // coupé à n'importe quel endroit (vu en vrai : « aperçu.- [x] Choisir… » restait collé)
+  const src = '- [ ] Te livrer le site dans l’aperçu.- [x] Choisir la direction.';
+  for (let i = 1; i < src.length; i++) {
+    const k = textCleaner();
+    const o = k.push(src.slice(0, i)) + k.push(src.slice(i)) + k.flush();
+    assert.match(o, /aperçu\.\n- \[x\] Choisir/, `coupure à ${i}`);
+  }
+});
+
+test('documents du site : « OFFGRID — index.html » → index.html ; page HTML sans nom → index.html (ou un nom tiré du titre)', async () => {
+  const { documentFileName, htmlDocumentName } = await import('../src/native.js');
+  assert.equal(documentFileName({ title: 'OFFGRID — index.html' }), 'index.html');
+  assert.equal(documentFileName({ title: 'ORBIT — Studio créatif' }), null);
+  const { dir } = mk();
+  assert.equal(htmlDocumentName({ title: 'ORBIT — Studio créatif', kind: 'html', content: '<!DOCTYPE html>' }, dir), 'index.html');
+  fs.writeFileSync(path.join(dir, 'index.html'), 'x');
+  assert.equal(htmlDocumentName({ title: 'ORBIT — Studio créatif', kind: 'html', content: '<!DOCTYPE html>' }, dir), 'orbit-studio-creatif.html');
+  assert.equal(htmlDocumentName({ title: 'Notes', kind: 'text', content: 'bonjour' }, dir), null);
+});
