@@ -3,7 +3,7 @@
 /** texte tapé par l'utilisateur, sans ce contexte (repères de /rewind, message remis dans la saisie) */
 export function stripEditorContext(t) {
   let s = String(t || '');
-  const m = s.match(/^\[Contexte VS Code :[^\]\n]*\]\n/);
+  const m = s.match(/^\[Contexte VS Code :[^\n]*\]\n/);   // chemin avec « [ ] » (Next.js app/[id]/page.tsx) accepté
   if (!m) return s;
   s = s.slice(m[0].length);
   const f = s.match(/^(```|~~~~)[^\n]*\n[\s\S]*?\n\1\n/);

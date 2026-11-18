@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync, spawn } from 'node:child_process';
 
-import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone } from './src/config.js';
+import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone, unmarkSessionsGone } from './src/config.js';
 import { fetchChatUsage } from './src/account.js';
 import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
@@ -539,17 +539,23 @@ async function liveSessions(limit = 50, onQuick) {
   const seen = new Set(), remote = [];
   const add = (arr, proj) => { for (const x of Array.isArray(arr) ? arr : []) if (x?.id && !seen.has(x.id)) { seen.add(x.id); remote.push({ chatId: x.id, raw: String(x.title || ''), title: clean(x.title), agentId: x.agent?.id ?? x.agentId ?? S.agentId, cwd: '', project: proj?.name || '', projectId: proj?.id || x.projectId || '', remote: true, updatedAt: Date.parse(x.lastMessageAt || x.updatedAt || x.createdAt) || 0, ctxSent: true }); } };
   const chatsOf = j => (Array.isArray(j) ? j : j?.chats);
-  const [mine, projects] = await Promise.all([within(fetchChatsList(50), 6000, null), within(listFsProjects(), 6000, null)]);
+  // null = PAS DE RÉPONSE (réseau coupé, clé expirée, panne) ≠ liste vide : fetchChatsList renverrait [] dans les deux cas
+  const [mine, projects] = await Promise.all([within(requestJson('GET', '/chats?limit=50', undefined, 6000).then(r => (r.status >= 200 && r.status < 300 ? (Array.isArray(r.data) ? r.data : r.data?.chats || []) : null)), 6000, null), within(listFsProjects(), 6000, null)]);
   add(mine);
+  if (mine !== null) {                                                // masquées à tort avant la v3.46.1 (ouvertes hors ligne) : présentes dans la liste du site → rendues
+    const back = loadSessions().filter(s => s.gone && seen.has(s.chatId)).map(s => s.chatId);
+    if (back.length) { unmarkSessionsGone(back); list.push(...loadSessions().filter(s => back.includes(s.chatId))); }
+  }
   const some = (projects || []).filter(p => p?.id).slice(0, 15);      // une conversation rangée dans un projet n'apparaît plus dans la liste générale du site
   const toCheck = list.filter(s => !seen.has(s.chatId)).slice(0, 15); // les autres : présentes dans les listes du compte = elles existent
   const [projChats, res] = await Promise.all([
     Promise.all(some.map(p => within(requestJson('GET', `/projects/${encodeURIComponent(p.id)}/chats`).then(r => r.data), 6000, null))),
-    Promise.all(toCheck.map(s => within(fetchChatUsage(s.chatId).then(r => !!r), 4000, null))),
+    // une conversation n'est « supprimée » QUE si France Student répond 404 ; toute autre erreur = on ne sait pas (null)
+    Promise.all(toCheck.map(s => within(requestJson('GET', `/chats/${encodeURIComponent(s.chatId)}/usage`, undefined, 4000).then(r => (r.status === 404 ? false : r.status >= 200 && r.status < 300 ? true : null)), 4000, null))),
   ]);
   projChats.forEach((j, i) => add(chatsOf(j), some[i]));
   if (projects) lastProjects = some.map(p => ({ id: p.id, name: p.name || '(sans nom)' }));
-  const answered = mine !== null || res.some(r => r !== null && r !== undefined);
+  const answered = mine !== null || res.some(r => r === true);
   const gone = new Set(answered ? toCheck.filter((s, i) => res[i] === false && !seen.has(s.chatId)).map(s => s.chatId) : []);   // seulement un « n'existe pas » net
   if (gone.size) markSessionsGone([...gone]);
   const local = list.filter(s => !gone.has(s.chatId)).map(s => { const r = remote.find(x => x.chatId === s.chatId); return r?.projectId && !s.projectId ? { ...s, project: r.project, projectId: r.projectId } : s; });
@@ -898,7 +904,7 @@ async function command(line) {
       let pick = null;
       if (/^\d+$/.test(arg)) pick = marks[parseInt(arg, 10) - 1] || null;
       else if (input.select && interactive) {
-        const idx = await input.select({ title: 'Revenir à l\'état des fichiers d\'avant quelle demande ?', detail: 'Les fichiers modifiés par le modèle depuis cette demande reprennent leur ancien contenu ; ceux qu\'il a créés partent dans la corbeille du CLI. Les effets des commandes (npm install…) ne sont pas annulés.', options: [...marks.slice(0, 9).map(label), 'Annuler'], defaultIndex: 0 });
+        const idx = await input.select({ title: 'Revenir à l\'état des fichiers d\'avant quelle demande ?', detail: 'Les fichiers modifiés par le modèle depuis cette demande reprennent leur ancien contenu ; ceux qu\'il a créés partent dans la corbeille du CLI. Les effets des commandes (npm install…) ne sont pas annulés.', options: [...marks.slice(0, 9).map(label), 'Annuler'], defaultIndex: Math.min(9, marks.length) });   // « Annuler » présélectionné : revenir en arrière doit être un choix explicite
         pick = idx == null || idx >= Math.min(9, marks.length) ? null : marks[idx];
       } else { marks.slice(0, 9).forEach((m, i) => println(`  ${c.accent(String(i + 1))}  ${label(m)}`)); return println(c.dim('\n  /rewind <n°> pour revenir à ce point\n')); }
       if (!pick) return println(c.dim('  rien n\'a été annulé'));
@@ -1087,8 +1093,13 @@ async function chatTurn(text, { keepLast = false } = {}) {
     await maybeAutoCompact(S, turnAbort.signal);                       // contexte plein → résumé + nouvelle conversation
     const ex = extractImagePaths(text, S.images.length);               // image glissée-déposée (chemin collé) → [Image #n]
     if (ex.paths.length) { text = ex.text; for (const p of ex.paths) if (!S.images.includes(p)) S.images.push(p); }
-    const dir = detectTargetDir(text);                                // « … dans C:\Users\moi\Downloads\SITE » → les fichiers y seront écrits
-    if (dir && dir !== S.targetDir) { S.targetDir = dir; println(c.dim(`  ＋ dossier cible : ${dir}  (/target pour voir ou effacer)`)); }
+    // « … dans C:\Users\moi\Downloads\SITE » → les fichiers y seront écrits. Seulement d'après CE QUE TU AS TAPÉ : le fichier ouvert ou la
+    // sélection de l'éditeur ne changent plus le dossier en silence (audit 17/11) ; jamais un dossier trop large ; un changement est annoncé.
+    const dir = detectTargetDir(stripEditorContext(text));
+    if (dir && dir !== S.targetDir && !isBroadFolder(dir)) {
+      const was = S.targetDir; S.targetDir = dir;
+      println(was ? c.yellow(`  ＋ dossier cible changé : ${was} → ${dir}  (/target pour voir ou effacer)`) : c.dim(`  ＋ dossier cible : ${dir}  (/target pour voir ou effacer)`));
+    }
     let message = buildMessage(text);
     if (S.images.length) message = await sendImages(message);          // images : envoyées sur Files v2 puis jointes au message
     if (cfg.engine === 'chat' && cfg.fileHint && FILE_INTENT.test(text)) {

@@ -1,6 +1,14 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.46.1', items: [
+    'Recherche dans les fichiers : les .env et clés ne sont plus jamais lus ni envoyés',
+    'Fichiers en Latin-1 / Windows-1252 (CSV d\'Excel…) et UTF-16 modifiés sans abîmer les accents',
+    'Menus : « 10 » choisit bien l\'option 10 (Entrée valide), /rewind présélectionne « Annuler »',
+    'Deux confirmations en même temps (/team) ne bloquent plus le CLI',
+    'Hors ligne, /resume ne cache plus de conversations (celles cachées à tort réapparaissent)',
+    'IDE : le fichier ouvert ne change plus le dossier où le modèle écrit',
+  ] },
   { version: '3.46.0', items: [
     'Mac : coller une image marche (Ctrl+V), photos .heic converties, couleurs correctes dans Terminal',
     'Mac/Linux : plus de blocage quand une commande lance un sous-processus ; serveurs bien arrêtés',

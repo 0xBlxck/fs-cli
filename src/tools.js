@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createLive, c } from './ui.js';
 import { safeFetch, webSearch, formatSearchResults } from './web.js';
 import { SEARCH_KEY, SEARCH_PROVIDER } from './config.js';
+import { sensitivePathReason } from './permissions.js';
 
 export const IS_WIN = process.platform === 'win32';
 
@@ -460,6 +461,25 @@ function* walk(root, { maxFiles = 60000, includeDirs = false, allow = null } = {
 }
 
 function looksBinary(buf) { return buf.subarray(0, 4096).includes(0); }
+/**
+ * Texte d'un fichier avec son encodage d'origine → { text, enc } ; null si binaire.
+ * enc : 'utf8', 'utf8bom', 'utf16le' (BOM FF FE, souvent écrit par PowerShell 5.1), 'latin1' (Windows-1252 / ISO-8859-1 :
+ * CSV d'Excel en français, .bat, vieux .php…). Le Latin-1 fait un aller-retour octet pour octet : rien n'est abîmé.
+ */
+export function decodeText(buf) {
+  if (buf[0] === 0xFF && buf[1] === 0xFE) return { text: buf.subarray(2).toString('utf16le'), enc: 'utf16le' };
+  if (looksBinary(buf)) return null;
+  if (buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return { text: buf.subarray(3).toString('utf8'), enc: 'utf8bom' };
+  try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(buf), enc: 'utf8' }; }
+  catch { return { text: buf.toString('latin1'), enc: 'latin1' }; }
+}
+/** texte → octets dans l'encodage d'origine (voir decodeText) */
+export function encodeText(text, enc) {
+  if (enc === 'utf16le') return Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(text, 'utf16le')]);
+  if (enc === 'utf8bom') return Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from(text, 'utf8')]);
+  if (enc === 'latin1') return Buffer.from(text, 'latin1');
+  return Buffer.from(text, 'utf8');
+}
 
 /**
  * Remplacement de edit_file, sans rien écrire : { error } · { idx } (introuvable ou ambigu : idx vide ou > 1 sans replace_all) · { idx, updated }.
@@ -496,7 +516,7 @@ export function proposedChange(name, a, cwd) {
       buf = fs.readFileSync(fp);
     } catch { if (name === 'edit_file') return null; }            // edit_file sur un fichier absent : l'outil échouera, rien à montrer
     if (buf && looksBinary(buf)) return null;
-    const before = buf ? buf.toString('utf8').replace(/^﻿/, '') : '';
+    const before = buf ? (decodeText(buf)?.text ?? '') : '';
     let after;
     if (name === 'write_file') {
       if (typeof a.content !== 'string') return null;
@@ -635,10 +655,9 @@ export const TOOLS = {
         return ok(`[Fichier inchangé depuis ta lecture précédente dans cette conversation (${rel(fp, ctx.cwd)}, à partir de la ligne ${rStart}) : contenu identique à ce que tu as déjà reçu, non renvoyé pour économiser le contexte. Si tu ne l'as plus en mémoire, relance exactement la même lecture : il te sera renvoyé en entier.]`, 'inchangé depuis ta dernière lecture');
       }
       if (ctx.readCache) { ctx.readCache.set(rKey, { hash: rHash, skipped: false }); if (ctx.readCache.size > 400) ctx.readCache.delete(ctx.readCache.keys().next().value); }
-      let text;
-      if (buf[0] === 0xFF && buf[1] === 0xFE) text = buf.toString('utf16le').slice(1);
-      else if (looksBinary(buf)) return err(`Fichier binaire (${human(st.size)}) — impossible de l'afficher en texte.`);
-      else { text = buf.toString('utf8'); if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); }
+      const dec = decodeText(buf);
+      if (!dec) return err(`Fichier binaire (${human(st.size)}) — impossible de l'afficher en texte.`);
+      const text = dec.text;
       const lines = text.split(/\r?\n/);
       if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
       const start = Math.max(1, a.offset || 1), max = Math.max(1, a.limit || 2000);
@@ -697,8 +716,12 @@ export const TOOLS = {
       const fp = resolveP(a.path, ctx.cwd);
       const stale = staleReason(fp); if (stale) return err(stale);
       let buf; try { buf = fs.readFileSync(fp); } catch { return err(`Fichier introuvable: ${fp} (pour créer un fichier, utilise write_file)`); }
-      if (looksBinary(buf)) return err('Fichier binaire.');
-      let text = buf.toString('utf8'); const hadBom = text.charCodeAt(0) === 0xFEFF; if (hadBom) text = text.slice(1);
+      const dec = decodeText(buf);
+      if (!dec) return err('Fichier binaire.');
+      const text = dec.text;
+      if (dec.enc === 'latin1' && /[^\u0000-\u00ff]/.test(a.new_string)) {
+        return err(`${rel(fp, ctx.cwd)} est encodé en Windows-1252/Latin-1 : new_string contient un caractère qui n'existe pas dans cet encodage (ex. « ${(a.new_string.match(/[^\u0000-\u00ff]/) || [''])[0]} »). Utilise seulement des caractères latins simples (é, è, à, ç… marchent).`);
+      }
       const r = applyEdit(text, a);
       if (r.error) return err(r.error);
       const { idx } = r;
@@ -714,7 +737,7 @@ export const TOOLS = {
       }
       const { updated } = r;
       ctx.undo?.push({ path: fp, prev: buf });
-      writeAtomic(fp, (hadBom ? '﻿' : '') + updated);
+      writeAtomic(fp, encodeText(updated, dec.enc));                    // encodage d'origine conservé (Latin-1, UTF-16, BOM)
       const count = a.replace_all ? idx.length : 1;
       return { ok: true, output: `Édité ${fp} (${count} remplacement${count > 1 ? 's' : ''})`, diff: [text, updated], display: `${count} remplacement${count > 1 ? 's' : ''}` };   // fichier entier avant / après : vrais numéros de ligne
     },
@@ -799,15 +822,17 @@ export const TOOLS = {
       const ctxN = Math.min(5, Math.max(0, a.context || 0));
       const test = a.glob ? makeGlobTest(a.glob) : null;
       const files = fs.statSync(root).isFile() ? [{ full: root }] : walk(root, { allow: a.glob ? globTargets(a.glob) : null });
-      const out = []; let count = 0, nfiles = 0; const MAX = 250;
+      const out = []; let count = 0, nfiles = 0; const MAX = 250; const skipped = [];
       outer: for (const f of files) {
         const r = fs.statSync(root).isFile() ? path.basename(f.full) : path.relative(root, f.full);
         if (test && !test(r)) continue;
+        // fichiers sensibles (.env, clés, identifiants…) : jamais fouillés ici ; read_file, lui, demande confirmation (audit 17/11 : search_files renvoyait les secrets)
+        if (sensitivePathReason(f.full)) { skipped.push(rel(f.full, ctx.cwd)); continue; }
         let st; try { st = fs.statSync(f.full); } catch { continue; }
         if (st.size > 2_000_000) continue;
         let buf; try { buf = fs.readFileSync(f.full); } catch { continue; }
         if (looksBinary(buf)) continue;
-        const lines = buf.toString('utf8').split(/\r?\n/);
+        const lines = (decodeText(buf)?.text ?? '').split(/\r?\n/);
         let hit = false;
         for (let i = 0; i < lines.length; i++) {
           if (!re.test(lines[i])) continue;
@@ -822,6 +847,7 @@ export const TOOLS = {
           if (count >= MAX) { out.push(`[… arrêt à ${MAX} correspondances]`); break outer; }
         }
       }
+      if (skipped.length) out.push(`[${skipped.length} fichier(s) sensible(s) non fouillé(s) : ${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? '…' : ''} ; lis-le avec read_file si besoin (confirmation demandée)]`);
       return ok(out.length ? out.join('\n') : '(aucune correspondance)', a.files_only ? `${nfiles} fichiers` : `${count} correspondance${count > 1 ? 's' : ''} dans ${nfiles} fichier${nfiles > 1 ? 's' : ''}`);
     },
   },

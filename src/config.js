@@ -130,6 +130,13 @@ export function markSessionsGone(ids) {
   try { fs.writeFileSync(FILES.sessions, JSON.stringify(list, null, 1), { mode: 0o600 }); } catch {}
 }
 
+/** conversations masquées à tort (elles existent encore sur le site) : de nouveau visibles */
+export function unmarkSessionsGone(ids) {
+  const set = new Set(ids); if (!set.size) return;
+  const list = loadSessions().map(x => (set.has(x.chatId) && x.gone ? (({ gone, ...rest }) => rest)(x) : x));
+  try { fs.writeFileSync(FILES.sessions, JSON.stringify(list, null, 1), { mode: 0o600 }); } catch {}
+}
+
 export function upsertSession(s, { touch = true } = {}) {
   let list = loadSessions();
   const i = list.findIndex(x => x.chatId === s.chatId);

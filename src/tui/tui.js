@@ -90,7 +90,12 @@ export class Tui {
   echo(text) { this.print(c.dim('> ') + text.split('\n').join('\n  ') + '\n'); }   // ta demande, réaffichée comme dans Claude Code
 
   // ── API asynchrone : question d'une ligne, menu ─────────────────────────────
+  // Une seule question ou un seul menu à la fois : les autres attendent leur tour (audit 17/11 : avec /team en parallèle,
+  // deux confirmations simultanées écrasaient la 1re, dont l'agent attendait pour toujours → CLI bloqué)
+  busyUi() { return !!(this.select_ || this.ask); }
+  nextUi() { const n = (this.uiQueue || []).shift(); if (n) n(); }
   askLine(label) {
+    if (this.busyUi()) return new Promise(res => { (this.uiQueue ||= []).push(() => this.askLine(label).then(res)); });
     return new Promise(resolve => {
       this.askSaved = { buf: this.buf, cur: this.cur };
       this.buf = ''; this.cur = 0; this.sug = { items: [], idx: -1, start: 0 };
@@ -102,20 +107,32 @@ export class Tui {
     const a = this.ask; this.ask = null;
     this.buf = this.askSaved?.buf || ''; this.cur = this.askSaved?.cur || 0; this.askSaved = null;
     this.render(); a.resolve(value);
+    this.nextUi();
   }
 
   /**
    * menu à flèches ; renvoie l'index choisi ou null (Échap).
    * Avec tabs (ex. ['Ce dossier', 'Tous', 'Projets']) : une barre d'onglets, ← → change d'onglet et renvoie { tab: n }.
    */
-  select({ title, detail = '', options, defaultIndex = 0, tabs = null, tab = 0 }) {
+  select(o) {
+    if (this.busyUi()) return new Promise(res => { (this.uiQueue ||= []).push(() => this.select(o).then(res)); });
+    const { title, detail = '', options, defaultIndex = 0, tabs = null, tab = 0 } = o;
     return new Promise(resolve => {
       this.select_ = { title, detail, options, idx: defaultIndex, tabs, tab, resolve };
       this.render();
       this.attention(true);
     });
   }
-  finishSelect(v) { const s = this.select_; this.select_ = null; this.attention(false); this.render(); s.resolve(v); }
+  finishSelect(v) { const s = this.select_; clearTimeout(s?.numTimer); this.select_ = null; this.attention(false); this.render(); s.resolve(v); this.nextUi(); }
+  /** Ctrl+C : la question visible ET celles en attente répondent « non » (plus rien ne reste bloqué) */
+  cancelAllUi() {
+    const q = this.uiQueue || []; this.uiQueue = [];
+    if (this.select_) { const s = this.select_; clearTimeout(s.numTimer); this.select_ = null; this.attention(false); s.resolve(null); }
+    if (this.ask) { const a = this.ask; this.ask = null; this.buf = this.askSaved?.buf || ''; this.cur = this.askSaved?.cur || 0; this.askSaved = null; a.resolve(null); }
+    this.render();
+    // les demandes en file s'ouvrent puis sont annulées tout de suite (chacune résout null)
+    for (const n of q) { n(); this.cancelAllUi(); }
+  }
   /** l'agent attend une réponse : bip (la barre des tâches clignote si la fenêtre est en arrière-plan) + barre de progression orange dans Windows Terminal */
   attention(on) {
     if (!this.started) return;
@@ -341,8 +358,18 @@ export class Tui {
     }
     if (k.name === 'enter') return this.finishSelect(s.idx);
     if (k.name === 'escape') return this.finishSelect(null);
-    if (k.ctrl && k.name === 'c') { this.finishSelect(null); this.emit('interrupt'); return; }
-    if (k.name === 'text' && /^[1-9]$/.test(k.text) && +k.text <= s.options.length) return this.finishSelect(+k.text - 1);
+    if (k.ctrl && k.name === 'c') { this.cancelAllUi(); this.emit('interrupt'); return; }
+    if (k.name === 'text' && /^[0-9]$/.test(k.text)) {
+      // 9 options au plus : un chiffre valide tout de suite. Au-delà : le chiffre SÉLECTIONNE seulement (« 1 » puis « 0 » = option 10),
+      // Entrée valide (audit 17/11 : taper « 10 » validait l'option 1 — dans /rewind, ça annulait ton travail)
+      if (s.options.length <= 9) { if (k.text !== '0' && +k.text <= s.options.length) return this.finishSelect(+k.text - 1); return; }
+      clearTimeout(s.numTimer);
+      const num = (s.num || '') + k.text;
+      const n = +num;
+      if (n >= 1 && n <= s.options.length) { s.num = num; s.idx = n - 1; } else { s.num = k.text; if (+k.text >= 1) s.idx = +k.text - 1; }
+      s.numTimer = setTimeout(() => { s.num = ''; }, 900);
+      return this.render();
+    }
   }
 
   keySearch(k) {
@@ -430,7 +457,7 @@ export class Tui {
     if (this.buf) this.clearInput();
   }
   ctrlC() {
-    if (this.ask) { this.finishAsk(null); this.emit('interrupt'); return; }
+    if (this.ask) { this.cancelAllUi(); this.emit('interrupt'); return; }
     if (this.busy) return this.emit('interrupt');
     if (this.buf) return this.clearInput();
     const now = Date.now();

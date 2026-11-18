@@ -236,3 +236,41 @@ test('toutes les interfaces acceptent un événement qu\'elles ne connaissent pa
   assert.doesNotThrow(() => classic.on('instant', () => {}));
   classic.stop?.();
 });
+
+// ── audit 17/11 : menus de 10 options ou plus, et deux questions en même temps ──
+test('menu de 12 options : « 1 » puis « 0 » SÉLECTIONNE l\'option 10 sans valider ; Entrée valide', async () => {
+  const { tui, stdin } = make({ rows: 30 });
+  const p = tui.select({ title: 'Choix', options: Array.from({ length: 12 }, (_, i) => `option ${i + 1}`), defaultIndex: 11 });
+  stdin.emit('data', '1'); stdin.emit('data', '0');
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(tui.select_?.idx, 9, 'option 10 sélectionnée');
+  stdin.emit('data', '\r');
+  assert.equal(await p, 9);
+  tui.stop();
+});
+
+test('menu de 3 options : un chiffre valide tout de suite (comme avant)', async () => {
+  const { tui, stdin } = make();
+  const p = tui.select({ title: 'Choix', options: ['a', 'b', 'c'] });
+  stdin.emit('data', '2');
+  assert.equal(await p, 1);
+  tui.stop();
+});
+
+test('deux confirmations en même temps : la 2e attend son tour, aucune ne reste bloquée ; Ctrl+C annule tout', async () => {
+  const { tui, stdin } = make({ rows: 30 });
+  const p1 = tui.select({ title: 'Agent 1', options: ['Oui', 'Non'] });
+  const p2 = tui.select({ title: 'Agent 2', options: ['Oui', 'Non'] });
+  assert.equal(tui.select_.title, 'Agent 1');
+  stdin.emit('data', '1');
+  assert.equal(await p1, 0);
+  assert.equal(tui.select_?.title, 'Agent 2', 'la 2e question s\'ouvre ensuite');
+  stdin.emit('data', '2');
+  assert.equal(await p2, 1);
+  const p3 = tui.select({ title: 'A', options: ['x', 'y'] });
+  const p4 = tui.askLine('Nom ?');
+  stdin.emit('data', '\x03');
+  assert.equal(await p3, null); assert.equal(await p4, null);
+  assert.equal(tui.select_, null); assert.equal(tui.ask, null);
+  tui.stop();
+});
