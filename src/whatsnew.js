@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.48.1', items: [
+    '`fs-cli claude` : quand GPT-6 Astra met le site dans le panneau du site France Student, il est écrit dans le dossier demandé (ou le chemin cité par le modèle)',
+    'Plus de « C’est fait » quand l’écriture du fichier a été refusée : la passerelle dit ce qui n’a pas été écrit',
+  ] },
   { version: '3.48.0', items: [
     'Claude Code avec ton compte France Student : `fs-cli claude` (le modèle FS, les outils et l\'interface de Claude Code)',
     '`fs-cli gateway` : la passerelle seule, pour brancher Claude Code lancé à la main ou depuis VS Code',

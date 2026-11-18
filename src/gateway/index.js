@@ -366,8 +366,15 @@ export function createGateway(deps, opts = {}) {
     if (!fresh && !extras.toolResults && !u.text && u.results.length && conv.fs.state !== 'pending' && !extras.rewind && !staleNotes.length) {
       // fin de tour qui ne contient que des synthétiques (document écrit, lecture injectée) : FS n'attend rien
       conv.notes.push(...(extras.notes || []));
-      const names = (conv.fs.synthetic || []).filter(s => s.purpose === 'doc' && byId[s.ccId] && !byId[s.ccId].is_error).map(s => s.name);
-      localTurn(conv, reply, names.length ? `C'est fait : ${names.join(', ')} écrit.` : 'C\'est fait.');
+      const docs = (conv.fs.synthetic || []).filter(s => s.purpose === 'doc' && byId[s.ccId]);
+      const names = docs.filter(s => !byId[s.ccId].is_error).map(s => s.name);
+      // écriture refusée (permission, dossier hors projet…) : le dire, jamais « C'est fait » (vu en vrai avec -p)
+      const failed = docs.filter(s => byId[s.ccId].is_error).map(s => s.path || s.name);
+      const msg = [
+        names.length ? `C'est fait : ${names.join(', ')} écrit.` : '',
+        failed.length ? `Fichier non écrit (écriture refusée) : ${failed.join(', ')}. Le contenu reste dans le panneau du site France Student ; autorise l'écriture puis redemande.` : '',
+      ].filter(Boolean).join('\n') || 'C\'est fait.';
+      localTurn(conv, reply, msg);
       return { outcome: 'local', chatId: conv.chatId };
     }
     extras.images = await uploadImages(u.images);

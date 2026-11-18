@@ -362,6 +362,23 @@ test('(l) createDocument → Write synthétique → fin locale sans FS → note 
   checkInvariants(fake);
 });
 
+test('(l2) site du panneau sans nom : écrit dans le dossier de la demande ; écriture refusée → jamais « C\'est fait »', async t => {
+  const { fake, gw } = await setup(t, {
+    turns: [{ text: 'J’ai créé le site dans le panneau.', documents: [{ title: 'Astra — Site de démonstration', kind: 'code', content: '<!DOCTYPE html><html></html>' }] }],
+  });
+  const opt = { model: 'gpt-6-astra' };
+  const m = [user('ok vasy dans le dossier C:\\sites\\astra dev moi un site pour prouver que tu marche')];
+  const r1 = await call(gw, ccReq(m, opt));
+  const [w] = r1.sse.toolUses;
+  assert.equal(w.input.file_path, 'C:\\sites\\astra\\index.html');
+  m.push(asst(r1), results([w.id, 'Claude requested permissions to write to C:\\sites\\astra\\index.html, but you haven\'t granted it yet.', true]));
+  const r2 = await call(gw, ccReq(m, opt));
+  assert.doesNotMatch(r2.sse.text, /C'est fait/);
+  assert.match(r2.sse.text, /Fichier non écrit \(écriture refusée\) : C:\\sites\\astra\\index\.html/);
+  assert.equal(fake.sent.length, 1);
+  checkInvariants(fake);
+});
+
 test('(m) « File has not been read yet » → micro-tour local [Read, Edit] → un seul résultat envoyé à FS', async t => {
   const { fake, gw } = await setup(t, {
     turns: [{ text: 'Je corrige. ', toolCalls: [{ callId: 'call_1', name: 'edit_file', arguments: { path: 'a.txt', old_text: 'x', new_text: 'y' } }] }, 'Corrigé.'],

@@ -308,6 +308,37 @@ test('documents : fichier nommé → Write synthétique (id s|doc) ; HTML → in
   assert.equal(planDocuments([docs[1]], taken).uses.at(-1).input.file_path, 'C:\\proj\\orbit-studio-creatif.html');
 });
 
+test('documents : le chemin cité par GPT (« enregistre-le sous C:\\…\\index.html », vu en vrai) l\'emporte sur le dossier de travail', () => {
+  const site = { title: 'Site interactif', kind: 'code', content: '<!DOCTYPE html><html></html>' };
+  const said = 'Il est disponible dans le panneau : enregistre-le sous `C:\\Users\\moi\\Downloads\\claudetest\\index.html`, puis ouvre-le.';
+  const { ctx } = ctxFor(WIN);
+  assert.equal(planDocuments([site], { ...ctx, text: said }).uses.at(-1).input.file_path, 'C:\\Users\\moi\\Downloads\\claudetest\\index.html');
+  // fichier nommé « index.html » : même dossier que le chemin cité
+  assert.equal(planDocuments([{ ...site, title: 'index.html' }], { ...ctx, text: said }).uses.at(-1).input.file_path, 'C:\\Users\\moi\\Downloads\\claudetest\\index.html');
+  // deux pages HTML citées : ambigu → comportement d'avant (dossier de travail)
+  const two = said + ' Ou bien C:\\autre\\page.html.';
+  assert.equal(planDocuments([site], { ...ctx, text: two }).uses.at(-1).input.file_path, 'C:\\proj\\index.html');
+  // sans texte : comme avant
+  assert.equal(planDocuments([site], ctx).uses.at(-1).input.file_path, 'C:\\proj\\index.html');
+  // GPT ne dit rien, mais la DEMANDE cite un dossier (vu en vrai : « dans le dossier C:\…\astra-site dev moi un site »)
+  const ask = 'ok vasy dans le dossier C:\\Users\\moi\\astra-site dev moi un site pour prouver que tu marche';
+  assert.equal(planDocuments([site], { ...ctx, text: 'J’ai créé un site dans le panneau.', userText: ask }).uses.at(-1).input.file_path, 'C:\\Users\\moi\\astra-site\\index.html');
+  const used = ctxFor(WIN, { files: { 'C:\\Users\\moi\\astra-site\\index.html': 'x' } }).ctx;
+  assert.equal(planDocuments([site], { ...used, userText: ask }).uses.at(-1).input.file_path, 'C:\\Users\\moi\\astra-site\\site-interactif.html');
+  // deux dossiers dans la demande : ambigu → dossier de travail
+  assert.equal(planDocuments([site], { ...ctx, userText: ask + ' ou C:\\autre' }).uses.at(-1).input.file_path, 'C:\\proj\\index.html');
+  // Linux
+  const lx = ctxFor(LINUX).ctx;
+  assert.equal(planDocuments([site], { ...lx, text: 'enregistre-le sous /home/user/site/index.html.' }).uses.at(-1).input.file_path, '/home/user/site/index.html');
+});
+
+test('citedPaths : chemins absolus avec extension, sans doublon ni ponctuation finale', () => {
+  assert.deepEqual(T.citedPaths('Voir C:\\a\\b.html, puis c:/a/b.html. Et C:\\dossier sans fichier', WIN),['C:\\a\\b.html']);
+  assert.deepEqual(T.citedPaths('', LINUX), []);
+  assert.deepEqual(T.citedPaths('dans C:\\site\\, pas C:\\site\\a.html', WIN, { dirs: true }), ['C:\\site']);
+  assert.deepEqual(T.citedPaths('et/ou dans /srv/www.', LINUX, { dirs: true }), ['/srv/www']);
+});
+
 // ── Claude Code → FS : traductions ──
 
 const P_EDIT = { callId: 'c', ccName: 'Edit', path: 'C:\\proj\\src\\a.js', input: { file_path: 'C:\\proj\\src\\a.js', old_string: 'a', new_string: 'b' } };

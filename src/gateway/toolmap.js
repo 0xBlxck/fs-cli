@@ -274,10 +274,47 @@ export function planToolUses(calls, ctx) {
 /** Nom de fichier d'un document du site : documentFileName, sinon page HTML (index.html si libre, d'après ctx.fsExists). */
 function documentName(d, ctx) {
   const named = documentFileName(d);
-  if (named) return named;
+  const cited = citedPaths(ctx.text, ctx.env);
+  if (named) {
+    // « index.html » + « enregistre-le sous C:\site\index.html » dans la réponse → le chemin complet cité
+    if (!/[\\/]/.test(named)) {
+      const hit = cited.find(c => P(ctx.env).basename(c).toLowerCase() === named.toLowerCase());
+      if (hit) return hit;
+    }
+    return named;
+  }
   const slug = htmlDocumentName(d, null);                                  // null si ce n'est pas du HTML ; sinon un nom tiré du titre
   if (!slug) return null;
+  const html = cited.filter(c => /\.html?$/i.test(c));
+  if (html.length === 1) return html[0];                                   // GPT dit où l'enregistrer (vu en vrai) : on l'y met
+  // « dans le dossier C:\x\site dev moi un site » : un seul dossier cité dans la demande → la page y va (vu en vrai)
+  const dirs = citedPaths(ctx.userText, ctx.env, { dirs: true });
+  if (dirs.length === 1) {
+    const M = P(ctx.env);
+    return ctx.fsExists?.(M.join(dirs[0], 'index.html')) ? M.join(dirs[0], slug) : M.join(dirs[0], 'index.html');
+  }
   return ctx.fsExists?.(absPath('index.html', ctx.env)) ? slug : 'index.html';
+}
+
+/**
+ * Chemins ABSOLUS de fichiers cités dans la réponse du modèle (« enregistre-le sous `C:\x\index.html` »), sans doublon.
+ * Windows : X:\… ou X:/… ; ailleurs : /… . Seulement des noms avec extension.
+ */
+export function citedPaths(text, env, { dirs = false } = {}) {
+  const t = String(text || '');
+  const win = P(env) === path.win32;
+  const re = dirs
+    ? (win ? /\b[A-Za-z]:[\\/][^\s`"'«»<>|*?]*/g : /(?<![\w.~])\/[^\s`"'«»<>|*?]+/g)
+    : (win ? /\b[A-Za-z]:[\\/][^\s`"'«»<>|*?]*\.[A-Za-z0-9]{1,10}\b/g : /(?<![\w.~])\/[^\s`"'«»<>|*?]*\.[A-Za-z0-9]{1,10}\b/g);
+  const out = [];
+  for (const m of t.matchAll(re)) {
+    const raw = m[0].replace(/[.,;:!)\\/]+$/, '');
+    if (dirs && /\.[A-Za-z0-9]{1,10}$/.test(raw)) continue;                // dossiers seulement : pas de nom de fichier
+    if (!raw || raw.length < 3) continue;
+    const abs = absPath(raw, env);
+    if (!out.some(o => o.toLowerCase() === abs.toLowerCase())) out.push(abs);
+  }
+  return out;
 }
 
 /**

@@ -401,7 +401,7 @@ async function turn(conv, send, reply, ctx) {
 
   let calls = r.toolCalls || [];
   let plan = planToolUses(calls, toolCtx(conv, ctx));
-  let docs = planDocuments(r.documents || [], toolCtx(conv, ctx));
+  let docs = planDocuments(r.documents || [], { ...toolCtx(conv, ctx), text: st?.received || r.text || '', userText: ctx.userText || '' });   // text : chemin cité par GPT
   // boucle interne : tous les appels sont traités localement (outil absent, argument manquant…) → retour direct à FS
   for (let n = 0; n < MAX_INNER && !r.lost && plan.pending.length && !plan.uses.length && !docs.uses.length && plan.pending.every(p => p.local); n++) {
     conv.fs.pending = plan.pending;
@@ -416,7 +416,7 @@ async function turn(conv, send, reply, ctx) {
     if (r.note) reply.text((reply.emittedText ? '\n\n' : '') + r.note);
     calls = r.toolCalls || [];
     plan = planToolUses(calls, toolCtx(conv, ctx));
-    docs = planDocuments(r.documents || [], toolCtx(conv, ctx));
+    docs = planDocuments(r.documents || [], { ...toolCtx(conv, ctx), text: st?.received || r.text || '', userText: ctx.userText || '' });
   }
   if (calls.length) conv.refusal.toolsSeen = true;
   if (docs.text) reply.text((reply.emittedText ? '\n\n' : '') + docs.text);
