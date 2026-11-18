@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.45.2', items: [
+    'Mac : raccourcis du Mac (Ctrl+V pour coller une image, Cmd+Maj+P), page Chrome ouverte dans Chrome',
+    'Fermer le Terminal arrête proprement les serveurs lancés par l\'agent',
+    'Sécurité Mac : confirmation pour AppleScript, launchctl, trousseau… ; disque externe entier jamais approuvé',
+  ] },
   { version: '3.45.1', items: [
     'fs-cli --install-mcp : aussi VS Code (Copilot), opencode, Cursor, Claude Desktop, Windsurf, Gemini CLI',
   ] },

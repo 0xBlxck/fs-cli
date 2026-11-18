@@ -24,7 +24,10 @@ function load() { try { const a = JSON.parse(fs.readFileSync(FILE(), 'utf8')); r
 /** Dossier trop large pour une confiance globale (racine d'un disque, dossier personnel) : jamais hérité par ses sous-dossiers. */
 export function isBroadFolder(dir) {
   const p = norm(dir), root = path.parse(p).root;
-  return p === root || p + path.sep === root || p === norm(os.homedir());
+  if (p === root || p + path.sep === root || p === norm(os.homedir())) return true;
+  // Mac / Linux : un disque externe entier (/Volumes/Clé, /media/moi/Clé, /mnt/x) ou le dossier de tous les comptes (/Users, /home)
+  const u = String(dir || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^\/(Volumes\/[^/]+|media\/[^/]+(\/[^/]+)?|mnt\/[^/]+|Users|home)$/i.test(u);
 }
 
 export function isFolderTrusted(dir) {

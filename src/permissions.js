@@ -81,6 +81,12 @@ function sensitiveFileMatch(p) {
   if (/^(login data|cookies|web data|local state)$/i.test(base) && /\/(user data|profiles)\//i.test(s)) {
     return { label: 'browser-data', reason: 'données de navigateur (mots de passe / cookies)' };
   }
+  // macOS : profils des navigateurs (pas de dossier « User Data ») et trousseaux
+  if (/^(login data|cookies|web data|local state|key4\.db|logins\.json|cookies\.sqlite)$/i.test(base)
+    && /\/library\/application support\/(google\/chrome|bravesoftware|microsoft edge|vivaldi|arc|chromium|firefox)\//i.test(s)) {
+    return { label: 'browser-data', reason: 'données de navigateur (mots de passe / cookies)' };
+  }
+  if (/\/library\/(keychains|cookies)(\/|$)/i.test(s)) return { label: 'keychain', reason: 'trousseau ou cookies macOS (~/Library/Keychains, ~/Library/Cookies)' };
   for (const seg of segs.slice(0, -1).concat(segs.length ? [lb] : [])) {
     const l = seg.toLowerCase();
     if (l === '.ssh') return { label: '.ssh', reason: 'dossier .ssh (clés SSH)' };
@@ -97,7 +103,7 @@ function sensitiveFileMatch(p) {
 
 const SYS_WIN_RE = /^(?:[a-z]:\\|\\\\\?\\[a-z]:\\)(?:windows|program files(?: \(x86\))?)(?:\\|$)/i;
 const SYS_ENV_RE = /^(?:%|\$env:|\${env:)(?:windir|systemroot|programfiles(?:\(x86\))?)(?:%|}|\\|$)/i;
-const SYS_NIX_RE = /^\/(?:etc|usr|bin|sbin|boot|lib|lib32|lib64|sys|proc|system|library)(?:\/|$)/i;
+const SYS_NIX_RE = /^\/(?:etc|usr|bin|sbin|boot|lib|lib32|lib64|sys|proc|system|library|applications|private\/etc)(?:\/|$)/i;   // + macOS : /Applications, /private/etc (pas /private/var : dossier temporaire du Mac)
 function systemPathMatch(p) {
   if (!p || p.length > 400) return null;
   const s = String(p).replace(/^['"]+|['"]+$/g, '');
@@ -903,6 +909,35 @@ reg(['service'], (c) => {
   if (c.lower.some(a => ['stop', 'restart'].includes(a))) c.ask('gestion de service (service)', 'service');
 });
 reg(['init'], (c) => { if (c.lower[0] === '0' || c.lower[0] === '6') c.deny(`arrêt ou redémarrage de la machine (init ${c.lower[0]})`); });
+// ── macOS : commandes système propres au Mac (audit du 17/11/2026) — confirmation, et refus pour l'effacement de disque ──
+reg(['diskutil'], (c) => {
+  const sub = (firstNonFlag(c.args) || { t: '' }).t.toLowerCase();
+  if (/^(erase|reformat|partitiondisk|zerodisk|randomdisk|secureerase)/.test(sub) || (sub === 'apfs' && c.lower.some(a => /^delete/.test(a)))) { c.deny(`effacement de disque (diskutil ${sub})`); return; }
+  if (['unmount', 'unmountdisk', 'eject', 'rename', 'resizevolume', 'resizecontainer', 'mergepartitions', 'splitpartition', 'addpartition', 'enableownership', 'disableownership'].includes(sub)) c.ask(`gestion de disque (diskutil ${sub})`, `diskutil ${sub}`);
+});
+reg(['osascript'], (c) => c.ask('exécution d\'AppleScript (osascript) : peut piloter les applications et lancer des commandes', 'osascript'));
+reg(['launchctl'], (c) => {
+  const sub = (firstNonFlag(c.args) || { t: '' }).t.toLowerCase();
+  if (['load', 'unload', 'bootstrap', 'bootout', 'remove', 'disable', 'enable', 'kickstart', 'kill', 'submit', 'reboot'].includes(sub)) c.ask(`gestion de service macOS (launchctl ${sub})`, `launchctl ${sub}`);
+});
+reg(['defaults'], (c) => {
+  const sub = (firstNonFlag(c.args) || { t: '' }).t.toLowerCase();
+  if (['write', 'delete', 'import', 'rename'].includes(sub)) c.ask(`modification des réglages macOS (defaults ${sub})`, `defaults ${sub}`);
+});
+reg(['security'], (c) => {
+  const sub = (firstNonFlag(c.args) || { t: '' }).t.toLowerCase();
+  if (/^(dump-keychain|find-generic-password|find-internet-password|find-certificate|export|delete-|add-trusted-cert|remove-trusted-cert|authorizationdb|set-keychain|unlock-keychain)/.test(sub)) c.ask(`accès au trousseau macOS (security ${sub})`, `security ${sub}`);
+});
+reg(['csrutil', 'nvram', 'systemsetup', 'sysadminctl', 'fdesetup', 'pmset'], (c) => {
+  if (c.name === 'pmset' && (!c.args.length || c.lower[0] === '-g')) return;     // pmset -g : lecture seule
+  if (c.name === 'csrutil' && c.lower[0] === 'status') return;
+  if (c.name === 'fdesetup' && c.lower[0] === 'status') return;
+  c.ask(`réglage système macOS (${c.name}${c.args[0] ? ' ' + c.args[0].t : ''})`, c.name);
+});
+reg(['spctl'], (c) => { if (c.lower.some(a => /^--(master|global)-disable$|^--disable$|^--add$/.test(a))) c.ask('désactivation ou contournement de Gatekeeper (spctl)', 'spctl'); });
+reg(['tmutil'], (c) => { const sub = (firstNonFlag(c.args) || { t: '' }).t.toLowerCase(); if (/^(delete|disable|deletelocalsnapshots|thinlocalsnapshots|removeexclusion)/.test(sub)) c.ask(`modification des sauvegardes Time Machine (tmutil ${sub})`, `tmutil ${sub}`); });
+reg(['dscl'], (c) => { if (c.lower.some(a => /^-(create|delete|passwd|append|merge|change)$/.test(a))) c.ask('modification des comptes macOS (dscl)', 'dscl'); });
+reg(['xattr'], (c) => { if (c.lower.some(a => a === '-d' || a === '-c' || a === '-cr' || a === '-rc') && c.lower.some(a => a.includes('com.apple.quarantine'))) c.ask('retrait de la quarantaine Gatekeeper (xattr)', 'xattr quarantine'); });
 reg(['crontab'], (c) => {
   if (c.lower.includes('-l')) return;
   c.ask('modification de la crontab', c.lower.includes('-r') ? 'crontab -r' : 'crontab');

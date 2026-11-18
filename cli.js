@@ -38,6 +38,7 @@ import { sortedModelIds } from './src/models-order.js';
 import { stripEditorContext } from './src/editor-context.js';
 import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow } from './src/extra-commands.js';
 import { WHATS_NEW, latestNews } from './src/whatsnew.js';
+const PALETTE_KEY = process.platform === 'darwin' ? 'Cmd+Maj+P' : 'Ctrl+Maj+P';   // palette de commandes de l'éditeur (VS Code, Cursor…)
 import { isOpenAiModel } from './src/native.js';
 import * as mem from './src/memory.js';
 import { summarizeChanges, fileDiff, undoFile, changeLine } from './src/changes.js';
@@ -228,7 +229,10 @@ function pasteClipboardImage() {
     const t = readClipboardText();
     if (t) { input.insert(t); return; }
   }
-  if (!p) { if (input.flash && interactive) input.flash('pas d\'image dans le presse-papiers (fais une capture avec Win+Maj+S, puis Alt+V)'); else println(c.yellow('  pas d\'image dans le presse-papiers (capture avec Win+Maj+S, puis /image)')); return; }
+  // raccourcis du système : sur Mac, Option+V tape « √ » (pas Méta par défaut) → Ctrl+V ; capture : Cmd+Ctrl+Maj+4
+  const SHOT = process.platform === 'darwin' ? 'Cmd+Ctrl+Maj+4' : process.platform === 'win32' ? 'Win+Maj+S' : 'ta touche Impr. écran';
+  const KEY = process.platform === 'darwin' ? 'Ctrl+V' : 'Alt+V';
+  if (!p) { if (input.flash && interactive) input.flash(`pas d'image dans le presse-papiers (fais une capture avec ${SHOT}, puis ${KEY})`); else println(c.yellow(`  pas d'image dans le presse-papiers (capture avec ${SHOT}, puis /image)`)); return; }
   S.images.push(p);
   const tag = `[Image #${S.images.length}] `;
   if (input.insert && interactive) input.insert(tag); else println(c.dim(`  📎 ${tag.trim()} prête : elle partira avec ton prochain message`));
@@ -427,7 +431,7 @@ const HELP_ROWS = [
     ['/auto [on|off]', 'exécution automatique des blocs de la réponse (défaut: on)'],
     ['/engine [chat|tools]', 'chat : /run manuel · tools : boucle d\'outils automatique'],
     ['/web', 'recherche web côté serveur on/off'], ['/continue', 'relancer après la limite d\'étapes'],
-    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/projet', 'travailler dans un projet France Student (ses instructions sont suivies) · /projet supprimer <nom>'], ['/vscode', 'installer le panneau de chat FS-CLI dans VS Code, Cursor, Windsurf, Antigravity'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', 'joindre une image : presse-papiers (aussi Alt+V), /image <chemin>, /image clear'], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
+    ['/navigateur', 'laisser le modèle piloter un navigateur (chrome : ton Chrome à toi)'], ['/projet', 'travailler dans un projet France Student (ses instructions sont suivies) · /projet supprimer <nom>'], ['/vscode', 'installer le panneau de chat FS-CLI dans VS Code, Cursor, Windsurf, Antigravity'], ['/doctor', 'vérifier l\'installation et dire quoi corriger'], ['/rewind', 'revenir à l\'état des fichiers d\'avant une demande'], ['/changes', 'fichiers modifiés : diff et annulation fichier par fichier'], ['/plan <demande>', 'une demande en lecture seule, puis proposition d\'appliquer'], ['/messages [n]', 'réafficher les derniers messages de la conversation'], ['/usage', 'consommation : budget du compte, conversations du jour, session'], ['/image', `joindre une image : presse-papiers (aussi ${process.platform === 'darwin' ? 'Ctrl+V' : 'Alt+V'}), /image <chemin>, /image clear`], ['/import', 'MCP et skills de Claude Code, Codex… (on/off)'], ['/intent', 'comprendre les demandes en langage naturel on/off'], ['/init', 'créer FSCLI.md : instructions du projet lues à chaque conversation'],
     ['/fr-project', 'projet du site où ranger les conversations (off pour désactiver)'],
     ['/undo', 'annuler la dernière modification de fichier'], ['/copy', 'copier la dernière réponse'],
     ['/effort [niveau]', 'effort de raisonnement des modèles GPT : none, minimal, low, medium, high, xhigh (réglage du compte, aussi sur le site)'],
@@ -826,7 +830,15 @@ async function command(line) {
         println(c.dim(`  1. Installe-la : ${STORE}`));
         println(c.dim('  2. Puis relance : /navigateur chrome'));
         const open = input.select && interactive ? await input.select({ title: 'Ouvrir la page de l\'extension dans Chrome ?', options: ['Oui, l\'ouvrir', 'Non'], defaultIndex: 0 }) : 1;
-        if (open === 0) { try { spawnSync('cmd', ['/c', 'start', '', STORE], { windowsHide: true }); } catch {} }
+        if (open === 0) {                                              // la page doit s'ouvrir dans CHROME (pas Safari sur Mac) : sinon, le lien est affiché
+          let r = { status: 1 };
+          try {
+            if (process.platform === 'win32') r = spawnSync('cmd', ['/c', 'start', '', STORE], { windowsHide: true });
+            else if (process.platform === 'darwin') r = spawnSync('open', ['-a', 'Google Chrome', STORE]);
+            else r = spawnSync('google-chrome', [STORE], { detached: true, stdio: 'ignore' });
+          } catch {}
+          if (r.status !== 0 || r.error) println(c.yellow(`  Ouvre ce lien dans Chrome : ${STORE}`));
+        }
         return println(c.dim(cur ? '  (le navigateur actuel reste actif)' : '  En attendant, /navigateur active un navigateur séparé (sans tes comptes).'));
       }
       const needSetup = !cur || curChrome !== mineChrome || !cur.args?.includes('--caps');   // ancienne config sans vision/pdf/devtools : mise à niveau
@@ -1487,6 +1499,9 @@ if (opts.stdio) {                                                    // commande
   });
 }
 process.on('exit', () => { try { input.stop(); } catch {} });
+// fermeture de l'onglet du Terminal (SIGHUP) ou arrêt par le panneau de l'éditeur (SIGTERM) : même sortie propre que /quit
+// (serveurs lancés par l'agent et serveurs MCP arrêtés, session enregistrée) — sinon ils restent orphelins (Mac, Linux)
+for (const [sig, code] of [['SIGHUP', 129], ['SIGTERM', 143]]) { try { process.on(sig, () => { shutdown(code, { quiet: true }); }); } catch {} }
 process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); });
 
 /** Fabrique le .vsix depuis le dossier vscode/ du CLI et l'installe dans les éditeurs choisis. Renvoie true si au moins une installation a réussi. */
@@ -1501,7 +1516,7 @@ function installVscode({ editors = null, all = false, log }) {
     if (r.ok) ok++;
     log(r.ok ? c.green(`  ✓ extension FS-CLI ${v.version} installée dans ${ed.name}`) : c.red(`  ✗ ${ed.name} : ${r.out || 'échec'}`));
   }
-  if (ok) log(c.dim('  → recharge la fenêtre de l\'éditeur (Ctrl+Maj+P › « Reload Window ») puis clique sur l\'icône France Student à gauche'));
+  if (ok) log(c.dim(`  → recharge la fenêtre de l'éditeur (${PALETTE_KEY} › « Reload Window ») puis clique sur l'icône France Student à gauche`));
   return ok > 0;
 }
 
@@ -1575,7 +1590,7 @@ async function runUpdate() {
   if (!opts.stdio) return println(c.dim('  → relance fs-cli pour utiliser la nouvelle version'));
   const again = await input.select({ title: 'Recharger la fenêtre de l\'éditeur maintenant ?', detail: 'Le panneau redémarre avec la nouvelle version. Tes conversations sont gardées (horloge en haut à droite).', options: ['Recharger maintenant', 'Plus tard'], defaultIndex: 0 });
   if (again === 0) stdioSend('reloadWindow');
-  else println(c.dim('  → recharge plus tard : Ctrl+Maj+P › « Reload Window »'));
+  else println(c.dim(`  → recharge plus tard : ${PALETTE_KEY} › « Reload Window »`));
 }
 
 /** palette d'actions du panneau (comme celle de Claude Code) : état des réglages, modifiables d'un clic */
