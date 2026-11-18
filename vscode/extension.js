@@ -14,33 +14,145 @@ const MAX_SELECTION = 20000;
 const beforeDocs = new Map();             // contenus « avant » pour le diff natif (schéma fs-cli-before:)
 const proposalDocs = new Map();           // contenus PROPOSÉS par l'agent, en attente d'accord (schéma fs-cli-proposal:)
 const proposalOwners = new Map();         // uri du côté proposé → { chat, id } : boutons Accepter / Refuser de la barre du diff
-let cliPathCache;
+let cliPathCache;                          // Windows : chemin de cli.js ; Mac/Linux : { node, js, pathDirs } (null = introuvable)
+let loginInfoCache;                        // Mac/Linux : ce que voit le shell de connexion (PATH, node, fs-cli, préfixe npm)
+const IS_WIN = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
+const INSTALL_CMD = 'npm install -g github:0xBlxck/fs-cli';
 
-/** Où est FS-CLI ? réglage → installation globale npm (lancée avec node) → « fs-cli » du PATH */
-function resolveCli() {
-  const custom = vscode.workspace.getConfiguration('fsCli').get('command');
-  if (custom && custom.trim()) return { cmd: custom.trim(), args: ['--stdio'], shell: true };
-  if (cliPathCache === undefined) {
-    cliPathCache = null;
-    try {
-      const root = cp.execSync('npm root -g', { encoding: 'utf8', timeout: 15000, windowsHide: true, shell: true }).trim();
-      const js = path.join(root, 'fs-cli', 'cli.js');
-      if (fs.existsSync(js)) cliPathCache = js;
-    } catch {}
-  }
-  if (cliPathCache) return { cmd: 'node', args: [cliPathCache, '--stdio'], shell: false };
-  return { cmd: 'fs-cli', args: ['--stdio'], shell: true };
+function npmRootGlobal() {
+  try { return cp.execSync('npm root -g', { encoding: 'utf8', timeout: 15000, windowsHide: true, shell: true }).trim(); } catch { return ''; }
 }
 
-function workspaceDir() {
+/** Mac/Linux : sortie du shell de connexion → { path, node, fsCli, prefix } (le bruit du .zshrc est ignoré) */
+function parseLoginOutput(out) {
+  const get = k => ((String(out || '').match(new RegExp('^__' + k + '__(.*)$', 'm')) || [])[1] || '').trim();
+  return { path: get('FSP'), node: get('FSN'), fsCli: get('FSC'), prefix: get('FSG') };
+}
+
+/** Mac/Linux : une appli lancée depuis le Dock n'a pas le PATH du terminal ; on le demande au shell de connexion (-il : lit .zprofile et .zshrc) */
+function loginShellInfo(env = process.env) {
+  const base = path.posix.basename(String(env.SHELL || ''));
+  const sh = /^(zsh|bash|sh|ksh|dash)$/.test(base) && path.posix.isAbsolute(env.SHELL) ? env.SHELL : (IS_MAC ? '/bin/zsh' : '/bin/sh');
+  const script = 'printf "\\n__FSP__%s\\n" "$PATH"; printf "__FSN__%s\\n" "$(command -v node)"; printf "__FSC__%s\\n" "$(command -v fs-cli)"; printf "__FSG__%s\\n" "$(npm prefix -g 2>/dev/null)"';
+  const shEnv = { ...env }; delete shEnv.ELECTRON_RUN_AS_NODE;
+  return new Promise(res => {
+    try {
+      cp.execFile(sh, ['-ilc', script], { encoding: 'utf8', timeout: 10000, env: shEnv }, (err, out) => res(parseLoginOutput(out)));
+    } catch { res({}); }
+  });
+}
+
+/** Mac/Linux : dossiers usuels de node / fs-cli, ajoutés au PATH du CLI (et de la commande personnalisée) */
+function knownBinDirs(home = os.homedir(), exists = fs.existsSync) {
+  return ['/opt/homebrew/bin', '/usr/local/bin', path.posix.join(home, '.volta/bin'), path.posix.join(home, '.local/bin'), path.posix.join(home, '.npm-global/bin')].filter(d => { try { return exists(d); } catch { return false; } });
+}
+
+/** versions nvm installées, la plus récente d'abord */
+function nvmVersions(home, env, readdir) {
+  const dir = path.posix.join(env.NVM_DIR || path.posix.join(home, '.nvm'), 'versions', 'node');
+  let list = [];
+  try { list = readdir(dir).filter(v => /^v\d+/.test(v)); } catch {}
+  const num = v => v.replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+  list.sort((a, b) => { const x = num(a), y = num(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; });
+  return list.map(v => path.posix.join(dir, v));
+}
+
+/**
+ * Mac/Linux : trouve node et cli.js de FS-CLI sans compter sur le PATH de l'éditeur.
+ * Tout l'accès disque est injectable (tests). Renvoie { node, js, pathDirs } ou { missing: { node, cli } }.
+ */
+function locateCli({ home = os.homedir(), env = process.env, npmRoot = '', login = null, exists = fs.existsSync, realpath = fs.realpathSync, readdir = fs.readdirSync } = {}) {
+  const P = path.posix, L = login || {};
+  const isFile = f => { try { return !!f && exists(f); } catch { return false; } };
+  const onPath = (name, PATH) => { for (const d of String(PATH || '').split(':')) if (d && P.isAbsolute(d) && isFile(P.join(d, name))) return P.join(d, name); return ''; };
+  const nvm = nvmVersions(home, env, readdir);
+  const envNode = onPath('node', env.PATH), envFs = onPath('fs-cli', env.PATH);
+  const loginNode = L.node && P.isAbsolute(L.node) ? L.node : '', loginFs = L.fsCli && P.isAbsolute(L.fsCli) ? L.fsCli : '';
+  const up = (f, n) => { for (let i = 0; i < n; i++) f = P.dirname(f); return f; };
+  // cli.js : lien « fs-cli » résolu, puis npm root -g, puis préfixes npm connus
+  const viaBin = [envFs, loginFs, onPath('fs-cli', L.path), ...['/opt/homebrew/bin', '/usr/local/bin', P.join(home, '.local/bin'), P.join(home, '.npm-global/bin'), P.join(home, '.npm-packages/bin'), ...nvm.map(v => P.join(v, 'bin'))].map(d => P.join(d, 'fs-cli'))]
+    .filter(isFile).map(b => { try { return realpath(b); } catch { return ''; } }).filter(f => /[\\/]cli\.js$/.test(f));
+  const prefixes = [L.prefix, env.NPM_CONFIG_PREFIX || env.npm_config_prefix, envNode && up(envNode, 2), loginNode && up(loginNode, 2), '/opt/homebrew', '/usr/local', P.join(home, '.local'), P.join(home, '.npm-global'), P.join(home, '.npm-packages'), ...nvm, '/usr'].filter(Boolean);
+  const jsList = [...viaBin, npmRoot && P.join(npmRoot, 'fs-cli', 'cli.js'), ...prefixes.map(p => P.join(p, 'lib/node_modules/fs-cli/cli.js')), P.join(home, '.volta/tools/image/packages/fs-cli/lib/node_modules/fs-cli/cli.js')];
+  const js = jsList.find(isFile) || '';
+  // node : celui du même préfixe que cli.js d'abord (nvm), puis PATH, shell de connexion, emplacements connus
+  const nodeList = [js && P.join(up(js, 4), 'bin/node'), envNode, loginNode, '/opt/homebrew/bin/node', '/usr/local/bin/node', P.join(home, '.volta/bin/node'), ...nvm.map(v => P.join(v, 'bin/node')),
+    P.join(home, '.local/share/fnm/aliases/default/bin/node'), P.join(home, 'Library/Application Support/fnm/aliases/default/bin/node'), P.join(home, '.asdf/shims/node'), P.join(home, '.local/bin/node'), '/usr/bin/node'];
+  const node = nodeList.find(isFile) || '';
+  if (!node || !js) return { missing: { node: !node, cli: !js } };
+  const pathDirs = [...new Set([P.dirname(node), ...String(L.path || '').split(':')].filter(d => d && P.isAbsolute(d)))];
+  return { node, js, pathDirs };
+}
+
+/** Message clair quand l'éditeur ne trouve pas FS-CLI ou Node.js (au lieu d'un « code 127 » et d'un Relancer inutile) */
+function notFoundMessage(missing = {}, mac = IS_MAC) {
+  const what = missing.node && !missing.cli ? 'Node.js introuvable pour l\'éditeur.' : missing.cli && !missing.node ? 'FS-CLI introuvable pour l\'éditeur.' : 'FS-CLI ou Node.js introuvable pour l\'éditeur.';
+  const tip = mac
+    ? 'Sur Mac, une appli ouverte depuis le Dock ne voit pas toujours le PATH du Terminal (Homebrew, nvm, Volta…). Si « fs-cli » marche dans le Terminal : quitte l\'éditeur avec Cmd+Q (fermer la fenêtre ne suffit pas) puis rouvre-le. Sinon, installe FS-CLI ou mets le chemin complet dans le réglage fsCli.command (ex. : /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/fs-cli/cli.js).'
+    : `Installe-le (${INSTALL_CMD}) ou mets le chemin complet dans le réglage fsCli.command, puis clique sur « Réessayer ».`;
+  return what + '\n' + tip;
+}
+
+/** Mac/Linux : sortie du shell « commande introuvable » (code 127, « command not found », « env: node: No such file ») */
+function isNotFoundExit(code, errTail, win = IS_WIN) {
+  if (win) return false;
+  return code === 127 || /command not found|not found: (node|fs-cli)|env: '?node'?: No such file or directory/i.test(String(errTail || ''));
+}
+
+/** Où est FS-CLI ? réglage → installation globale npm (lancée avec node) → « fs-cli » du PATH */
+async function resolveCli() {
+  const custom = vscode.workspace.getConfiguration('fsCli').get('command');
+  if (custom && custom.trim()) {
+    if (IS_WIN) return { cmd: custom.trim(), args: ['--stdio'], shell: true };
+    return { cmd: custom.trim(), args: ['--stdio'], shell: true, pathDirs: [...knownBinDirs(), ...String(loginInfoCache?.path || '').split(':')].filter(Boolean) };
+  }
+  if (IS_WIN) {                                                     // Windows : inchangé
+    if (cliPathCache === undefined) {
+      cliPathCache = null;
+      const root = npmRootGlobal();
+      const js = root && path.join(root, 'fs-cli', 'cli.js');
+      if (js && fs.existsSync(js)) cliPathCache = js;
+    }
+    if (cliPathCache) return { cmd: 'node', args: [cliPathCache, '--stdio'], shell: false };
+    return { cmd: 'fs-cli', args: ['--stdio'], shell: true };
+  }
+  // Mac/Linux : node par son chemin absolu (le PATH de l'éditeur peut être incomplet)
+  if (cliPathCache === undefined) {
+    let r = locateCli();
+    if (r.missing) r = locateCli({ npmRoot: npmRootGlobal() });
+    if (r.missing) { loginInfoCache ||= await loginShellInfo(); r = locateCli({ npmRoot: npmRootGlobal(), login: loginInfoCache }); }
+    cliPathCache = r.missing ? null : r;
+    if (r.missing) return { missing: r.missing };
+  }
+  if (!cliPathCache) return { missing: { node: true, cli: true } };
+  return { cmd: cliPathCache.node, args: [cliPathCache.js, '--stdio'], shell: false, pathDirs: cliPathCache.pathDirs };
+}
+
+/** Mac/Linux : /private/tmp/… ou chemin réel derrière un lien → le chemin tel que l'éditeur l'a ouvert (évite les onglets en double) */
+function toEditorPath(full, bases, { win = IS_WIN, realpath = fs.realpathSync } = {}) {
+  if (win || !full) return full;
+  for (const b of bases || []) {
+    if (!b) continue;
+    let real; try { real = realpath(b); } catch { continue; }
+    if (real === b) continue;
+    if (full === real) return b;
+    if (full.startsWith(real.endsWith('/') ? real : real + '/')) return path.posix.join(b, full.slice(real.length));
+  }
+  return full;
+}
+
+/** dossier du workspace (null si aucun dossier n'est ouvert) */
+function openFolder() {
   const ed = currentEditor();
   if (ed && ed.document.uri.scheme === 'file') {
     const wf = vscode.workspace.getWorkspaceFolder(ed.document.uri);
     if (wf) return wf.uri.fsPath;
   }
   const f = vscode.workspace.workspaceFolders;
-  return f && f.length ? f[0].uri.fsPath : os.homedir();
+  return f && f.length ? f[0].uri.fsPath : null;
 }
+function workspaceDir() { return openFolder() || os.homedir(); }
 
 /** Fichier ouvert + sélection, pour le joindre au message (comme l'extension Claude Code). */
 let lastEditor = null;                     // dernier éditeur de fichier (le panneau en onglet le rend « inactif »)
@@ -89,13 +201,53 @@ class Chat {
   summary(ctx) { return ctx ? { rel: ctx.rel, start: ctx.start, end: ctx.end, lines: ctx.lines } : null; }
   post(m) { try { this.webview.postMessage(m); } catch {} }
 
-  start() {
-    if (this.proc) return;
-    const { cmd, args, shell } = resolveCli();
+  /** dossier de base des chemins relatifs */
+  baseDir() { return this.cwd || this.workDir || workspaceDir(); }
+
+  /** Mac sans dossier ouvert : pas de démarrage silencieux dans ~ (les recherches y déclenchent les fenêtres d'autorisation de macOS) */
+  macCwd() {
+    if (!IS_MAC || openFolder()) return workspaceDir();
+    if (this.workDir) return this.workDir;
+    if (this.allowHome) return os.homedir();
+    const last = this.context.globalState?.get('fsCli.lastWorkDir');
+    try { if (last && fs.statSync(last).isDirectory()) { this.workDir = last; this.pendingFlash = `aucun dossier ouvert : FS-CLI travaille dans ${path.basename(last)} (clic sur le dossier en bas pour changer)`; return last; } } catch {}
+    this.post({ type: 'exit', code: null, noFolder: true, message: 'Aucun dossier n\'est ouvert dans l\'éditeur.\nSur Mac, travailler dans le dossier personnel fait apparaître les fenêtres d\'autorisation de macOS (Documents, Bureau, Téléchargements…) pendant les recherches. Ouvre un dossier (Fichier › Ouvrir le dossier…) ou choisis-en un ici.' });
+    return null;
+  }
+
+  /** bouton « Choisir un dossier… » du panneau (Mac sans dossier ouvert) */
+  async pickStartFolder() {
+    const ed = currentEditor();
+    let r;
+    try { r = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, openLabel: 'Travailler dans ce dossier', title: 'Dossier où FS-CLI va travailler', defaultUri: ed ? vscode.Uri.file(path.dirname(ed.document.uri.fsPath)) : undefined }); } catch {}
+    const uri = r && r[0];
+    if (!uri) return;                                                  // annulé : l'explication et ses boutons restent affichés
+    this.workDir = uri.fsPath;
+    try { await this.context.globalState?.update('fsCli.lastWorkDir', uri.fsPath); } catch {}
+    this.start();
+  }
+
+  async start() {
+    if (this.proc || this.starting || this.disposed) return;
+    this.starting = true;
+    try { await this.spawnCli(); } finally { this.starting = false; }
+  }
+
+  async spawnCli() {
+    const cwd = this.macCwd();
+    if (!cwd) return;
+    const r = await resolveCli();
+    if (this.disposed || this.proc) return;
+    if (r.missing) { this.post({ type: 'exit', code: -1, notFound: true, message: notFoundMessage(r.missing) }); return; }
+    const { cmd, args, shell } = r;
     const env = { ...process.env, FORCE_COLOR: '3', FS_CLI_PANEL: String(this.context.extension?.packageJSON?.version || '0.0.0'), FS_CLI_PANEL_FEATURES: 'agents' };   // le CLI adapte ce qu'il envoie à cette version du panneau
     delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
+    if (!IS_WIN) {
+      env.FS_WORKDIR = cwd;                                             // chemin tel que l'éditeur l'a ouvert (process.cwd() donnerait /private/tmp/…)
+      if (r.pathDirs?.length) env.PATH = [...new Set([...r.pathDirs, ...String(env.PATH || '').split(':')].filter(Boolean))].join(':');
+    }
     let p;
-    try { p = cp.spawn(cmd, args, { cwd: workspaceDir(), env, shell, windowsHide: true }); }
+    try { p = cp.spawn(cmd, args, { cwd, env, shell, windowsHide: true }); }
     catch (e) { this.post({ type: 'exit', code: -1, message: `Impossible de lancer FS-CLI : ${e.message}` }); return; }
     this.proc = p; this.buf = '';
     p.stdout.setEncoding('utf8');
@@ -107,11 +259,13 @@ class Chat {
     p.on('error', e => {
       if (this.proc === p) this.proc = null;                            // sinon start() croirait le CLI encore lancé
       const missing = /ENOENT/.test(e.message);
+      if (missing && !IS_WIN) { cliPathCache = undefined; return this.post({ type: 'exit', code: -1, notFound: true, message: notFoundMessage({ node: cmd !== 'fs-cli' }) }); }
       this.post({ type: 'exit', code: -1, message: missing ? (cmd === 'node' ? 'Node.js introuvable dans le PATH de l\'éditeur. Installe Node.js (nodejs.org) puis redémarre l\'éditeur.' : 'FS-CLI introuvable. Installe-le : npm install -g github:0xBlxck/fs-cli') : e.message });
     });
     p.on('exit', code => {
       if (this.proc !== p) return;
       this.proc = null;
+      if (isNotFoundExit(code, errTail)) { cliPathCache = undefined; return this.post({ type: 'exit', code, notFound: true, message: notFoundMessage({ node: true, cli: true }) + (errTail.trim() ? '\n' + errTail.trim().split('\n').slice(-2).join('\n') : '') }); }
       this.post({ type: 'exit', code, needLogin: code === 2, message: code && code !== 2 ? errTail.trim().split('\n').slice(-4).join('\n') : '' });
     });
   }
@@ -127,7 +281,14 @@ class Chat {
       if (ev.type === 'diffBefore') { const r = this.pendingDiff.get(ev.id); if (r) { this.pendingDiff.delete(ev.id); r(ev); } continue; }
       if (ev.type === 'pickFolder') { this.pickFolder(String(ev.purpose || 'trust'), ev.title); continue; }   // FS-CLI demande un dossier (confiance)
       if (ev.type === 'reloadWindow') { vscode.commands.executeCommand('workbench.action.reloadWindow'); continue; }   // après /update
-      if (ev.type === 'status') { if (ev.title !== undefined) this.onTitle?.(ev.title); if (ev.cwd) this.cwd = ev.cwd; }
+      if (ev.type === 'status') {
+        if (ev.title !== undefined) this.onTitle?.(ev.title);
+        if (ev.cwd) {
+          this.cwd = toEditorPath(ev.cwd, this.bases());
+          if (IS_MAC && !openFolder() && this.cwd !== os.homedir()) { this.workDir = this.cwd; try { this.context.globalState?.update('fsCli.lastWorkDir', this.cwd); } catch {} }   // retenu pour la prochaine fois
+        }
+      }
+      if (ev.type === 'ready' && this.pendingFlash) { const t = this.pendingFlash; this.pendingFlash = null; setTimeout(() => this.post({ type: 'event', ev: { type: 'flash', text: t } }), 300); }
       if (ev.type === 'busy' && !ev.busy) this.closeProposals();          // tour terminé (ou interrompu) : plus aucune proposition en attente
       if (ev.type === 'select' && ev.proposal && typeof ev.proposal.after === 'string') {
         this.showProposal(ev);
@@ -181,7 +342,16 @@ class Chat {
       case 'setModel': return this.toCli({ type: 'setModel', id: String(m.id) });
       case 'undoFile': return this.toCli({ type: 'undoFile', path: String(m.path) });
       case 'toggleContext': this.useContext = !this.useContext; this.pushContext(); return;
-      case 'restart': this.stop(); this.start(); return;
+      case 'restart': this.stop(); if (!cliPathCache) { cliPathCache = undefined; loginInfoCache = undefined; } this.start(); return;   // introuvable la dernière fois : on recherche
+      case 'pickStartFolder': return this.pickStartFolder();
+      case 'startHome': this.allowHome = true; return this.start();
+      case 'openCliSetting': return vscode.commands.executeCommand('workbench.action.openSettings', 'fsCli.command');
+      case 'installCli': {                                             // installation dans un vrai terminal (il a le PATH du shell), puis « Réessayer »
+        const t = vscode.window.createTerminal({ name: 'FS-CLI : installation' });
+        t.show(); t.sendText(INSTALL_CMD);
+        vscode.window.showInformationMessage('Une fois l\'installation finie, clique sur « Réessayer » dans le panneau FS-CLI.');
+        return;
+      }
       case 'login': return vscode.commands.executeCommand('fsCli.login');
       case 'openFile': return this.openFile(String(m.path || ''), m.line);
       case 'openDiff': return this.openDiff(String(m.path || ''));
@@ -193,21 +363,25 @@ class Chat {
       case 'copy': return vscode.env.clipboard.writeText(String(m.text || ''));
       case 'saveImage': {                                              // image générée : enregistrée seulement si l'utilisateur le veut, où il veut
         const name = String(m.name || 'image.png').replace(/[^\w.-]/g, '_');
-        const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(path.join(this.cwd || workspaceDir(), name)), filters: { Images: ['png', 'jpg', 'jpeg', 'webp'] }, saveLabel: 'Enregistrer l\'image' });
+        const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(path.join(this.baseDir(), name)), filters: { Images: ['png', 'jpg', 'jpeg', 'webp'] }, saveLabel: 'Enregistrer l\'image' });
         if (!target) return;
         fs.writeFileSync(target.fsPath, Buffer.from(String(m.data || ''), 'base64'));
         this.post({ type: 'event', ev: { type: 'flash', text: '✓ image enregistrée : ' + path.basename(target.fsPath) } });
         return;
       }
       case 'pickFiles': {
-        const r = await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Joindre', defaultUri: vscode.Uri.file(workspaceDir()) });
+        const r = await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: 'Joindre', defaultUri: vscode.Uri.file(this.workDir || workspaceDir()) });
         if (r && r.length) this.post({ type: 'insert', text: r.map(u => '@' + (u.fsPath.includes(' ') ? `"${u.fsPath}"` : u.fsPath)).join(' ') + ' ' });
         return;
       }
       case 'pasteImage': {                                         // image collée dans le panneau → fichier temporaire → chemin dans le message (FS-CLI l'envoie au modèle)
         const ext = /png|jpe?g|gif|webp/i.exec(String(m.mime || ''))?.[0]?.replace('jpeg', 'jpg') || 'png';
         const data = String(m.data || '');
-        if (!data || data.length > 14_000_000) return;
+        if (!data || data.length > 14_000_000) {                       // jamais en silence : sur Mac (Retina) une capture plein écran dépasse vite 10 Mo
+          const zone = IS_MAC ? 'Cmd+Ctrl+Maj+4' : IS_WIN ? 'Win+Maj+S' : 'l\'outil de capture';
+          this.post({ type: 'event', ev: { type: 'flash', text: data ? `image trop lourde (max 10 Mo) : capture plutôt une zone (${zone})` : 'image collée illisible : réessaie ou joins-la avec +' } });
+          return;
+        }
         const dir = (this.imgDir ||= fs.mkdtempSync(path.join(os.tmpdir(), 'fs-cli-images-')));   // dossier unique par panneau
         fs.mkdirSync(dir, { recursive: true });
         const file = path.join(dir, `collage-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
@@ -218,7 +392,10 @@ class Chat {
     }
   }
 
-  abs(p) { return !p ? '' : path.isAbsolute(p) ? path.normalize(p) : path.join(this.cwd || workspaceDir(), p); }
+  /** dossiers tels que l'éditeur les a ouverts (pour ramener /private/tmp/… vers /tmp/…) */
+  bases() { return [...(vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath), this.workDir]; }
+
+  abs(p) { return !p ? '' : toEditorPath(path.isAbsolute(p) ? path.normalize(p) : path.join(this.baseDir(), p), this.bases()); }
 
   async openFile(p, line) {
     if (!p) return;
@@ -236,7 +413,7 @@ class Chat {
     const id = crypto.randomBytes(6).toString('hex');
     const ev = await new Promise(res => { this.pendingDiff.set(id, res); this.toCli({ type: 'diffBefore', id, path: p }); setTimeout(() => { if (this.pendingDiff.delete(id)) res(null); }, 5000); });
     if (!ev || !ev.ok) return this.openFile(p);
-    p = ev.path || this.abs(p);
+    p = ev.path ? toEditorPath(ev.path, this.bases()) : this.abs(p);
     const name = path.basename(p);
     const left = vscode.Uri.from({ scheme: 'fs-cli-before', path: `/${id}/${name}` });
     beforeDocs.set(left.toString(), ev.before);
@@ -307,7 +484,7 @@ class Chat {
     setTimeout(() => { try { p.kill(); } catch {} }, 3000);
   }
 
-  dispose() { this.stop(); for (const d of this.disposables) try { d.dispose(); } catch {} }
+  dispose() { this.disposed = true; this.stop(); for (const d of this.disposables) try { d.dispose(); } catch {} }
 
   html() {
     const w = this.webview, media = f => w.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', f));
@@ -318,7 +495,7 @@ class Chat {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="${media('panel.css')}">
 <title>FS-CLI</title></head>
-<body data-logo="${media('logo.png')}"><div id="app"></div><script nonce="${nonce}" src="${media('panel.js')}"></script></body></html>`;
+<body data-logo="${media('logo.png')}" data-platform="${process.platform}"><div id="app"></div><script nonce="${nonce}" src="${media('panel.js')}"></script></body></html>`;
   }
 }
 
@@ -382,4 +559,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, _test: { locateCli, parseLoginOutput, notFoundMessage, isNotFoundExit, toEditorPath, knownBinDirs, Chat } };   // _test : pour test/macos-extension.test.mjs

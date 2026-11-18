@@ -25,25 +25,27 @@ jobs:
         run: npm run scan
 
   portable:
-    # macOS et Linux : toute la suite, sauf les tests de commandes PowerShell (marqués Windows seulement)
+    # macOS (Apple Silicon et Intel) et Linux : la suite COMPLÈTE (npm test), bloquante. Les tests de commandes PowerShell
+    # sont marqués Windows seulement et sautés ici.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-15, macos-15-intel]
+        node: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
+      - name: Architecture (macos-15 doit être Apple Silicon, sans Rosetta)
+        if: matrix.os == 'macos-15'
+        run: |
+          node -p "process.arch + ' ' + process.platform"
+          test "$(uname -m)" = "arm64"
+          test "$(node -p process.arch)" = "arm64"
+          test "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = "0"
       - name: Syntaxe de tous les fichiers
         run: for f in cli.js mcp-cli.js src/*.js src/tui/*.js vscode/*.js vscode/media/*.js vscode/scripts/*.mjs; do node --check "$f" || exit 1; done
-      - name: Tests (chaque fichier séparément, pour voir lesquels passent)
-        run: |
-          fail=0
-          for f in test/*.test.mjs; do
-            if node --test "$f" > out.txt 2>&1; then echo "OK    $f"; else echo "ÉCHEC $f"; grep -E "✖|Error|expected|actual" out.txt | head -15; fail=1; fi
-          done
-          node test/web.offline.check.mjs > /dev/null 2>&1 && echo "OK    web.offline" || echo "ÉCHEC web.offline"
-          node test/mcp/run-tests.js > /dev/null 2>&1 && echo "OK    mcp" || echo "ÉCHEC mcp"
-          exit $fail
+      - name: Tests (aucun appel à la vraie API)
+        run: npm test

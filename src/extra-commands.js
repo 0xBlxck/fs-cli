@@ -43,7 +43,7 @@ export async function compactSession(S, { instruction = '', signal } = {}) {
     if (!summary) throw new Error('résumé vide : la session n\'a pas été compactée');
     // comme Claude Code : pas de requête « Compris. » ; le résumé part avec le prochain vrai message, qui ouvre la nouvelle conversation
     S.compactedFrom = prev; S.pendingSummary = summary;
-    S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
+    S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.blocks = []; S.pendingResults = [];
     S.ctxPercent = null; S.lastPromptTokens = 0;
     return { chars: summary.length, previous: prev, chatId: null, percent: null };
   } finally { ui.spinner.stop(); }
@@ -391,7 +391,7 @@ export async function deleteProjectFlow(p, env) {
   if (cfg.mcpProject?.id === p.id) changes.mcpProject = false;
   if (Object.keys(changes).length) saveCfgKeys(changes);
   if (S.projectName === p.name) S.projectName = '';
-  if (!keep && chats.some(x => x.id === S.chatId)) { S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.title = ''; S.sid = newSid(); }
+  if (!keep && chats.some(x => x.id === S.chatId)) { S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.title = ''; S.sid = newSid(); }
   env.refreshPrompt?.();
   println(c.green('  ✓ ') + `projet « ${p.name} » supprimé` + c.dim(n ? (keep ? ` · ${r.kept} conversation${r.kept > 1 ? 's' : ''} gardée${r.kept > 1 ? 's' : ''}, maintenant hors projet` : ` · ${r.deleted} conversation${r.deleted > 1 ? 's' : ''} supprimée${r.deleted > 1 ? 's' : ''}`) : ''));
   return true;

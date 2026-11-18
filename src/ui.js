@@ -9,8 +9,25 @@ export const THEMES = {
   amber: [255, 176, 0], matrix: [0, 230, 80], cyberpunk: [255, 60, 200], dracula: [189, 147, 249],
 };
 export const theme = { name: 'cyan' };
+/** Touche « coller une image » : Ctrl+V sur Mac (Option+V y tape √ ou ◊), Alt+V ailleurs. */
+export const PASTE_IMAGE_KEY = process.platform === 'darwin' ? 'ctrl+v' : 'alt+v';
 
-const fg = ([r, g, b]) => `\x1b[38;2;${r};${g};${b}m`;
+// Profondeur de couleur choisie une fois : Terminal.app (macOS ≤ 15) ne comprend pas le 24 bits (38;2;R;G;B) → 256 couleurs.
+// getColorDepth respecte FORCE_COLOR / COLORTERM ; hors terminal (panneau, tubes) on garde le 24 bits.
+export const COLOR_DEPTH = process.stdout.isTTY && process.stdout.getColorDepth ? process.stdout.getColorDepth() : 24;
+const q6 = v => (v < 48 ? 0 : v < 115 ? 1 : Math.min(5, Math.floor((v - 35) / 40)));
+const LV = [0, 95, 135, 175, 215, 255];
+/** RGB → index de la palette 256 couleurs (cube 6×6×6 ou rampe de gris : le plus proche). */
+export function rgb256([r, g, b]) {
+  const ci = [q6(r), q6(g), q6(b)];
+  const cd = (LV[ci[0]] - r) ** 2 + (LV[ci[1]] - g) ** 2 + (LV[ci[2]] - b) ** 2;
+  const gi = Math.max(0, Math.min(23, Math.round(((r + g + b) / 3 - 8) / 10))), gv = 8 + 10 * gi;
+  const gd = (gv - r) ** 2 + (gv - g) ** 2 + (gv - b) ** 2;
+  return gd < cd ? 232 + gi : 16 + 36 * ci[0] + 6 * ci[1] + ci[2];
+}
+/** Séquence SGR de couleur : k = 38 (texte) ou 48 (fond) ; 24 bits si le terminal le gère, sinon 256 couleurs. */
+export const sgr = (k, [r, g, b], depth = COLOR_DEPTH) => (depth >= 24 ? `\x1b[${k};2;${r};${g};${b}m` : `\x1b[${k};5;${rgb256([r, g, b])}m`);
+const fg = rgb => sgr(38, rgb), bg = rgb => sgr(48, rgb);
 const col = (rgb) => (s) => `${fg(rgb)}${s}\x1b[39m`;
 const GRAY = [128, 134, 146];
 
@@ -154,7 +171,7 @@ function inline(s) {
   s = s.replace(/__(.+?)__/g, (_, t) => c.bold(t));
   s = s.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)/g, (_, p, t) => p + c.italic(t));
   s = s.replace(/\u0001(\d+)\u0001/g, (_, i) => `${c.underline(links[i][0])} ${c.dim('(' + links[i][1] + ')')}`);
-  s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `\x1b[48;2;48;50;60m\x1b[38;2;240;205;150m ${codes[i]} \x1b[39m\x1b[49m`);
+  s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `${bg([48, 50, 60])}${fg([240, 205, 150])} ${codes[i]} \x1b[39m\x1b[49m`);
   return s;
 }
 
@@ -281,7 +298,7 @@ export class MdStream {
     this.emit(line('┌', '┬', '┐'));
     cells.forEach((r, k) => {
       const head = k === 0 && rows[0].header;
-      const HB = s => `\x1b[48;2;44;47;58m${s}\x1b[49m`;                // en-tête sur fond grisé
+      const HB = s => `${bg([44, 47, 58])}${s}\x1b[49m`;                // en-tête sur fond grisé
       this.emit(c.dim('│') + w.map((x, i) => head ? HB(' ' + c.bold(fit(r[i] || '', x)) + ' ') : ' ' + fit(r[i] || '', x) + ' ').join(c.dim('│')) + c.dim('│'));
       if (head && cells.length > 1) this.emit(line('├', '┼', '┤'));
     });
@@ -512,7 +529,7 @@ export function diffView(oldStr, newStr, { max = 30, context = 2 } = {}) {
   const keep = new Set();
   ops.forEach((x, i) => { if (x.t !== ' ') for (let k = Math.max(0, i - context); k <= Math.min(ops.length - 1, i + context); k++) keep.add(k); });
   const width = String(ops.reduce((m, x) => Math.max(m, x.o || 0, x.n || 0), 0)).length;
-  const ADD = s => `\x1b[48;2;22;58;34m${s}\x1b[49m`, DEL = s => `\x1b[48;2;72;26;30m${s}\x1b[49m`;
+  const ADD = s => `${bg([22, 58, 34])}${s}\x1b[49m`, DEL = s => `${bg([72, 26, 30])}${s}\x1b[49m`;
   const W = cols() - 8 - width;
   let shown = 0, last = -2;
   for (let i = 0; i < ops.length; i++) {

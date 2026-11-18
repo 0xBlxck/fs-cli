@@ -28,8 +28,8 @@ import { runDoctor } from './src/doctor.js';
 import { loadCustomCommands, expandCommand } from './src/commands.js';
 import { startBridge } from './src/bridge.js';
 import { chromeExtensionInstalled, playwrightServer } from './src/browser.js';
-import { checkUpdate, INSTALL_CMD } from './src/update.js';
-import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
+import { checkUpdate, INSTALL_CMD, npmPermissionHelp, globalDirWritable, isNpmPermissionError } from './src/update.js';
+import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, isImagePath, prepareImage, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
 import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills, skillIndex } from './src/discover.js';
@@ -208,7 +208,8 @@ async function sendImages(message) {
   const list = S.images.splice(0, S.images.length);
   ui.spinner.start(`envoi de ${list.length} image${list.length > 1 ? 's' : ''}…`);
   try {
-    for (const [i, p] of list.entries()) {
+    for (const [i, p0] of list.entries()) {
+      const p = prepareImage(p0) || p0;                                  // Mac : photo .heic ou grosse capture Retina → JPEG (sips, fourni avec macOS)
       const st = fs.statSync(p);
       if (st.size > MAX_IMAGE_BYTES) { ui.spinner.stop(); println(c.yellow(`  ⚠ ${path.basename(p)} ignorée : trop lourde (max ${MAX_IMAGE_BYTES / 1048576} Mo)`)); continue; }
       ids.push(await uploadFile(fs.readFileSync(p), path.basename(p), mimeOf(p)));
@@ -249,7 +250,7 @@ function buildMessage(text) {
       if (!fs.existsSync(fp)) continue;
       const why = sensitivePathReason(fp);   // un @fichier ne doit pas envoyer un secret à l'API sans que tu le saches
       if (why) { println(c.yellow('  ⚠ @' + raw + ' non joint : ' + why)); continue; }
-      if (IMAGE_RE.test(fp)) { if (!S.images.includes(fp) && S.images.length < MAX_IMAGES) S.images.push(fp); continue; }   // @image.png : envoyée comme image
+      if (isImagePath(fp)) { if (!S.images.includes(fp) && S.images.length < MAX_IMAGES) S.images.push(fp); continue; }   // @image.png : envoyée comme image
       atts.push(readAttachment(fp));
     } catch {}
   }
@@ -272,7 +273,8 @@ function copyToClipboard(text) {
       return spawnSync('clip', { input, windowsHide: true }).status === 0;
     }
     const cmds = process.platform === 'darwin' ? [['pbcopy', []]] : [['wl-copy', []], ['xclip', ['-selection', 'clipboard']], ['xsel', ['--clipboard', '--input']]];
-    for (const [cmd, a] of cmds) if (spawnSync(cmd, a, { input: text }).status === 0) return true;
+    const env = { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' };   // pbcopy sans LANG (lancé depuis une appli) abîme les accents
+    for (const [cmd, a] of cmds) if (spawnSync(cmd, a, { input: text, env }).status === 0) return true;
   } catch {}
   return false;
 }
@@ -734,7 +736,7 @@ async function command(line) {
     case '/save': saveSession(); return println(c.green('  ✓ session sauvegardée') + c.dim(' (auto à chaque échange)'));
     case '/new':
       setProjectOnce(undefined); S.projectName = undefined;
-      S.chatId = null; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
+      S.chatId = null; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.allow = {}; S.undo = []; S.notes = []; S.title = ''; S.pendingFiles = []; S.blocks = []; S.pendingResults = []; S.ctxSent = false; S.ctxPercent = null; S.pendingContext = []; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
     case '/models': {
@@ -1023,7 +1025,7 @@ async function command(line) {
       if (/^(clear|aucune|off)$/i.test(arg)) { S.images = []; return println(c.dim('  → images en attente retirées')); }
       if (!arg) { pasteClipboardImage(); return; }
       const p = resolveP(arg, S.cwd);
-      if (!fs.existsSync(p) || !IMAGE_RE.test(p)) return println(c.red('  image introuvable (png, jpg, gif, webp, bmp)'));
+      if (!fs.existsSync(p) || !isImagePath(p)) return println(c.red(`  image introuvable (png, jpg, gif, webp, bmp${process.platform === 'darwin' ? ', heic' : ''})`));
       if (S.images.length >= MAX_IMAGES) return println(c.yellow(`  ${MAX_IMAGES} images maximum par message`));
       S.images.push(p); return println(c.dim(`  📎 [Image #${S.images.length}] ${path.basename(p)} : elle partira avec ton prochain message`));
     }
@@ -1117,7 +1119,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
       }
       S.ctxSent = true;
     }
-    if (cfg.engine === 'native') {                                     // MCP et skills du PC : annoncés à toute conversation qui ne les a pas encore vus (y compris après /resume)
+    if (cfg.engine === 'native' && !S.bareChat) {                                     // MCP et skills du PC : annoncés à toute conversation qui ne les a pas encore vus (y compris après /resume)
       const prefs = workPreferences();                                // préférences de forme seulement (pas de protocole d'outils dans le texte)
       if (prefs.sig !== S.toolsHintSig) { message += '\n\n' + prefs.text; S.toolsHintSig = prefs.sig; }
       // skills : UNE ligne qui renvoie à l'index des skills actifs (fichier sur le PC), une fois par conversation et quand la liste change.
@@ -1194,7 +1196,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
   } catch (e) {
     if (/Chat not found/i.test(e.message || '') && S.chatId) {        // conversation supprimée du site entre-temps : on repart sur une neuve
       markSessionsGone([S.chatId]);
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
       println(c.yellow('  cette conversation a été supprimée du site : ton message part dans une nouvelle conversation'));
       turnAbort = null;
       return chatTurn(text, { keepLast: true });
@@ -1204,7 +1206,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
       println(c.yellow('\n  ⚠ France Student a verrouillé cette conversation : le filtre de sécurité du fournisseur du modèle l\'a signalée. Elle ne peut plus être utilisée.'));
       println(c.dim('    Ton prochain message partira dans une nouvelle conversation (rien n\'y est recopié).'));
       if (isBroadFolder(S.cwd)) println(c.dim('    Conseil : ton dossier de travail est ton dossier personnel ; choisis plutôt le dossier du projet (📁 en bas du panneau, ou /cd) : le modèle y voit moins de fichiers sans rapport.'));
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.pendingSummary = null; S.compactedFrom = null;
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.pendingSummary = null; S.compactedFrom = null;
       turnAbort = null;
       return;
     }
@@ -1214,7 +1216,7 @@ async function chatTurn(text, { keepLast = false } = {}) {
       println(c.dim('    Ton message repart dans une nouvelle conversation, avec la fin de celle-ci comme contexte.'));
       let recap = '';
       try { recap = transcriptOf(await fetchChat(old)).slice(-10).map(m => `${m.role === 'user' ? 'Utilisateur' : 'Assistant'} : ${m.text.slice(0, 1500)}`).join('\n\n'); } catch {}
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0;
       S.pendingSummary = recap ? `Derniers échanges de la conversation précédente (devenue inutilisable à cause d'une erreur du serveur) :\n${recap}` : null;
       S.compactedFrom = null;
       turnAbort = null;
@@ -1394,7 +1396,7 @@ if (opts.stdio) {                                                    // commande
   input.on('skillsOpen', () => stdioSend('skills', skillsPayload()));
   input.on('skillToggle', (kind, name) => {
     if (kind === 'fs') { const set = new Set(cfg.skills); if (set.has(name)) set.delete(name); else set.add(name); cfg.skills = [...set]; }
-    else { const n = name.toLowerCase(), set = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase())); if (set.has(n)) set.delete(n); else set.add(n); cfg.disabledSkills = [...set]; S.toolsHintSig = ''; S.skillsCatSig = ''; }
+    else { const n = name.toLowerCase(), set = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase())); if (set.has(n)) set.delete(n); else set.add(n); cfg.disabledSkills = [...set]; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; }
     saveCfg(); stdioSend('skills', skillsPayload());
   });
   input.on('historyOpen', async () => {
@@ -1419,7 +1421,7 @@ if (opts.stdio) {                                                    // commande
     markSessionsGone([chatId]);
     remoteCache = remoteCache.filter(r => r.chatId !== chatId);
     if (S.chatId === chatId) {                                         // c'était la conversation ouverte : page vierge
-      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.title = ''; S.sid = newSid();
+      S.chatId = null; S.ctxSent = false; S.toolsHintSig = ''; S.skillsCatSig = ''; S.bareChat = false; S.skillsSent = null; S.ctxPercent = null; S.lastPromptTokens = 0; S.title = ''; S.sid = newSid();
       stdioSend('clear'); refreshPrompt();
     }
     stdioSend('flash', { text: `conversation « ${name} » supprimée` });
@@ -1575,11 +1577,16 @@ async function runUpdate() {
   const go = await input.select({ title, detail, options: [u.newer ? 'Mettre à jour maintenant' : 'Réinstaller maintenant', 'Annuler'], defaultIndex: u.newer ? 0 : 1 });
   if (go !== 0) return println(c.dim('  mise à jour annulée'));
   const url = INSTALL_CMD.split(' ').pop();
+  if (process.platform !== 'win32' && globalDirWritable(ROOT) === false) {   // Mac/Linux : dossier global de npm réservé à root → jamais sudo, on explique la vraie correction
+    println(c.yellow("  ✗ npm n'a pas le droit d'écrire dans son dossier global :"));
+    for (const l of npmPermissionHelp('EACCES')) println(c.dim('    ' + l));
+    return;
+  }
   const r1 = await runStep(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', url], 'mise à jour de FS-CLI…');
   if (!r1.ok) {
     println(c.red('  ✗ la mise à jour a échoué :'));
     for (const l of r1.tail.trim().split('\n').slice(-6)) println(c.dim('    ' + l));
-    if (/EACCES|permission/i.test(r1.tail)) println(c.yellow('    droits insuffisants : sur Linux/Mac, lance la commande avec sudo'));
+    if (isNpmPermissionError(r1.tail)) for (const l of npmPermissionHelp(r1.tail)) println(c.yellow('    ' + l));   // jamais « sudo » : il abîme ~/.npm
     return println(c.dim('  à la main : ') + c.accent(INSTALL_CMD));
   }
   let ver = u.latest;

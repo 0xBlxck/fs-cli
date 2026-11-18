@@ -39,3 +39,53 @@ export async function checkUpdate({ force = false } = {}) {
   out.newer = !!out.latest && compareVersions(out.latest, VERSION) > 0;
   return out;
 }
+
+// ── npm -g sans droits d'écriture (Mac avec le .pkg de nodejs.org, Linux avec le Node du système) ──
+/** Sortie de npm qui signale un refus d'écriture (EACCES / EPERM) ? */
+export function isNpmPermissionError(text) {
+  return /\bE(ACCES|PERM)\b|permission denied|operation not permitted/i.test(String(text || ''));
+}
+
+/** Fichier de démarrage du shell où ajouter le PATH (zsh par défaut sur Mac). */
+export function shellProfile({ platform = process.platform, shell = process.env.SHELL || '' } = {}) {
+  if (/zsh$/.test(shell) || (platform === 'darwin' && !shell)) return '~/.zprofile';
+  if (/bash$/.test(shell)) return platform === 'darwin' ? '~/.bash_profile' : '~/.bashrc';
+  return platform === 'darwin' ? '~/.zprofile' : '~/.profile';
+}
+
+/** Commandes pour que npm -g écrive dans ~/.local (jamais sudo : il laisserait ~/.npm à root). */
+export function npmPrefixFix(opts = {}) {
+  const prof = shellProfile(opts);
+  return [
+    'mkdir -p ~/.local',
+    'npm config set prefix ~/.local',
+    `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ${prof}`,
+  ];
+}
+
+/** Explication en français d'un échec EACCES/EPERM de npm -g (lignes à afficher). null si ce n'en est pas un. */
+export function npmPermissionHelp(text, opts = {}) {
+  if (!isNpmPermissionError(text)) return null;
+  const platform = opts.platform || process.platform;
+  if (platform === 'win32') return [
+    'npm n\'a pas pu remplacer les fichiers de FS-CLI (fichier verrouillé ou droits insuffisants).',
+    'Ferme les autres fenêtres fs-cli et les éditeurs qui utilisent le panneau FS-CLI, puis relance :',
+    `  ${INSTALL_CMD}`,
+  ];
+  return [
+    'npm n\'a pas le droit d\'écrire dans son dossier global (il appartient à root : Node installé avec le .pkg de nodejs.org ou par le système).',
+    'N\'utilise pas sudo : il laisserait des fichiers à root dans ~/.npm et casserait les prochains npm install.',
+    'Fais une fois ceci pour installer les paquets globaux dans ton dossier personnel :',
+    ...npmPrefixFix(opts).map(l => `  ${l}`),
+    'Ouvre un nouveau terminal, puis :',
+    `  ${INSTALL_CMD}`,
+    'Ensuite /update marchera sans mot de passe.',
+  ];
+}
+
+/** Dossier global de npm modifiable ? true / false, ou null si FS-CLI n'est pas installé avec npm -g. */
+export function globalDirWritable(root, access = p => fs.accessSync(p, fs.constants.W_OK)) {
+  const dir = path.dirname(path.resolve(root));
+  if (path.basename(dir) !== 'node_modules') return null;
+  try { access(dir); return true; } catch { return false; }
+}

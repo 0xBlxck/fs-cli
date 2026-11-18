@@ -70,10 +70,17 @@ function toServer(raw) {
   return s;
 }
 
+/** Fichier de config de Claude Desktop selon le système (Mac : ~/Library/Application Support, Linux : ~/.config). */
+export function claudeDesktopConfig(home, platform = process.platform, env = process.env) {
+  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+  if (platform === 'win32') return path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
+  const xdg = home === os.homedir() && env.XDG_CONFIG_HOME;          // XDG seulement pour le vrai dossier personnel (tests : jamais hors du faux)
+  return path.join(xdg || path.join(home, '.config'), 'Claude', 'claude_desktop_config.json');
+}
+
 /** Serveurs MCP configurés dans les autres assistants : { nom: { ...serveur, _source } }. Le premier trouvé gagne. */
 export function discoverMcpServers(cwd) {
   const home = importHome(); if (!home) return {};
-  const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
   const out = {};
   const add = (servers, source) => {
     for (const [name, raw] of Object.entries(servers || {})) {
@@ -86,7 +93,7 @@ export function discoverMcpServers(cwd) {
     if (cwd) for (const [p, v] of Object.entries(cj.projects || {})) if (samePath(p, cwd)) add(v?.mcpServers, 'Claude Code (ce dossier)');
     add(cj.mcpServers, 'Claude Code');
   }
-  add(readJson(path.join(appData, 'Claude', 'claude_desktop_config.json'))?.mcpServers, 'Claude Desktop');
+  add(readJson(claudeDesktopConfig(home))?.mcpServers, 'Claude Desktop');
   const codex = readText(path.join(home, '.codex', 'config.toml'));
   if (codex) add(parseCodexMcp(codex), 'Codex');
   add(readJson(path.join(home, '.cursor', 'mcp.json'))?.mcpServers, 'Cursor');

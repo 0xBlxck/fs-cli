@@ -149,3 +149,15 @@ test('index des skills (v3.45) : UNE ligne dans la conversation (sans nom d\'out
   assert.notEqual(d.skillIndex(list, path.join(tmp, 'autre-projet')).file, idx.file, 'un index par dossier de travail');
   assert.equal(d.skillIndex([], proj), null);
 });
+
+test('index des skills : lu SANS confirmation par read_file, alors qu\'il est rangé dans le dossier protégé .fs-cli', async () => {
+  const { execCall } = await import('../src/agent.js');
+  const idx = d.skillIndex(d.discoverSkills(proj, { refresh: true }), proj);
+  let asked = 0;
+  const S = { cwd: proj, undo: [], allow: {}, notes: [], tokens: { in: 0, out: 0 } };
+  const r = await execCall(S, { name: 'read_file', args: { path: idx.file } }, { signal: new AbortController().signal, ask: async () => { asked++; return 'n'; }, root: proj });
+  assert.equal(asked, 0, 'aucune question');
+  assert.equal(r.ok, true); assert.match(r.output, /site-web/);
+  const { sensitivePathReason } = await import('../src/permissions.js');
+  assert.ok(sensitivePathReason(path.join(os.homedir(), '.fs-cli', 'config.json')), 'le reste de .fs-cli reste protégé');
+});

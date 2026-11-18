@@ -160,6 +160,7 @@ a:hover { text-decoration: underline; }
 .spin .t { color: var(--dim); }
 .notice { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .notice.error { border-color: var(--err); }
+.notice.pre > div:first-child { white-space: pre-wrap; }   /* message sur plusieurs lignes (Mac : FS-CLI introuvable, aucun dossier) */
 .notice .btns { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
 .btn { background: var(--vscode-button-background); color: var(--vscode-button-foreground); padding: 4px 12px; border-radius: 5px; }
 .btn:hover { background: var(--vscode-button-hoverBackground); }

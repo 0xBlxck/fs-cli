@@ -1,6 +1,14 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.46.0', items: [
+    'Mac : coller une image marche (Ctrl+V), photos .heic converties, couleurs correctes dans Terminal',
+    'Mac/Linux : plus de blocage quand une commande lance un sous-processus ; serveurs bien arrêtés',
+    'Mac : installation sans sudo, /doctor qui vérifie Rosetta et npm, panneau qui trouve Node depuis le Dock',
+    'L\'index des skills s\'ouvre sans demander de confirmation',
+    'Moins de faux « refus » détectés (plus de requêtes ni de conversations gâchées)',
+    'run_command dans un autre dossier : jugé pour ce dossier, confirmation hors du projet',
+  ] },
   { version: '3.45.2', items: [
     'Mac : raccourcis du Mac (Ctrl+V pour coller une image, Cmd+Maj+P), page Chrome ouverte dans Chrome',
     'Fermer le Terminal arrête proprement les serveurs lancés par l\'agent',

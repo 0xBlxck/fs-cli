@@ -37,7 +37,7 @@ cd "C:\chemin\vers\ton projet"
 fs-cli
 ```
 
-Au premier lancement, un **assistant** connecte ton compte France Student : il ouvre le site, t'explique où copier ta clé de session (F12 → *Application* → *Cookies* → `next-auth.session-token`), la vérifie et l'enregistre sur ton PC (`~/.fs-cli/.env`). Rien à éditer à la main. Il te demande ensuite si tu fais confiance au dossier.
+Au premier lancement, un **assistant** connecte ton compte France Student : il ouvre le site, t'explique où copier ta clé de session (F12, ou ⌘⌥I sur Mac → *Application* → *Cookies* → `next-auth.session-token`), la vérifie et l'enregistre sur ton PC (`~/.fs-cli/.env`). Rien à éditer à la main. Il te demande ensuite si tu fais confiance au dossier.
 
 > 🔐 **Ta clé de session = ton mot de passe.** Ne la donne à personne, ne la colle pas dans un ticket ou une capture d'écran. Si elle a fuité : déconnecte-toi puis reconnecte-toi sur le site, et lance `fs-cli --login`.
 
@@ -50,7 +50,40 @@ Au premier lancement, un **assistant** connecte ton compte France Student : il o
 | Vérifier que tout marche | `fs-cli` puis `/doctor` |
 | Désinstaller | `npm uninstall -g fs-cli` (tes réglages restent dans `~/.fs-cli`) |
 
-Linux et macOS devraient fonctionner (bash) mais ne sont pas testés en continu.
+## Installation sur Mac (Apple Silicon et Intel) et Linux
+
+**1. Installe Node.js 20 ou plus récent** (une seule fois). Sur Mac, le plus simple est [Homebrew](https://brew.sh) :
+
+```bash
+brew install node
+```
+
+Sans Homebrew : l'installeur **LTS** de <https://nodejs.org> (sur un Mac Apple Silicon M1/M2/M3/M4, prends la version **ARM64**). Sous Linux : `nvm install --lts` ou la version LTS de nodejs.org.
+
+**2. Installe FS-CLI** (archive GitHub : git n'est pas nécessaire) :
+
+```bash
+npm install -g https://github.com/0xBlxck/fs-cli/archive/refs/heads/main.tar.gz
+```
+
+Si npm répond `EACCES` / `permission denied` (Node installé avec le .pkg de nodejs.org ou par le système), **n'utilise pas sudo** : il laisserait des fichiers à root dans `~/.npm` et `/update` redemanderait un mot de passe à chaque version. Fais plutôt une fois :
+
+```bash
+mkdir -p ~/.local
+npm config set prefix ~/.local
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+```
+
+(Linux avec bash : `~/.bashrc` au lieu de `~/.zprofile`.) Ouvre un nouveau terminal, relance la commande de l'étape 2 : les mises à jour par `/update` marcheront ensuite sans mot de passe.
+
+**3. Lance-le dans le dossier de ton projet :**
+
+```bash
+cd ~/mon-projet
+fs-cli
+```
+
+Sur Mac, `/doctor` vérifie aussi Rosetta (Node doit tourner en ARM64 natif sur Apple Silicon), le dossier global de npm, les outils de ligne de commande Xcode (`xcode-select --install` s'ils manquent) et, dans Terminal.app, l'option « Utiliser Option comme touche Méta » pour les raccourcis Alt. La suite de tests complète tourne en continu sur macOS (Apple Silicon et Intel) et Linux, sauf les tests propres à PowerShell.
 
 ---
 

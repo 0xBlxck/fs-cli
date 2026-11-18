@@ -170,10 +170,13 @@ export async function execCall(S, call, { signal, ask, root = null }) {
   const risk = riskInfo(tool, args, ctx);
 
   // politique de sécurité : analyse de la commande / du code, règles « toujours autoriser », secrets, chemins sensibles
-  const judgement = call.judge || judgeFor(call.name, args, S.cwd);
+  // commande lancée dans un autre dossier (run_command avec « cwd ») : jugée pour CE dossier, et les règles « toujours autoriser »
+  // du projet ne valent pas ailleurs (audit 17/11 : « rm -rf ./* » avec cwd = dossier personnel n'était qu'une simple question)
+  const runCwd = call.name === 'shell' && args.cwd ? resolveP(args.cwd, ctx.cwd) : (root || S.cwd);
+  const judgement = call.judge || judgeFor(call.name, args, runCwd);
   if (judgement) {
     risk.danger = null;                                   // remplace les anciennes regex
-    const d = decide(judgement, S.cwd);
+    const d = decide(judgement, runCwd);
     if (d.action === 'refuse') {
       ui.toolNote(`refusé par la politique de sécurité : ${d.reason}`, 'red');
       return { name: call.name, ok: false, output: `Commande REFUSÉE par la politique de sécurité (${d.reason}). Ne la relance pas telle quelle : propose une alternative sûre ou explique à l'utilisateur ce qu'il peut faire lui-même.` };
@@ -182,7 +185,9 @@ export async function execCall(S, call, { signal, ask, root = null }) {
   }
   if (['write_file', 'edit_file', 'read_file'].includes(call.name) && args.path) {
     const p0 = resolveP(args.path, ctx.cwd);
-    const sp = sensitivePathReason(p0) || sensitivePathReason(realish(p0));   // aussi via un lien symbolique
+    // index des skills (~/.fs-cli/skills-index) et dossiers de skills : LECTURE libre, sinon Claude demande une confirmation à chaque ouverture de l'index
+    const skillIdx = call.name === 'read_file' && isSkillPath(p0, S.cwd);
+    const sp = skillIdx ? null : (sensitivePathReason(p0) || sensitivePathReason(realish(p0)));   // aussi via un lien symbolique
     if (sp) risk.protectedPath = risk.protectedPath || sp;
   }
   if (root && args.path && ['write_file', 'edit_file', 'read_file', 'list_dir', 'grep', 'glob'].includes(call.name)) {   // chemins limités au workspace : le reste demande confirmation
@@ -194,6 +199,10 @@ export async function execCall(S, call, { signal, ask, root = null }) {
       const skillRead = ['read_file', 'list_dir', 'grep', 'glob'].includes(call.name) && isSkillPath(rp, S.cwd);   // skills du PC : lecture libre
       if (!skillRead && !isFolderTrusted(dir) && !risk.protectedPath) { risk.protectedPath = `hors du dossier de travail : ${rp}`; risk.outsideDir = dir; }
     }
+  }
+  if (root && call.name === 'shell' && args.cwd) {                     // dossier de la commande hors du dossier de travail : confirmation, comme pour un fichier
+    const rel = path.relative(realish(root), realish(runCwd));
+    if ((rel.startsWith('..') || path.isAbsolute(rel)) && !isFolderTrusted(runCwd) && !risk.protectedPath) { risk.protectedPath = `commande lancée hors du dossier de travail : ${runCwd}`; risk.outsideDir = runCwd; }
   }
   const secrets = call.name === 'write_file' ? scanSecrets(args.content || '') : call.name === 'edit_file' ? scanSecrets(args.new_string || '') : [];
   if (secrets.length) risk.secrets = secrets;

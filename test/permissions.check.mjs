@@ -317,8 +317,10 @@ for (const p of ['src/index.js', 'README.md', '.env.example', 'id_rsa.pub', 'C:\
 
 // ── Règles ──────────────────────────────────────────────────────────────────
 {
-  const cwdA = 'C:\\Users\\alice\\projA';
-  const cwdB = 'C:\\Users\\alice\\projB';
+  // dossiers temporaires réels : mêmes vérifications sous Windows, macOS et Linux
+  const cwdA = path.join(tmpHome, 'alice', 'projA');
+  const cwdB = path.join(tmpHome, 'alice', 'projB');
+  const keyA = path.resolve(cwdA).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
   check('rules vides', loadRules(cwdA).length === 0);
   check('describe vide', describeRules(cwdA).length === 1);
   addRule('git push', cwdA);
@@ -328,11 +330,11 @@ for (const p of ['src/index.js', 'README.md', '.env.example', 'id_rsa.pub', 'C:\
   check('2 règles', rs.length === 2, JSON.stringify(rs));
   check('global avant projet', rs[0].scope === 'global' && rs[0].key === 'remove-item' && rs[1].scope === 'projet');
   check('autre projet ne voit que global', loadRules(cwdB).length === 1 && loadRules(cwdB)[0].scope === 'global');
-  check('casse du cwd normalisée', loadRules('c:\\users\\ALICE\\projA\\').length === 2);
+  check('casse du cwd normalisée', loadRules(cwdA.toUpperCase() + path.sep).length === 2);
   const file = path.join(tmpHome, 'permissions.json');
   check('fichier écrit', fs.existsSync(file));
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  check('forme JSON', Array.isArray(raw.global) && raw.global[0].key === 'remove-item' && typeof raw.global[0].added === 'string' && raw.projects['c:/users/alice/proja'][0].key === 'git push', JSON.stringify(raw));
+  check('forme JSON', Array.isArray(raw.global) && raw.global[0].key === 'remove-item' && typeof raw.global[0].added === 'string' && raw.projects[keyA]?.[0]?.key === 'git push', JSON.stringify(raw));
   check('pas de .tmp restant', fs.readdirSync(tmpHome).every(f => !f.endsWith('.tmp')));
   const ask1 = judgeCommand('git push origin main');
   check('isAllowed git push (A)', isAllowedByRule(ask1, cwdA) === true);

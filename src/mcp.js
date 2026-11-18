@@ -69,13 +69,16 @@ function projectHash(cwd) {
 function readTrust() {
   try { const d = JSON.parse(fs.readFileSync(trustFile(), 'utf8')); return d && typeof d === 'object' && !Array.isArray(d) ? d : {}; } catch { return {}; }
 }
+/** Clé d'un projet : chemin réel (Mac : /tmp → /private/tmp, casse réelle du disque), en minuscules comme avant. */
+const projectKey = cwd => { let p = path.resolve(cwd || process.cwd()); try { p = fs.realpathSync.native(p); } catch {} return p.toLowerCase(); };
 export function isProjectTrusted(cwd) {
   const h = projectHash(cwd);
-  return !!h && readTrust()[path.resolve(cwd || process.cwd()).toLowerCase()] === h;
+  const d = readTrust();
+  return !!h && (d[projectKey(cwd)] === h || d[path.resolve(cwd || process.cwd()).toLowerCase()] === h);   // ancienne clé : approbations déjà enregistrées
 }
 export function trustProject(cwd) {
   const h = projectHash(cwd); if (!h) return false;
-  const d = readTrust(); d[path.resolve(cwd || process.cwd()).toLowerCase()] = h;
+  const d = readTrust(); d[projectKey(cwd)] = h;
   fs.mkdirSync(userDir(), { recursive: true, mode: 0o700 }); fs.writeFileSync(trustFile(), JSON.stringify(d), { mode: 0o600 });
   return true;
 }
@@ -229,6 +232,14 @@ function installExitHook() {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on('exit', () => { for (const p of CHILDREN) killTree(p, true); });
+  // Mac/Linux : fermer l'onglet du terminal envoie SIGHUP, et Node s'arrête sans « exit ». Les serveurs lancés en
+  // detached (nouvelle session) ne reçoivent pas ce signal : on les arrête ici, puis on sort (hooks « exit » compris).
+  if (!IS_WIN) for (const [sig, n] of [['SIGHUP', 1], ['SIGTERM', 15]]) {
+    process.on(sig, () => {
+      for (const p of CHILDREN) killTree(p, true);
+      if (process.listenerCount(sig) <= 1) process.exit(128 + n);    // personne d'autre n'écoute : comportement par défaut (sortie)
+    });
+  }
 }
 
 function handleServerRequest(msg) {

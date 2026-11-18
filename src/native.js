@@ -18,8 +18,9 @@ import { c } from './ui.js';
 export const READ_TOOLS = CLIENT_TOOLS.slice(0, 3);
 // Certains modèles de France Student refusent de servir d'agent à un outil externe (« ne peut pas servir de moteur à ton outil externe »,
 // « colle ici le contenu »…). FS-CLI ne contourne pas ce refus : il l'explique et propose un modèle qui accepte les outils.
-const TOOL_REFUSAL = /servir de moteur|outil externe|agent externe|(?:ne (?:peux|peut|pouvons) pas|impossible de) (?:piloter|contr[ôo]ler|utiliser) (?:FS-CLI|tes outils|les outils|ton (?:PC|ordinateur|disque))|ne (?:peux|peut|pouvons) pas (?:acc[ée]der|modifier|[ée]crire|lire|ex[ée]cuter|cr[ée]er|lancer|ouvrir)\b[^.]{0,60}\b(?:fichiers?|disque|dossier|commandes?|ordinateur|PC|machine)|(?:je )?n'ai pas (?:d'|l')?acc[èe]s (?:à|aux) (?:tes |ton |vos |votre |ce |tes )?(?:fichiers?|disque|dossier|syst[èe]me|ordinateur|PC|machine)|colle[rz]? (?:ici )?(?:le )?contenu/i;
-export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || ''));   // list_directory, read_file, search_files : seuls outils proposés en mode plan
+const TOOL_REFUSAL = /servir de moteur|(?:moteur|outil|agent) (?:d'un |à un |pour un )?(?:agent |outil )?externe|(?:je ne (?:peux|pourrai) pas|nous ne pouvons pas|impossible pour moi de) (?:piloter|contr[ôo]ler|utiliser) (?:FS-CLI|tes outils|les outils|ton (?:PC|ordinateur|disque))|(?:je ne (?:peux|pourrai) pas|nous ne pouvons pas) (?:acc[ée]der|modifier|[ée]crire|lire|ex[ée]cuter|cr[ée]er|lancer|ouvrir)\b[^.]{0,60}\b(?:tes |vos |ton |votre )(?:fichiers?|disque|dossier|commandes?|ordinateur|PC|machine)|je n'ai pas (?:d'|l')?acc[èe]s (?:à|aux) (?:tes |ton |vos |votre )(?:fichiers?|disque|dossier|syst[èe]me|ordinateur|PC|machine)|colle[rz]?(?:-le)? ici (?:le )?contenu/i;   // 1re personne + « ici » obligatoires (audit 17/11 : 6 réponses normales sur 7 prises pour des refus)
+// seulement le DÉBUT de la réponse (un refus se dit d'entrée) : « Python ne peut pas lire le fichier… » plus loin n'est pas un refus (audit 17/11)
+export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || '').slice(0, 400));   // list_directory, read_file, search_files : seuls outils proposés en mode plan
 const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi
 
@@ -224,10 +225,11 @@ export async function runNative(S, userText, opts) {
     const bare = typeof opts.bare === 'string' ? opts.bare.trim() : '';
     if (firstTurn && bare && bare !== String(userText).trim() && isOpenAiModel(S)) {
       ui.println(c.dim('  ↻ le modèle a refusé dès le 1er message : nouvel essai dans une conversation neuve, avec ta demande seule (sans les infos ajoutées par FS-CLI)'));
-      S.chatId = null; S.ctxSent = true; S.toolsHintSig = 'bare'; S.skillsCatSig = 'bare';   // cette conversation-là ne reçoit rien d'autre que tes messages
+      S.chatId = null; S.ctxSent = true; S.bareChat = true;            // cette conversation-là ne reçoit rien d'autre que tes messages (remis à zéro avec /new)
       return runNative(S, bare, { ...opts, bare: null, _recover: 1, _orig: bare });
     }
     ui.println(c.dim('  ↻ le modèle a cru ne pas avoir le droit d\'utiliser les outils : FS-CLI lui précise que ce sont les outils officiels de France Student'));
+    S.pendingFileIds = [];                                              // les images sont déjà dans la conversation : pas renvoyées avec la précision
     return runNative(S, CLARIFY, { ...opts, _recover: 1, _orig: userText });
   }
   if (recover && stage === 1) {

@@ -9,9 +9,23 @@ import { ROOT } from './config.js';
 const IS_WIN = process.platform === 'win32';
 export const EXT_ID = '0xblxck.fs-cli-vscode';
 
-/** éditeurs compatibles VS Code : nom, commande, emplacements connus */
-function candidates() {
-  const L = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+/** éditeurs compatibles VS Code : nom, commande, emplacements connus (platform et home : pour les tests) */
+export function candidates(platform = process.platform, home = os.homedir()) {
+  if (platform === 'darwin') {
+    // Mac : glisser l'appli dans Applications ne met aucune commande dans le PATH → on cherche dans les .app
+    const apps = ['/Applications', path.posix.join(home, 'Applications')];
+    const mac = (app, cmd) => [...apps.map(a => path.posix.join(a, app, 'Contents', 'Resources', 'app', 'bin', cmd)), `/opt/homebrew/bin/${cmd}`, `/usr/local/bin/${cmd}`];
+    return [
+      { name: 'VS Code', cmd: 'code', paths: mac('Visual Studio Code.app', 'code') },
+      { name: 'VS Code Insiders', cmd: 'code-insiders', paths: mac('Visual Studio Code - Insiders.app', 'code-insiders') },
+      { name: 'Cursor', cmd: 'cursor', paths: mac('Cursor.app', 'cursor') },
+      { name: 'Windsurf', cmd: 'windsurf', paths: mac('Windsurf.app', 'windsurf') },
+      { name: 'Antigravity IDE', cmd: 'antigravity-ide', paths: mac('Antigravity IDE.app', 'antigravity-ide') },
+      { name: 'Antigravity', cmd: 'antigravity', paths: mac('Antigravity.app', 'antigravity') },
+      { name: 'VSCodium', cmd: 'codium', paths: mac('VSCodium.app', 'codium') },
+    ];
+  }
+  const L = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
   const PF = process.env.ProgramFiles || 'C:\\Program Files';
   const win = (...p) => path.join(...p);
   return [
@@ -54,9 +68,11 @@ export function findEditors() {
   for (const c of candidates()) {
     const bin = c.paths.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } }) || onPath(c.cmd);
     if (bin && !isVsCodeFamily(bin)) continue;
-    if (bin && !out.some(e => e.bin.toLowerCase() === bin.toLowerCase())) out.push({ name: c.name, bin });
+    if (!bin) continue;
+    let real = bin; try { real = fs.realpathSync(bin); } catch {}          // /opt/homebrew/bin/code → lien vers le .app : un seul éditeur
+    if (!out.some(e => e.real.toLowerCase() === real.toLowerCase())) out.push({ name: c.name, bin, real });
   }
-  return out;
+  return out.map(({ name, bin }) => ({ name, bin }));
 }
 
 /** lance la commande d'un éditeur (les .cmd Windows passent par cmd.exe, chemin entre guillemets) */

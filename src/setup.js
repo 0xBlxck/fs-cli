@@ -56,6 +56,17 @@ function question(prompt, { hidden = false } = {}) {
   });
 }
 
+/** Étape 2 de l'assistant : ouvrir les outils du navigateur (Mac : ⌘⌥I, et Safari doit d'abord activer son menu Développement). */
+export function devtoolsSteps(platform = process.platform, { bold = s => s } = {}) {
+  if (platform !== 'darwin') return [`  2. Appuie sur ${bold('F12')} → onglet ${bold('Application')} (Chrome/Edge) ou ${bold('Stockage')} (Firefox) → ${bold('Cookies')}`];
+  return [
+    `  2. Ouvre les outils du navigateur avec ${bold('⌘⌥I')} (Cmd+Option+I) :`,
+    `     Chrome, Edge, Brave → onglet ${bold('Application')} → ${bold('Cookies')} · Firefox → ${bold('Stockage')} → ${bold('Cookies')}`,
+    `     Safari : d'abord Safari › Réglages › Avancées › coche « Afficher les fonctionnalités pour les développeurs web »,`,
+    `     puis ${bold('⌘⌥I')} → onglet ${bold('Stockage')} → ${bold('Cookies')}`,
+  ];
+}
+
 /** Vérifie un token auprès de l'API (GET /user/usage). */
 export async function checkToken(token) {
   setToken(token);
@@ -70,7 +81,7 @@ export async function loginWizard({ first = true } = {}) {
   say(c.dim('  Le CLI utilise TON compte France Student. Il faut copier une fois ta « clé de session » :'));
   say();
   say(`  1. Connecte-toi sur ${c.accent(SITE)}`);
-  say(`  2. Appuie sur ${c.bold('F12')} → onglet ${c.bold('Application')} (Chrome/Edge) ou ${c.bold('Stockage')} (Firefox) → ${c.bold('Cookies')}`);
+  for (const l of devtoolsSteps(process.platform, { bold: c.bold })) say(l);
   say(`  3. Clique sur ${c.bold('next-auth.session-token')} et copie sa ${c.bold('valeur')}`);
   say();
   say(c.dim('  🔐 Cette clé est comme un mot de passe : ne la donne à personne. Elle reste sur ton PC (~/.fs-cli/.env).'));

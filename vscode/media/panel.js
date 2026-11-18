@@ -8,6 +8,13 @@
   const h = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   const post = m => vscode.postMessage(m);
+  // plateforme donnée par l'extension (sinon navigator.platform) : raccourcis Mac (Cmd) au lieu de Ctrl
+  const PLAT = document.body.dataset.platform || (/^Mac/.test(navigator.platform) ? 'darwin' : /^Win/.test(navigator.platform) ? 'win32' : 'linux');
+  const IS_MAC = PLAT === 'darwin';
+  /** textes du CLI : raccourcis de l'éditeur traduits pour Mac (Ctrl+C / Ctrl+O du terminal restent tels quels) */
+  const macKeys = t => !IS_MAC ? t : String(t ?? '')
+    .replace(/Ctrl\+Maj\+P/g, 'Cmd+Maj+P').replace(/Ctrl\+Shift\+P/g, 'Cmd+Shift+P').replace(/Ctrl\+Alt\+([A-Z])\b/g, 'Cmd+Option+$1')
+    .replace(/Win\+Maj\+S/g, 'Cmd+Ctrl+Maj+4').replace(/\b(Ctrl|Alt)\+V\b/g, 'Cmd+V');
   const ICON = {
     plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>',
     slash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M9.8 5L6.2 11"/></svg>',
@@ -300,6 +307,7 @@
     const t = S.tool;
     if (t && t.box && !t.box.querySelector('.io-row.out') && kind !== 'red' && kind !== 'yellow' && IN_TOOLS.has(t.name)) { setIo(t, 'out', text); return; }
     if (t && (kind === 'dim' || !kind) && !IN_TOOLS.has(t.name)) { t.el.querySelector('.th').append(' ', h('span', 'td', '· ' + text)); return; }
+    text = macKeys(text);
     const n = h('div', 'tnote ' + (kind || ''), text);
     if (t) { t.el.append(n); toBottom(); } else { const w = h('div', 'tl'); w.append(n); add(w); }
   }
@@ -465,10 +473,10 @@
     else { spinner(null); aiEnd(); thinkEnd(); S.tool = null; }
   }
   let flashT = 0;
-  function showFlash(text) { flash.textContent = text; flash.style.opacity = '1'; clearTimeout(flashT); flashT = setTimeout(() => { flash.style.opacity = '0'; }, 3500); }
+  function showFlash(text) { flash.textContent = macKeys(text); flash.style.opacity = '1'; clearTimeout(flashT); flashT = setTimeout(() => { flash.style.opacity = '0'; }, 3500); }
 
   function notice(text, kind, buttons) {
-    const n = h('div', 'notice ' + (kind || '')); n.append(h('div', null, text));
+    const n = h('div', 'notice ' + (kind || '')); n.append(h('div', null, macKeys(text)));
     if (buttons?.length) { const b = h('div', 'btns'); for (const [label, fn, sec] of buttons) { const x = h('button', 'btn' + (sec ? ' sec' : ''), label); x.onclick = fn; b.append(x); } n.append(b); }
     add(n);
   }
@@ -587,11 +595,44 @@
     e.preventDefault();
     for (const it of items) {
       const f = it.getAsFile(); if (!f) continue;
-      const r = new FileReader();
-      r.onload = () => { const data = String(r.result).split(',')[1] || ''; post({ type: 'pasteImage', mime: f.type, data }); };
-      r.readAsDataURL(f);
+      shrinkImage(f).then(img => {
+        if (!img) return showFlash(tooBigMsg());
+        const r = new FileReader();
+        r.onload = () => {
+          const data = String(r.result).split(',')[1] || '';
+          if (data.length > IMG_B64_MAX) return showFlash(tooBigMsg());     // jamais en silence
+          if (img !== f && img.w) showFlash(`image réduite à ${img.w}×${img.h} pour l'envoi`);
+          post({ type: 'pasteImage', mime: img.type || f.type, data });
+        };
+        r.onerror = () => showFlash('image collée illisible : réessaie ou joins-la avec +');
+        r.readAsDataURL(img);
+      }, () => showFlash(tooBigMsg()));
     }
   });
+  // ── grosse image collée (capture Retina 3456×2234, écran 5K…) : réduite avant l'envoi ──
+  const IMG_B64_MAX = 14000000;                                        // limite de l'extension (~10 Mo)
+  const IMG_RAW_MAX = 7500000;                                         // en dessous : envoyée telle quelle
+  function tooBigMsg() { return 'image trop lourde (max 10 Mo) : capture plutôt une zone' + (IS_MAC ? ' (Cmd+Ctrl+Maj+4)' : PLAT === 'win32' ? ' (Win+Maj+S)' : ''); }
+  async function shrinkImage(f) {
+    if (f.size <= IMG_RAW_MAX) return f;
+    if (typeof createImageBitmap !== 'function') return null;
+    const bmp = await createImageBitmap(f);
+    const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    const g = c.getContext('2d');
+    g.drawImage(bmp, 0, 0, c.width, c.height);
+    if (bmp.close) bmp.close();
+    const blob = (type, q) => new Promise(res => c.toBlob(res, type, q));
+    let out = await blob('image/png');
+    if (!out || out.size > 5000000) {                                  // encore trop lourde : JPEG sur fond blanc
+      g.globalCompositeOperation = 'destination-over'; g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      out = await blob('image/jpeg', 0.9);
+    }
+    if (!out) return null;
+    out.w = c.width; out.h = c.height;
+    return out;
+  }
   box.addEventListener('dragover', e => e.preventDefault());
   box.addEventListener('drop', e => {
     const uris = (e.dataTransfer?.getData('text/uri-list') || '').split(/\r?\n/).filter(u => /^file:/.test(u));
@@ -1237,6 +1278,8 @@
     if (m.type === 'selectAnswered') { if (S.ask && S.ask.id === m.id && S.ask.answer) S.ask.answer(m.index >= 0 ? m.index : null, true); return; }   // répondu depuis la barre du diff
     if (m.type === 'exit') {
       setBusy(false); S.started = false;
+      if (m.noFolder) return notice(m.message || 'Aucun dossier ouvert.', 'pre', [['Choisir un dossier…', () => post({ type: 'pickStartFolder' })], ['Utiliser le dossier personnel', () => post({ type: 'startHome' }), true]]);
+      if (m.notFound) return notice(m.message || 'FS-CLI introuvable.', 'error pre', [['Réessayer', () => post({ type: 'restart' })], ['Installer FS-CLI', () => post({ type: 'installCli' }), true], ['Réglage fsCli.command', () => post({ type: 'openCliSetting' }), true]]);
       if (m.needLogin) return notice('FS-CLI n\'est pas encore connecté à ton compte France Student.', 'error', [['Se connecter', () => post({ type: 'login' })], ['Relancer', () => post({ type: 'restart' }), true]]);
       return notice(`FS-CLI s'est arrêté${m.code != null && m.code !== 0 ? ` (code ${m.code})` : ''}.${m.message ? '\n' + m.message : ''}`, m.code ? 'error' : '', [['Relancer', () => post({ type: 'restart' })]]);
     }
@@ -1307,7 +1350,7 @@
         const text = String(ev.text || '');
         if (!text.replace(/\x1b\[[0-9;]*m/g, '').trim()) break;
         aiEnd();
-        const p = h('div', 'print'); p.append(ansi(text.replace(/^\n+|\n+$/g, '').replace(/^ {2}/gm, ''))); add(p);
+        const p = h('div', 'print'); p.append(ansi(macKeys(text).replace(/^\n+|\n+$/g, '').replace(/^ {2}/gm, ''))); add(p);
         break;
       }
     }

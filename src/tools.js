@@ -14,7 +14,8 @@ export const IS_WIN = process.platform === 'win32';
 // On mémorise l'empreinte (taille + date) de chaque fichier lu ou écrit par le CLI. Si le fichier a changé depuis (toi dans ton éditeur,
 // un formateur, une autre commande…), le modèle doit le relire avant de le modifier : il n'écrase jamais une version qu'il n'a pas vue.
 const SEEN = new Map();
-const keyOf = fp => (IS_WIN ? path.resolve(fp).toLowerCase() : path.resolve(fp));
+// Windows et macOS (APFS) ne tiennent pas compte de la casse ; macOS peut rendre les accents décomposés (NFD) → clé NFC
+export const keyOf = fp => { const p = path.resolve(fp).normalize('NFC'); return IS_WIN || process.platform === 'darwin' ? p.toLowerCase() : p; };
 const stampOf = fp => { try { const s = fs.statSync(fp); return `${s.size}:${s.mtimeMs}`; } catch { return null; } };
 export function noteSeen(fp) { const s = stampOf(fp); if (s) SEEN.set(keyOf(fp), s); else SEEN.delete(keyOf(fp)); }
 export function staleReason(fp) {
@@ -27,16 +28,21 @@ export function staleReason(fp) {
 }
 /** Écrit via un fichier temporaire du même dossier puis renommage : jamais de fichier à moitié écrit (coupure, Ctrl+C, disque plein). */
 export function writeAtomic(fp, data) {
+  const asked = fp;
+  // lien symbolique (dotfiles, config partagée) : on écrit dans le vrai fichier, le lien reste un lien
+  let st = null; try { st = fs.lstatSync(fp); } catch {}
+  if (st?.isSymbolicLink()) { try { fp = fs.realpathSync(fp); st = fs.statSync(fp); } catch { fp = asked; st = null; } }
   const tmp = path.join(path.dirname(fp), `.${path.basename(fp)}.fscli-${process.pid}-${Math.random().toString(36).slice(2, 8)}.tmp`);
   try {
     fs.writeFileSync(tmp, data, 'utf8');
+    if (st && !IS_WIN) { try { fs.chmodSync(tmp, st.mode & 0o7777); } catch {} }   // garde les droits (+x de build.sh, gradlew, hooks git…)
     try { fs.renameSync(tmp, fp); }
     catch (e) {                                          // Windows : fichier ouvert/verrouillé par un éditeur → écriture directe
       if (!['EPERM', 'EBUSY', 'EACCES', 'EXDEV'].includes(e.code)) throw e;
       fs.writeFileSync(fp, data, 'utf8');
     }
   } finally { try { fs.unlinkSync(tmp); } catch {} }
-  noteSeen(fp);
+  noteSeen(asked); if (fp !== asked) noteSeen(fp);
 }
 
 /** Fichier temporaire dans un dossier privé tout neuf (mkdtemp : nom imprévisible, pas de collision ni de pré-création par un tiers). */
@@ -61,7 +67,13 @@ export function resolveP(p, cwd) {
   if (p === '~') return os.homedir();
   if (p.startsWith('~/') || p.startsWith('~\\')) p = path.join(os.homedir(), p.slice(2));
   p = p.replace(/%([^%]+)%/g, (m, v) => process.env[v] ?? m);
-  return path.resolve(cwd, p);
+  const r = path.resolve(cwd, p);
+  // macOS / Linux : chemin glissé depuis le Finder, espaces échappés (« Mon\ Projet ») → on retire les antislashs s'il n'existe pas tel quel
+  if (!IS_WIN && r.includes('\\') && !fs.existsSync(r)) {
+    const u = r.replace(/\\(.)/g, '$1');
+    if (fs.existsSync(u) || (!fs.existsSync(path.dirname(r)) && fs.existsSync(path.dirname(u)))) return u;
+  }
+  return r;
 }
 const rel = (p, cwd) => { const r = path.relative(cwd, p); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p; };
 const ok = (output, display) => ({ ok: true, output, display });
@@ -76,6 +88,30 @@ export function clipMiddle(text, max = 12000) {
 const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 const human = n => n < 1024 ? `${n}B` : n < 1048576 ? `${(n / 1024).toFixed(1)}K` : `${(n / 1048576).toFixed(1)}M`;
 const IGNORE_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.next', '.cache', '$RECYCLE.BIN', 'System Volume Information']);
+// macOS : dossiers système (index Spotlight, corbeille…), ~/Library (énorme, « données d'autres apps ») et photothèques
+const IS_MAC = process.platform === 'darwin';
+const MAC_IGNORE = new Set(['.Trash', '.Spotlight-V100', '.fseventsd', '.DocumentRevisions-V100', '.TemporaryItems']);
+// dossiers protégés par macOS (fenêtre « … souhaite accéder à votre dossier Documents ») : pas de descente depuis ~ sauf s'ils sont visés
+const MAC_PRIVATE = ['Desktop', 'Documents', 'Downloads'];
+const lc = s => s.normalize('NFC').toLowerCase();
+/** faut-il descendre dans ce dossier ? `allow` : noms de 1er niveau visés explicitement (ex. motif « Documents/notes/*.md ») */
+function descendOk(full, name, root, allow) {
+  if (IGNORE_DIRS.has(name)) return false;
+  if (!IS_MAC) return true;
+  if (MAC_IGNORE.has(name) || /\.photoslibrary$/i.test(name)) return false;
+  const home = os.homedir();
+  if (lc(full) === lc(path.join(home, 'Library'))) return false;
+  if (lc(path.resolve(root)) === lc(home) && lc(path.dirname(full)) === lc(home)
+    && MAC_PRIVATE.some(n => lc(n) === lc(name)) && !allow?.has(lc(name))) return false;
+  return true;
+}
+/** fichiers parasites du Finder (.DS_Store, ._* des clés USB) : masqués hors Windows */
+const isJunkFile = name => !IS_WIN && (name === '.DS_Store' || name.startsWith('._'));
+/** noms de 1er niveau visés par un motif glob (« Documents/x/*.md » → documents) */
+const globTargets = pattern => {
+  const first = String(pattern || '').replace(/\\/g, '/').replace(/^\.\//, '').split('/')[0];
+  return first && !/[*?{[]/.test(first) ? new Set([lc(first)]) : null;
+};
 
 // ── Détection de l'environnement (shell, python) ──────────────────────────────
 function probe(file, args) {
@@ -107,18 +143,82 @@ export async function detectEnv() {
   jobs.push((async () => {
     const cands = IS_WIN ? [['python', []], ['py', ['-3']], ['python3', []]] : [['python3', []], ['python', []]];
     for (const [f, a] of cands) {
-      const r = await probe(f, [...a, '--version']);
-      if (r.ok && /Python \d/.test(r.out)) { sysEnv.python = { file: f, args: a }; sysEnv.pythonVersion = r.out.replace('Python ', ''); return; }
+      // macOS : chemin absolu, jamais le faux /usr/bin/python3 d'un Mac sans outils Xcode (il ouvre la fenêtre d'installation)
+      for (const file of IS_MAC ? macFindExe(f) : [f]) {
+        const r = await probe(file, [...a, '--version']);
+        if (r.ok && /Python \d/.test(r.out)) { sysEnv.python = { file, args: a }; sysEnv.pythonVersion = r.out.replace('Python ', ''); return; }
+      }
     }
   })());
   await Promise.all(jobs);
 }
 
+// ── Environnement des commandes (macOS : PATH, invites de mot de passe) ───────
+// -l (shell de connexion) relit /etc/profile → path_helper remet /usr/bin devant Homebrew, pyenv, asdf… : sur Mac, simple -c
+export const SH_ARGS = IS_MAC ? ['-c'] : ['-lc'];
+let loginPath;                                                   // undefined = pas encore lu
+/** PATH des commandes. macOS lancé depuis une appli graphique (fs-cli --mcp de Claude Desktop) : pas de Homebrew dans le PATH →
+ *  on lit une fois celui du shell de connexion de l'utilisateur, entre deux marqueurs (ignore ce qu'affichent ses fichiers de config) */
+export function childPath() {
+  const cur = process.env.PATH || '';
+  if (!IS_MAC) return cur;
+  if (loginPath === undefined) {
+    loginPath = null;
+    const dirs = cur.split(':');
+    if (!dirs.includes('/opt/homebrew/bin') && !dirs.includes('/usr/local/bin')) {
+      const sh = process.env.SHELL || '/bin/zsh';
+      const expr = /fish$/.test(sh) ? '(string join : $PATH)' : '"$PATH"';            // fish : $PATH est une liste
+      try {
+        const r = spawnSync(sh, ['-ilc', `printf "__FSP__%s__FSP__" ${expr}`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+        const m = /__FSP__(.*?)__FSP__/s.exec(r.stdout || '');
+        if (m && m[1].includes('/')) loginPath = [...new Set([...m[1].split(':'), ...dirs].filter(Boolean))].join(':');
+      } catch {}
+    }
+  }
+  return loginPath || cur;
+}
+let cltOk;                                                       // macOS : outils de développement Xcode installés ?
+const hasCLT = () => cltOk ??= (() => { try { return spawnSync('xcode-select', ['-p'], { stdio: 'ignore', timeout: 3000 }).status === 0; } catch { return false; } })();
+/** macOS : chemins absolus de `name` dans le PATH, sans /usr/bin/<name> si les outils Xcode manquent (faux programme) */
+export function macFindExe(name, { pathVar = childPath(), clt = hasCLT } = {}) {
+  const out = [];
+  for (const d of String(pathVar).split(':').filter(Boolean)) {
+    const f = path.join(d, name);
+    if (out.includes(f)) continue;
+    try { fs.accessSync(f, fs.constants.X_OK); if (!fs.statSync(f).isFile()) continue; } catch { continue; }
+    if (d.replace(/\/+$/, '') === '/usr/bin' && !clt()) continue;
+    out.push(f);
+  }
+  return out;
+}
+// git ne doit jamais lire le clavier (il écrirait par-dessus l'interface) : sans terminal, il échoue tout de suite avec un message clair
+let gitSshSet;
+const userSetsGitSsh = () => gitSshSet ??= !!(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || [path.join(os.homedir(), '.gitconfig'), path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'git', 'config')]
+  .some(f => { try { return /^\s*sshCommand\s*=/im.test(fs.readFileSync(f, 'utf8')); } catch { return false; } });
+function childEnv(extra) {
+  const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
+  if (!IS_WIN) {                                                 // Windows : Git Credential Manager (fenêtre) et UAC, pas de conflit → inchangé
+    if (IS_MAC) env.PATH = childPath();
+    env.GIT_TERMINAL_PROMPT = '0';
+    if (!userSetsGitSsh()) env.GIT_SSH_COMMAND = 'ssh -o BatchMode=yes';
+  }
+  return env;
+}
+const PROMPT_FAIL_RE = /terminal prompts disabled|a terminal is required|Host key verification failed|no tty present/i;
+const promptNote = out => PROMPT_FAIL_RE.test(out)
+  ? `\n[Cette commande demande un mot de passe ou une confirmation : demande à l'utilisateur de la lancer lui-même dans un autre onglet du Terminal${IS_MAC ? ' (⌘T)' : ''} ; pour GitHub, gh auth login.]` : '';
+
 // ── Exécution de processus ────────────────────────────────────────────────────
+// Hors Windows, chaque commande a son propre groupe de processus (detached = setsid) : on tue tout le groupe (npm → node, rechargeur
+// Flask, « … & »), et elle n'a plus de terminal de contrôle (sudo, ssh, git ne lisent plus le clavier de FS-CLI).
+// Ces groupes ne sont plus tués par la fermeture du Terminal : on les garde ici pour les tuer à la sortie de FS-CLI.
+const GROUPS = new Set();
+const groupAlive = pid => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+function killGroup(pid, sig) { if (!pid) return false; try { process.kill(-pid, sig); return true; } catch { return false; } }
 function killTree(child) {
   try {
     if (IS_WIN) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-    else child.kill('SIGKILL');
+    else if (!killGroup(child.pid, 'SIGKILL')) { try { child.kill('SIGKILL'); } catch {} }
   } catch {}
 }
 
@@ -127,14 +227,14 @@ function runProc({ file, args, cwd, timeoutMs, signal, onData }) {
     let out = '', timedOut = false, aborted = false, settled = false;
     let child;
     try {
-      child = spawn(file, args, {
-        cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', NO_COLOR: '1', FORCE_COLOR: '0' },
-      });
+      child = spawn(file, args, { cwd, windowsHide: true, detached: !IS_WIN, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv() });
     } catch (e) { return resolve({ code: -1, out: `Impossible de lancer ${file}: ${e.message}`, timedOut, aborted }); }
+    if (!IS_WIN && child.pid) GROUPS.add(child.pid);
+    let exitTimer = null;
     const done = (code) => {
       if (settled) return; settled = true;
-      clearTimeout(timer); signal?.removeEventListener('abort', onAbort);
+      clearTimeout(timer); clearTimeout(exitTimer); signal?.removeEventListener('abort', onAbort);
+      if (!IS_WIN && child.pid && !groupAlive(child.pid)) GROUPS.delete(child.pid);   // groupe vide : plus rien à tuer
       resolve({ code, out, timedOut, aborted });
     };
     const onAbort = () => { aborted = true; killTree(child); };
@@ -146,6 +246,8 @@ function runProc({ file, args, cwd, timeoutMs, signal, onData }) {
     child.stdout.on('data', take); child.stderr.on('data', take);
     child.on('error', e => { out += `\n${e.message}`; done(-1); });
     child.on('close', code => done(code));
+    // le shell est fini mais un processus lancé en fond (« … & », nohup, démon) garde le pipe : on rend la main 1 s après
+    if (!IS_WIN) child.on('exit', code => { exitTimer = setTimeout(() => { try { child.stdout.destroy(); child.stderr.destroy(); } catch {} done(code); }, 1000); });
   });
 }
 
@@ -155,7 +257,7 @@ const PS_PRELUDE = `$ProgressPreference='SilentlyContinue';$PSDefaultParameterVa
 const PS_EPILOGUE = `\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 } }`;
 
 async function runShell(command, { cwd, timeoutMs, signal, onData }) {
-  if (!IS_WIN) return runProc({ file: '/bin/bash', args: ['-lc', command], cwd, timeoutMs, signal, onData });
+  if (!IS_WIN) return runProc({ file: '/bin/bash', args: [...SH_ARGS, command], cwd, timeoutMs, signal, onData });
   const script = PS_PRELUDE + command + PS_EPILOGUE;
   const enc = Buffer.from(script, 'utf16le').toString('base64');
   const base = ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass'];
@@ -171,7 +273,7 @@ const JOBS = new Map();
 let jobSeq = 0;
 
 function shellInvocation(command) {
-  if (!IS_WIN) return { file: '/bin/bash', args: ['-lc', command], tmp: null };
+  if (!IS_WIN) return { file: '/bin/bash', args: [...SH_ARGS, command], tmp: null };
   const script = PS_PRELUDE + command + PS_EPILOGUE;
   const enc = Buffer.from(script, 'utf16le').toString('base64');
   const base = ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass'];
@@ -189,18 +291,23 @@ const SERVER_RE = new RegExp('^(?:' + [
   String.raw`(?:python3?|py)\s+(?:-\d(?:\.\d+)?\s+)?-m\s+http\.server\b`, String.raw`php\s+-S\b`, String.raw`(?:live-server|http-server|serve)\b`,
   String.raw`vite(?:\s+(?:dev|serve|preview))?\s*(?:$|--)`, String.raw`flask\s+run\b`, String.raw`uvicorn\s`, String.raw`(?:python3?|py)\s+manage\.py\s+runserver\b`,
 ].join('|') + ')', 'i');
-/** commande = (cd …;)* serveur : la dernière partie est un serveur, les précédentes ne font que changer de dossier */
+// étapes préalables admises : changer de dossier, activer un venv (source / .), exporter une variable ($env:NOM=… sous PowerShell)
+const PREP_RE = /^(?:(?:cd|Set-Location|sl|pushd|source|\.|export)\s+\S|\$env:[A-Za-z_]\w*\s*=)/i;
+/** dernière partie sans les ajouts bash : « PORT=3001 », « nohup », « env », « & » final */
+const bareServer = last => last.replace(/^(?:(?:nohup|env)\s+|[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S*)\s+)*/, '').replace(/\s*&\s*$/, '');
+/** commande = (cd …;)* serveur : la dernière partie est un serveur, les précédentes ne font que préparer (dossier, venv, variables) */
 export function isServerCommand(command) {
   const parts = String(command || '').trim().split(/\s*(?:;|&&|\r?\n)\s*/).filter(Boolean);
   if (!parts.length || parts.length > 4) return false;
-  const last = parts[parts.length - 1];
-  return SERVER_RE.test(last) && parts.slice(0, -1).every(p => /^(?:cd|Set-Location|sl|pushd)\s+\S/i.test(p));
+  const last = bareServer(parts[parts.length - 1]);
+  return SERVER_RE.test(last) && parts.slice(0, -1).every(p => PREP_RE.test(p));
 }
 const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|[\w.-]+\.local)(?::\d+)?[^\s'")\]]*/i;
 /** port probable d'un serveur d'après sa commande (option explicite, sinon port par défaut de l'outil) */
 export function guessPort(command) {
   const c = String(command || '');
-  const m = c.match(/(?:-p|--port|-l|--listen)[\s=]+(\d{2,5})\b/i) || c.match(/http\.server\s+(\d{2,5})\b/i) || c.match(/-S\s+[\w.[\]:-]*:(\d{2,5})\b/i) || c.match(/runserver\s+(?:[\w.]+:)?(\d{2,5})\b/i);
+  const m = c.match(/(?:-p|--port|-l|--listen)[\s=]+(\d{2,5})\b/i) || c.match(/http\.server\s+(\d{2,5})\b/i) || c.match(/-S\s+[\w.[\]:-]*:(\d{2,5})\b/i) || c.match(/runserver\s+(?:[\w.]+:)?(\d{2,5})\b/i)
+    || c.match(/\bPORT\s*=\s*["']?(\d{2,5})\b/);                                           // PORT=3001 npm run dev · $env:PORT=3001
   if (m) return +m[1];
   if (/http\.server|runserver/i.test(c)) return 8000;
   if (/http-server/i.test(c)) return 8080;
@@ -210,7 +317,14 @@ export function guessPort(command) {
   if (/serve|next|npm|pnpm|yarn|bun/i.test(c)) return 3000;
   return null;
 }
-const answers = async url => { try { const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 600); await fetch(url, { method: 'HEAD', signal: ac.signal }); clearTimeout(t); return true; } catch { return false; } };
+// macOS 12+ : le Récepteur AirPlay écoute sur 5000 et 7000 (« Server: AirTunes ») : ce n'est pas notre serveur
+export const notOurServer = headers => /^AirTunes/i.test(headers?.get?.('server') || '');
+const answers = async url => { try { const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 600); const r = await fetch(url, { method: 'HEAD', signal: ac.signal }); clearTimeout(t); return !notOurServer(r.headers); } catch { return false; } };
+/** macOS : « flask run » sans port → 5000, déjà pris par AirPlay */
+export const flaskHint = command => IS_MAC && /\bflask\s+run\b/i.test(command) && guessPort(command) === 5000
+  ? '\nSur Mac, le port 5000 est pris par AirPlay (Récepteur AirPlay) : relance avec flask run --port 5001.' : '';
+/** commande pour ouvrir une adresse dans le navigateur, selon le système */
+export const OPEN_HINT = IS_WIN ? 'Start-Process <adresse> (ou start <adresse>)' : IS_MAC ? 'open <adresse>' : 'xdg-open <adresse>';
 
 /** lance un serveur en tâche de fond (sans fenêtre) et attend son adresse quelques secondes */
 export async function startServerJob(command, cwd, { onData, waitMs = 8000, signal } = {}) {
@@ -221,7 +335,9 @@ export async function startServerJob(command, cwd, { onData, waitMs = 8000, sign
   while (Date.now() - t0 < waitMs && !signal?.aborted) {
     if (job.out.length > shown) { onData?.(job.out.slice(shown)); shown = job.out.length; }
     if (job.status !== 'running' || URL_RE.test(job.out)) break;
-    if (guess && Date.now() - t0 > 700 && await answers(guess)) { probed = guess; break; }   // le serveur répond déjà, même s'il n'a rien affiché
+    if (guess && Date.now() - t0 > 700 && await answers(guess)) {                          // le serveur répond déjà, même s'il n'a rien affiché
+      await new Promise(r => setTimeout(r, 300)); probed = guess; break;                    // court délai : un serveur qui meurt aussitôt (port pris) est vu arrêté
+    }
     await new Promise(r => setTimeout(r, 250));
   }
   if (job.out.length > shown) onData?.(job.out.slice(shown));
@@ -243,9 +359,10 @@ export function hideConsoleLaunch(command) {
 export function startJob(command, cwd) {
   const inv = shellInvocation(command);
   const child = spawn(inv.file, inv.args, {
-    cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', NO_COLOR: '1', FORCE_COLOR: '0' },   // sortie Python immédiate (sinon rien avant le 1er visiteur)
+    cwd, windowsHide: true, detached: !IS_WIN, stdio: ['ignore', 'pipe', 'pipe'],   // hors Windows : groupe à part, arrêté en entier par stopJob
+    env: childEnv({ PYTHONUNBUFFERED: '1' }),   // sortie Python immédiate (sinon rien avant le 1er visiteur)
   });
+  if (!IS_WIN && child.pid) GROUPS.add(child.pid);
   const job = { id: ++jobSeq, command, cwd, startedAt: Date.now(), endedAt: null, status: 'running', code: null, out: '', child };
   const take = d => { job.out += stripAnsi(d); if (job.out.length > 200_000) job.out = job.out.slice(-150_000); };
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
@@ -265,12 +382,24 @@ export const getJob = id => JOBS.get(id);
 export function stopJob(id) {
   const j = JOBS.get(id);
   if (!j || j.status !== 'running') return false;
-  j.status = 'stopped'; killTree(j.child); return true;
+  j.status = 'stopped';
+  if (IS_WIN) { killTree(j.child); return true; }
+  // tout le groupe (npm → node/Vite/Next…) : SIGTERM pour qu'il libère son port proprement, SIGKILL 2 s plus tard s'il traîne
+  const pid = j.child.pid;
+  if (!killGroup(pid, 'SIGTERM')) { try { j.child.kill('SIGTERM'); } catch {} }
+  setTimeout(() => { if (!killGroup(pid, 'SIGKILL')) { try { j.child.kill('SIGKILL'); } catch {} } }, 2000).unref();
+  return true;
 }
 process.on('exit', () => {
-  for (const j of JOBS.values()) if (j.status === 'running') {
-    try { if (IS_WIN) spawnSync('taskkill', ['/pid', String(j.child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); else j.child.kill('SIGKILL'); } catch {}
+  if (IS_WIN) {
+    for (const j of JOBS.values()) if (j.status === 'running') {
+      try { spawnSync('taskkill', ['/pid', String(j.child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch {}
+    }
+    return;
   }
+  // groupes détachés : plus rien ne les arrête après nous (même une tâche « arrêtée » peut avoir laissé un serveur dans son groupe)
+  for (const j of JOBS.values()) if (!killGroup(j.child.pid, 'SIGKILL') && j.status === 'running') { try { j.child.kill('SIGKILL'); } catch {} }
+  for (const pid of GROUPS) killGroup(pid, 'SIGKILL');
 });
 
 /** commande directe `!cmd` depuis le REPL */
@@ -314,7 +443,7 @@ function makeGlobTest(pattern) {
   return (relPath) => hasSlash ? re.test(relPath.replace(/\\/g, '/')) : re.test(path.basename(relPath));
 }
 
-function* walk(root, { maxFiles = 60000, includeDirs = false } = {}) {
+function* walk(root, { maxFiles = 60000, includeDirs = false, allow = null } = {}) {
   const stack = [root]; let n = 0;
   while (stack.length) {
     const dir = stack.pop();
@@ -322,10 +451,10 @@ function* walk(root, { maxFiles = 60000, includeDirs = false } = {}) {
     for (const e of ents) {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) {
-        if (IGNORE_DIRS.has(e.name)) continue;
+        if (!descendOk(full, e.name, root, allow)) continue;
         if (includeDirs) yield { full, dir: true };
         stack.push(full);
-      } else if (e.isFile()) { if (++n > maxFiles) return; yield { full, dir: false }; }
+      } else if (e.isFile()) { if (isJunkFile(e.name)) continue; if (++n > maxFiles) return; yield { full, dir: false }; }
     }
   }
 }
@@ -432,9 +561,9 @@ export const TOOLS = {
       { name: 'timeout', type: 'int', desc: 'secondes, défaut 120, max 900' },
       { name: 'cwd', type: 'string', desc: 'dossier d\'exécution (défaut: dossier courant)' },
     ],
-    summary: a => a.command,
+    summary: a => (a.cwd ? `[dans ${a.cwd}] ` : '') + a.command,
     danger: a => dangerOf(a.command),
-    preview: a => a.command,
+    preview: a => (a.cwd ? `[dans ${a.cwd}] ` : '') + a.command,
     async run(a, ctx) {
       const timeoutS = Math.min(900, Math.max(1, a.timeout || 120));
       const cwd = a.cwd ? resolveP(a.cwd, ctx.cwd) : ctx.cwd;
@@ -444,15 +573,16 @@ export const TOOLS = {
         const { job, url } = await startServerJob(a.command, cwd, { onData: live.push, signal: ctx.signal });
         live.end();
         const out = clipMiddle(job.out.trim() || '(pas encore de sortie)', 4000);
+        const hint = flaskHint(a.command);
         if (job.status !== 'running') return job.code === 0 ? { ok: true, output: out, display: 'terminé', silent: true }   // commande finie d'elle-même (pas un serveur)
-          : { ok: false, output: `La commande s'est arrêtée tout de suite (code ${job.code}).\n${out}`, display: `arrêtée (code ${job.code})`, silent: true };
+          : { ok: false, output: `La commande s'est arrêtée tout de suite (code ${job.code}).\n${out}${hint}`, display: `arrêtée (code ${job.code})`, silent: true };
         return { ok: true, silent: true, display: `en arrière-plan · tâche ${job.id}${url ? ' · ' + url : ''}`,
-          output: `Serveur lancé en arrière-plan par FS-CLI (tâche ${job.id}, sans fenêtre). Il tourne toujours.${url ? `\nAdresse : ${url}` : ''}\nSortie :\n${out}\nPour l'ouvrir dans le navigateur : Start-Process <adresse> (ou start <adresse>). Pour l'arrêter : l'utilisateur tape /jobs stop ${job.id}. Ne relance pas le serveur.` };
+          output: `Serveur lancé en arrière-plan par FS-CLI (tâche ${job.id}, sans fenêtre). Il tourne toujours.${url ? `\nAdresse : ${url}` : ''}\nSortie :\n${out}${hint}\nPour l'ouvrir dans le navigateur : ${OPEN_HINT}. Pour l'arrêter : l'utilisateur tape /jobs stop ${job.id}. Ne relance pas le serveur.` };
       }
       const command = hideConsoleLaunch(a.command);
       const r = await runShell(command, { cwd, timeoutMs: timeoutS * 1000, signal: ctx.signal, onData: live.push });
       live.end();
-      const output = clipMiddle(formatProc(r, { timeoutS }));
+      const output = clipMiddle(formatProc(r, { timeoutS })) + (IS_WIN ? '' : promptNote(r.out));
       return { ok: r.code === 0 && !r.timedOut && !r.aborted, output, display: procDisplay(r), silent: true };
     },
   },
@@ -468,7 +598,7 @@ export const TOOLS = {
     danger: a => dangerOf(a.code),
     preview: a => a.code,
     async run(a, ctx) {
-      if (!sysEnv.python) return err('Python introuvable sur cette machine.');
+      if (!sysEnv.python) return err(`Python introuvable sur cette machine.${IS_MAC ? ' Installe Python : brew install python, ou xcode-select --install.' : ''}`);
       const timeoutS = Math.min(900, Math.max(1, a.timeout || 120));
       const tmp = makeTmp('script.py', a.code);
       const live = createLive(24);
@@ -498,7 +628,7 @@ export const TOOLS = {
       noteSeen(fp);
       // Économie de contexte : même fichier, même plage, contenu identique, déjà lu DANS CETTE conversation → on ne le renvoie pas.
       // Soupape : si le modèle redemande juste après, il le reçoit en entier (il l'avait peut-être perdu de vue).
-      const rStart = Math.max(1, a.offset || 1), rMax = Math.max(1, a.limit || 2000), rKey = `${fp}|${rStart}|${rMax}`, rHash = sha1(buf);
+      const rStart = Math.max(1, a.offset || 1), rMax = Math.max(1, a.limit || 2000), rKey = `${keyOf(fp)}|${rStart}|${rMax}`, rHash = sha1(buf);
       const seen = ctx.readCache?.get(rKey);
       if (seen && seen.hash === rHash && !seen.skipped) {
         seen.skipped = true;
@@ -609,10 +739,11 @@ export const TOOLS = {
         ents.sort((x, y) => (y.isDirectory() - x.isDirectory()) || x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
         for (const e of ents) {
           if (lines.length >= 400) { truncated = true; return; }
+          if (!e.isDirectory() && isJunkFile(e.name)) continue;            // .DS_Store, ._* : bruit du Finder
           const full = path.join(dir, e.name);
           if (e.isDirectory()) {
             lines.push(`${prefix}${e.name}/`);
-            if (d < depth && !IGNORE_DIRS.has(e.name)) rec(full, d + 1, prefix + '  ');
+            if (d < depth && descendOk(full, e.name, root)) rec(full, d + 1, prefix + '  ');
           } else {
             let size = ''; try { size = '  ' + human(fs.statSync(full).size); } catch {}
             lines.push(`${prefix}${e.name}${size}`);
@@ -638,7 +769,7 @@ export const TOOLS = {
       if (!fs.existsSync(root)) return err(`Dossier introuvable: ${root}`);
       const test = makeGlobTest(a.pattern);
       const found = [];
-      for (const f of walk(root)) {
+      for (const f of walk(root, { allow: globTargets(a.pattern) })) {
         const r = path.relative(root, f.full);
         if (test(r)) { let m = 0; try { m = fs.statSync(f.full).mtimeMs; } catch {} found.push({ r, m }); }
       }
@@ -667,7 +798,7 @@ export const TOOLS = {
       try { re = new RegExp(a.pattern, a.ignore_case ? 'i' : ''); } catch { re = new RegExp(escapeRe(a.pattern), a.ignore_case ? 'i' : ''); }
       const ctxN = Math.min(5, Math.max(0, a.context || 0));
       const test = a.glob ? makeGlobTest(a.glob) : null;
-      const files = fs.statSync(root).isFile() ? [{ full: root }] : walk(root);
+      const files = fs.statSync(root).isFile() ? [{ full: root }] : walk(root, { allow: a.glob ? globTargets(a.glob) : null });
       const out = []; let count = 0, nfiles = 0; const MAX = 250;
       outer: for (const f of files) {
         const r = fs.statSync(root).isFile() ? path.basename(f.full) : path.relative(root, f.full);

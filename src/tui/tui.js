@@ -4,7 +4,7 @@ import { KeyParser } from './keys.js';
 import { Screen } from './screen.js';
 import { PinnedScreen } from './pinned.js';
 import { layoutInput, indexAt, strWidth, padAnsi, stripAnsi, clipAnsi } from './layout.js';
-import { c, taskLine } from '../ui.js';
+import { c, taskLine, PASTE_IMAGE_KEY } from '../ui.js';
 
 // astuces affichées dans la zone de saisie vide (une nouvelle à chaque demande)
 const TIPS = ['fais-moi un site de café avec plusieurs agents', 'corrige le bug dans script.js', 'ouvre quick.fr dans le navigateur', 'retiens que je code en TypeScript', 'explique ce projet', 'ajoute des tests', 'refais le design de index.html', 'combien de conversations il me reste ?'];
@@ -245,8 +245,9 @@ export class Tui {
     // « ? » seul dans la saisie : aide des raccourcis (comme Claude Code)
     if (this.buf === '?' && !this.ask && !this.search) {
       const keys = [['/', 'commandes'], ['@', 'joindre un fichier'], ['!', 'commande shell directe'], ['#', 'retenir une info (mémoire)'],
-        ['alt+v', 'coller une image'], ['maj+tab', 'changer de mode'], ['échap ×2', 'revenir en arrière (/rewind)'], ['ctrl+r', 'chercher dans l\'historique'],
-        ['\\ + entrée', 'nouvelle ligne'], ['ctrl+o', 'déplier sorties et pensée'], ['ctrl+c', 'interrompre · ×2 quitter']];
+        [PASTE_IMAGE_KEY, 'coller une image'], ['maj+tab', 'changer de mode'], ['échap ×2', 'revenir en arrière (/rewind)'], ['ctrl+r', 'chercher dans l\'historique'],
+        ['\\ + entrée', 'nouvelle ligne'], ['ctrl+o', 'déplier sorties et pensée'], ['ctrl+c', 'interrompre · ×2 quitter'],
+        ['ctrl+l', process.platform === 'darwin' ? 'effacer et redessiner (pas Cmd+K)' : 'effacer et redessiner']];   // Cmd+K vide l'écran sans prévenir FS-CLI
       const half = Math.ceil(keys.length / 2), cw = Math.floor((W - 4) / 2);
       for (let i = 0; i < half; i++) {
         const cell = k => k ? padAnsi(`${c.accent(k[0].padEnd(11))}${c.dim(k[1])}`, cw) : '';

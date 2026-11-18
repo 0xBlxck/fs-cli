@@ -13,8 +13,13 @@ import { isImportApproved, approveImport } from './approvals.js';
 import { confirm } from './agent.js';
 import * as ui from './ui.js';
 
-/** Commande exacte pour lancer fs-mcp (chemin absolu : marche même sans installation globale). */
-export const FS_MCP = `node "${path.join(ROOT, 'mcp-cli.js')}"`;
+/** Commande exacte pour lancer fs-mcp (chemin absolu : marche même sans installation globale).
+ *  Hors Windows : le Node qui fait tourner FS-CLI (un bash de connexion sur Mac peut remettre un autre « node » devant). */
+export function fsMcpCommand(platform = process.platform, execPath = process.execPath, root = ROOT) {
+  const p = path.join(root, 'mcp-cli.js');
+  return platform === 'win32' ? `node "${p}"` : `${JSON.stringify(execPath)} "${p}"`;
+}
+export const FS_MCP = fsMcpCommand();
 
 /** Liste de tâches : simple mise en forme Markdown, que FS-CLI affiche comme un suivi de progression épinglé. */
 const TASKS_RULE = '- Pour toute tâche en plusieurs étapes (3 ou plus), écris d\'abord ton plan sous forme de liste de tâches Markdown, une ligne par étape : « - [ ] étape ». ' +

@@ -3,7 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+const IS_WIN = process.platform === 'win32';
 const isDir = p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+// hors Windows : seulement un dossier où l'on peut écrire (sinon write_file échoue en EACCES, npm init et mkdir aussi)
+const writable = p => { if (IS_WIN) return true; try { fs.accessSync(p, fs.constants.W_OK); return true; } catch { return false; } };
+// hors Windows : « la route /users », « /library », « /api » ne sont pas des dossiers de travail (sur Mac, /users = /Users : disque insensible à la casse)
+const oneLevel = p => !IS_WIN && p.startsWith('/') && p.split('/').filter(Boolean).length < 2;
 const STOP = /^(avec|et|pour|qui|que|dont|où|ya|il|elle|je|tu|on|stp|svp|merci|puis|ensuite|sans|dans|sur|and|with|for|please|then|which|that|the)$/i;
 const trimTail = s => s.replace(/[\s.,;:!?)\]}»"'`]+$/g, '');
 
@@ -12,17 +17,18 @@ export function detectTargetDir(text) {
   const cands = [];
   // racine d'un chemin absolu : C:\ ou C:/ partout ; /… et ~/… seulement hors Windows (sous Windows « /api » serait pris pour C:\api)
   // (un « C:\… » cité sous macOS / Linux n'existe pas là-bas : il ne doit pas devenir un dossier relatif « ./C:\… »)
-  const ROOT = process.platform === 'win32' ? String.raw`[A-Za-z]:[\\/]` : String.raw`(?:~\/|\/(?=[^\s/]))`;
+  const ROOT = IS_WIN ? String.raw`[A-Za-z]:[\\/]` : String.raw`(?:~\/|\/(?=[^\s/]))`;
   const home = s => (s.startsWith('~/') ? path.join(os.homedir(), s.slice(2)) : s);
-  for (const m of text.matchAll(new RegExp(String.raw`["'\`](${ROOT}[^"'\`\r\n]+)["'\`]`, 'g'))) cands.push(home(m[1]));   // chemin entre guillemets
-  for (const m of text.matchAll(new RegExp(String.raw`(?:^|[\s(])(${ROOT}[^\r\n]*)`, 'g'))) cands.push(home(m[1]));       // reste de la ligne : on teste les préfixes
-  for (const raw of cands) {
+  for (const m of text.matchAll(new RegExp(String.raw`["'\`](${ROOT}[^"'\`\r\n]+)["'\`]`, 'g'))) cands.push({ raw: home(m[1]), quoted: true });   // chemin entre guillemets
+  for (const m of text.matchAll(new RegExp(String.raw`(?:^|[\s(])(${ROOT}[^\r\n]*)`, 'g'))) cands.push({ raw: home(m[1]), quoted: false });       // reste de la ligne : on teste les préfixes
+  for (const { raw, quoted } of cands) {
     const toks = raw.split(/\s+/);
     for (let k = toks.length; k >= 1; k--) {                                                               // du plus long au plus court
       const cand = trimTail(toks.slice(0, k).join(' '));
       if (!cand) continue;
-      if (isDir(cand)) return path.resolve(cand);
-      if (/\.[A-Za-z0-9]{1,6}$/.test(cand) && isDir(path.dirname(cand))) return path.resolve(path.dirname(cand));   // chemin d'un fichier → son dossier
+      if (!quoted && oneLevel(cand)) continue;
+      if (isDir(cand)) { if (writable(cand)) return path.resolve(cand); continue; }
+      if (/\.[A-Za-z0-9]{1,6}$/.test(cand) && isDir(path.dirname(cand)) && writable(path.dirname(cand)) && !(!quoted && oneLevel(path.dirname(cand)))) return path.resolve(path.dirname(cand));   // chemin d'un fichier → son dossier
     }
     // dossier à créer (inexistant) : on prend le nom jusqu'à la ponctuation ou à un mot de liaison, si son parent existe
     const kept = [];
@@ -32,7 +38,7 @@ export function detectTargetDir(text) {
       if (/[.,;:!?]$/.test(t)) break;
     }
     const made = trimTail(kept.join(' '));
-    if (made && /[\\/]/.test(made.slice(3)) && isDir(path.dirname(made))) return path.resolve(made);
+    if (made && /[\\/]/.test(made.slice(3)) && isDir(path.dirname(made)) && writable(path.dirname(made))) return path.resolve(made);
   }
   return null;
 }

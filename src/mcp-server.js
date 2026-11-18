@@ -179,23 +179,37 @@ export function resolveModelIn(agents, arg) {
   return hit ? parseInt(hit) : null;
 }
 
+/** EPERM / EACCES : sur Mac, c'est souvent la confidentialité (Bureau, Documents, iCloud…) qui bloque l'application hôte. */
+const deniedCode = e => e?.code === 'EPERM' || e?.code === 'EACCES';
+export function deniedMessage(p, platform = process.platform) {
+  return platform === 'darwin'
+    ? `Accès refusé par macOS (Confidentialité et sécurité) : ${p}\nAutorise l'application qui lance FS-CLI (Claude, Antigravity, VS Code, Terminal…) dans Réglages Système › Confidentialité et sécurité › Fichiers et dossiers (ou Accès complet au disque), puis relance-la.`
+    : `Accès refusé : ${p} (droits insuffisants).`;
+}
+/** Clé d'un dossier pour retrouver sa session : chemin réel ; Windows et Mac (APFS) ne distinguent pas la casse. */
+export function folderKey(dir, platform = process.platform) {
+  let p = path.resolve(dir); try { p = fs.realpathSync.native(p); } catch {}
+  return platform === 'win32' || platform === 'darwin' ? p.toLowerCase() : p;
+}
+
 const textResult = (text, isError = false) => ({ content: [{ type: 'text', text: String(text) }], ...(isError ? { isError: true } : {}) });
 /** images générées → contenus MCP « image » (+ enregistrement si save_dir est donné) */
 const MAX_IMG = 8_000_000;
 function imageContents(imgs, saveDir) {
   const out = [], saved = [];
+  let failed = '';
   for (const im of imgs) {
     if (!im?.data || im.data.length > MAX_IMG) continue;
     out.push({ type: 'image', data: im.data.toString('base64'), mimeType: /^image\/(png|jpeg|webp|gif)$/.test(im.mime) ? im.mime : 'image/png' });
-    if (saveDir) { try { fs.mkdirSync(saveDir, { recursive: true }); const f = path.join(saveDir, String(im.name || 'image.png').replace(/[^\w.-]/g, '_')); fs.writeFileSync(f, im.data); saved.push(f); } catch {} }
+    if (saveDir) { try { fs.mkdirSync(saveDir, { recursive: true }); const f = path.join(saveDir, String(im.name || 'image.png').replace(/[^\w.-]/g, '_')); fs.writeFileSync(f, im.data); saved.push(f); } catch (e) { failed ||= deniedCode(e) ? deniedMessage(saveDir).split('\n')[0] : String(e?.message || e); } }
   }
-  return { out, saved };
+  return { out, saved, failed };
 }
 const withImages = (result, imgs, saveDir) => {
   if (!imgs.length) return result;
-  const { out, saved } = imageContents(imgs, saveDir);
+  const { out, saved, failed } = imageContents(imgs, saveDir);
   if (!out.length) return result;
-  const note = `${out.length} image${out.length > 1 ? 's' : ''} générée${out.length > 1 ? 's' : ''} par France Student (jointe${out.length > 1 ? 's' : ''} ci-dessous)${saved.length ? ` · enregistrée${saved.length > 1 ? 's' : ''} : ${saved.join(', ')}` : ' · non enregistrée sur le disque (paramètre save_dir pour l\'enregistrer)'}.`;
+  const note = `${out.length} image${out.length > 1 ? 's' : ''} générée${out.length > 1 ? 's' : ''} par France Student (jointe${out.length > 1 ? 's' : ''} ci-dessous)${saved.length ? ` · enregistrée${saved.length > 1 ? 's' : ''} : ${saved.join(', ')}` : failed ? ` · non enregistrée (${failed})` : ' · non enregistrée sur le disque (paramètre save_dir pour l\'enregistrer)'}.`;
   return { ...result, content: [...result.content, { type: 'text', text: note }, ...out] };
 };
 
@@ -419,7 +433,8 @@ export function createMcpServer(deps = {}) {
     if (!task.trim()) return textResult('Paramètre « task » manquant ou vide.', true);
     if (!folder) return textResult('Paramètre « folder » manquant : donne le chemin absolu du dossier de travail.', true);
     if (!path.isAbsolute(folder)) return textResult(`« folder » doit être un chemin absolu (reçu : ${folder}).`, true);
-    let st = null; try { st = fs.statSync(folder); } catch {}
+    let st = null, err = null; try { st = fs.statSync(folder); if (st.isDirectory()) fs.readdirSync(folder); } catch (e) { err = e; }
+    if (deniedCode(err)) return textResult(deniedMessage(folder), true);
     if (!st?.isDirectory()) return textResult(`Dossier introuvable : ${folder}`, true);
     const dir = path.resolve(folder);
     // sécurité : seul l'utilisateur peut approuver un dossier, dans fs-cli (jamais l'agent qui appelle ce serveur)
@@ -435,7 +450,7 @@ export function createMcpServer(deps = {}) {
       await detectEnv();
       d.runNative = (await import('./native.js')).runNative;
     }
-    const key = process.platform === 'win32' ? dir.toLowerCase() : dir;
+    const key = folderKey(dir);                                        // /tmp et /private/tmp, Projet et projet : même session
     applyChoice(args);
     const cw = !folders.has(key) && !chatFor(args) && args.new_conversation !== true ? await chooseWhere(signal) : null;
     if (cw?.cancel) return CANCELLED();
@@ -561,7 +576,8 @@ export function createMcpServer(deps = {}) {
       if (!path.isAbsolute(p)) return textResult(`Chemin non absolu : ${p}`, true);
       const why = sensitivePathReason(p);
       if (why) return textResult(`Refusé : ${p} (${why}). Ce fichier n'est jamais envoyé.`, true);
-      let st = null; try { st = fs.statSync(p); } catch {}
+      let st = null, err = null; try { st = fs.statSync(p); } catch (e) { err = e; }
+      if (deniedCode(err)) return textResult(deniedMessage(p), true);
       if (!st?.isFile()) return textResult(`Fichier introuvable : ${p}`, true);
       const ext = path.extname(p).slice(1).toLowerCase();
       if (UPLOAD_EXT[ext]) {
@@ -851,8 +867,24 @@ function installToml(t, entry) {
   return { status: 'ajouté', bak };
 }
 
+/** Chemin de Node qui survit aux mises à jour : Homebrew range Node dans …/Cellar/node/<version>/ (effacé au prochain
+ *  « brew upgrade ») ; on prend alors le lien stable (/opt/homebrew/bin/node, /usr/local/bin/node, …/opt/<formule>/bin/node)
+ *  s'il pointe bien sur ce même Node. Windows : inchangé. */
+export function stableNode(execPath = process.execPath, { platform = process.platform, realpath = p => fs.realpathSync(p) } = {}) {
+  if (platform === 'win32') return execPath;
+  let real = execPath; try { real = realpath(execPath); } catch {}
+  const m = String(real).match(/^(.*)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/);
+  const list = ['/opt/homebrew/bin/node', '/usr/local/bin/node'];
+  if (m) list.push(`${m[1]}/bin/node`, `${m[1]}/opt/${m[2]}/bin/node`);
+  for (const c of [...new Set(list)]) {
+    if (c === execPath) return execPath;
+    try { if (realpath(c) === real) return c; } catch {}
+  }
+  return execPath;
+}
+
 /** Ajoute (ou met à jour) l'entrée « france-student » sans toucher aux autres serveurs. Renvoie un résultat par agent trouvé. */
-export function installMcp({ home = installHome(), cliPath = path.join(ROOT, 'cli.js'), command = process.execPath } = {}) {   // chemin complet : une appli graphique (Antigravity, Mac) n'a pas toujours « node » dans son PATH
+export function installMcp({ home = installHome(), cliPath = path.join(ROOT, 'cli.js'), command = stableNode() } = {}) {   // chemin complet : une appli graphique (Antigravity, Mac) n'a pas toujours « node » dans son PATH
   if (!home) return [];
   const entry = { command, args: [path.resolve(cliPath), '--mcp'] };
   return mcpTargets(home).map(t => {
@@ -868,7 +900,7 @@ export function installMcpCli(log = s => console.log(s)) {
   const res = installMcp({ home });
   if (!res.length) {
     log('  Aucun agent compatible trouvé (Claude Code, Claude Desktop, Codex, Antigravity, Cursor, Windsurf, VS Code Copilot, opencode, Gemini CLI).');
-    log(`  Ajoute toi-même ce serveur MCP dans ton agent : commande « node », arguments [« ${path.join(ROOT, 'cli.js')} », « --mcp »].`);
+    for (const l of manualInstallHelp()) log(l);
     return 1;
   }
   let ok = 0;
@@ -882,6 +914,26 @@ export function installMcpCli(log = s => console.log(s)) {
     log('  → Redémarre les applications ci-dessus pour qu\'elles le voient.');
     log('  → fs_agent ne travaille que dans les dossiers déjà approuvés : ouvre-les une fois avec « fs-cli ».');
     if (!TOKEN) log('  ⚠ Aucune clé de session France Student : lance « fs-cli » une fois pour te connecter.');
+    if (nodeMoves()) log('  → Node vient de nvm/fnm/Volta : relance « fs-cli --install-mcp » après avoir changé de version de Node.');
   }
   return ok ? 0 : 1;
+}
+
+/** Node installé par un gestionnaire de versions (le chemin change à chaque version) ? */
+function nodeMoves(p = stableNode()) {
+  return /[\\/](\.nvm[\\/]versions|\.fnm|fnm[\\/]node-versions|\.volta[\\/]tools|\.asdf[\\/]installs|nvm[\\/]v\d)/i.test(p) || /[\\/]Cellar[\\/]/.test(p);
+}
+
+/** Aucun agent trouvé : commande et bloc JSON complets (chemin absolu de Node : une appli Mac lancée du Dock ne voit pas Homebrew ni nvm). */
+export function manualInstallHelp({ node = stableNode(), cli = path.join(ROOT, 'cli.js'), platform = process.platform } = {}) {
+  const q = s => (platform === 'win32' ? `"${s}"` : JSON.stringify(s));
+  const json = JSON.stringify({ mcpServers: { [SERVER_NAME]: { command: node, args: [cli, '--mcp'] } } }, null, 2);
+  const desk = platform === 'darwin' ? '~/Library/Application Support/Claude/claude_desktop_config.json'
+    : platform === 'win32' ? '%APPDATA%\\Claude\\claude_desktop_config.json' : '~/.config/Claude/claude_desktop_config.json';
+  return [
+    '  Claude Code (à lancer dans un terminal) :',
+    `    claude mcp add -s user ${SERVER_NAME} -- ${q(node)} ${q(cli)} --mcp`,
+    `  Autre agent (Claude Desktop : ${desk}) — à fusionner dans son fichier de config :`,
+    ...json.split('\n').map(l => `    ${l}`),
+  ];
 }

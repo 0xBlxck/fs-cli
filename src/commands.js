@@ -33,8 +33,11 @@ export function loadCustomCommands(cwd) {
       let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
       for (const e of ents) {
         const p = path.join(d, e.name);
-        if (e.isDirectory() && depth < 2) walk(p, prefix + e.name + ':', depth + 1);
-        else if (e.isFile() && /\.md$/i.test(e.name)) {
+        // lien symbolique (dotfiles avec stow, chezmoi… courant sur Mac) : on suit sa cible ; profondeur limitée, donc pas de boucle
+        let isDir = e.isDirectory(), isFile = e.isFile();
+        if (e.isSymbolicLink()) { try { const st = fs.statSync(p); isDir = st.isDirectory(); isFile = st.isFile(); } catch { continue; } }
+        if (isDir && depth < 2) walk(p, prefix + e.name + ':', depth + 1);
+        else if (isFile && /\.md$/i.test(e.name)) {
           const name = (prefix + e.name.replace(/\.md$/i, '')).toLowerCase();
           if (!/^[\w:-]{1,60}$/.test(name) || out.has(name)) continue;
           let text = ''; try { text = fs.readFileSync(p, 'utf8').replace(/^﻿/, ''); } catch { continue; }

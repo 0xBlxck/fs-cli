@@ -4,6 +4,7 @@
 //          'home' 'end' 'pageup' 'pagedown' ou une lettre (avec ctrl/meta)
 
 const CSI_LETTER = { A: 'up', B: 'down', C: 'right', D: 'left', H: 'home', F: 'end' };
+const PASTE_END = '\x1b[201~';
 const CSI_TILDE = { 1: 'home', 2: 'insert', 3: 'delete', 4: 'end', 5: 'pageup', 6: 'pagedown', 7: 'home', 8: 'end' };
 
 function mods(param) {
@@ -28,8 +29,13 @@ export class KeyParser {
 
     while (i < n) {
       if (this.pasting) {
-        const e = str.indexOf('\x1b[201~', i);
-        if (e < 0) { this.pasteBuf += str.slice(i); return; }
+        const e = str.indexOf(PASTE_END, i);
+        if (e < 0) {                                                    // marque de fin peut-être coupée entre deux morceaux (pty macOS ~1 Ko) : on garde son début pour la suite
+          let k = Math.min(PASTE_END.length - 1, n - i);
+          while (k > 0 && !str.endsWith(PASTE_END.slice(0, k))) k--;
+          this.pasteBuf += str.slice(i, n - k); this.rest = str.slice(n - k);
+          return;
+        }
         this.pasteBuf += str.slice(i, e);
         this.onKey({ name: 'paste', text: this.pasteBuf.replace(/\r\n?/g, '\n') });
         this.pasteBuf = ''; this.pasting = false; i = e + 6;
