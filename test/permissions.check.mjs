@@ -479,7 +479,8 @@ for (const p of ['src/index.js', 'README.md', '.env.example', 'id_rsa.pub', 'C:\
   const code = 'import os\n' + 'x = os.path.join("a", "b")\nprint(f"{x}")\n'.repeat(900);
   const t0 = process.hrtime.bigint(); judgeCode(code, 'python'); judgeCode(code.replace(/os\.path\.join/g, 'path.join'), 'node');
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  check('perf judgeCode 20k < 100ms', ms < 100, `${ms.toFixed(1)}ms`);
+  const PERF_MAX = process.env.CI ? 400 : 100;                          // serveurs de CI (Mac Intel surtout) bien plus lents qu'un PC
+  check(`perf judgeCode 20k < ${PERF_MAX}ms`, ms < PERF_MAX, `${ms.toFixed(1)}ms`);
 }
 
 // ── Cas supplémentaires et robustesse ───────────────────────────────────────
