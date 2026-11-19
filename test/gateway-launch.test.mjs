@@ -218,6 +218,7 @@ function harness(over = {}) {
     openLog: async () => ({ line: o => rec.logs.push(o), debug() {}, close() {} }),
     silence: async () => { rec.silenced++; },
     onSignal: (sig, fn) => { rec.signals[sig] = fn; },
+    writePlugin: () => 'PLUGIN',
     ...over,
   };
   return { fake, rec, io, child, spawned };
@@ -241,7 +242,7 @@ test('runClaude : passerelle sur 127.0.0.1 port libre, Claude Code lancé avec -
   assert.notEqual(L.claudeSettingsFile(111), L.claudeSettingsFile(222), 'deux « fs-cli claude » ne partagent pas leurs réglages');
   const sp = rec.spawns[0];
   assert.equal(sp.cmd, 'C:\\outils\\claude.exe');
-  assert.deepEqual(sp.args, ['--settings', settingsFile, '--strict-mcp-config', '-p', 'bonjour & 100%']);
+  assert.deepEqual(sp.args, ['--settings', settingsFile, '--strict-mcp-config', '--plugin-dir', 'PLUGIN', '-p', 'bonjour & 100%']);
   assert.equal(sp.opts.shell, false, 'exe lancé directement : cmd.exe n\'interprète ni & ni %');
   assert.equal(sp.opts.stdio, 'inherit');
   assert.equal(sp.opts.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:53412');
@@ -276,7 +277,7 @@ test('runClaude : --model de l\'utilisateur, --settings personnel, version non t
   const run = L.runClaude(['--model', 'claude-fs/gpt-6-astra', '--settings', 'perso.json', '--fs-demander'], io);
   await spawned.promise;
   const sp = rec.spawns[0];
-  assert.deepEqual(sp.args, ['--strict-mcp-config', '--model', 'claude-fs/gpt-6-astra', '--settings', 'perso.json'], 'pas de second --settings');
+  assert.deepEqual(sp.args, ['--strict-mcp-config', '--plugin-dir', 'PLUGIN', '--model', 'claude-fs/gpt-6-astra', '--settings', 'perso.json'], 'pas de second --settings');
   assert.ok(!('ANTHROPIC_MODEL' in sp.opts.env));
   assert.match(rec.err, /· GPT-6 Astra ·/);
   assert.match(rec.err, /ton propre --settings.*--fs-demander est sans effet/);
@@ -326,7 +327,7 @@ test('runClaude : erreurs avant le lancement (options, session, Claude Code abse
   const run2 = L.runClaude(['-p', 'a b'], h.io);
   await h.spawned.promise;
   assert.equal(h.rec.spawns[0].opts.shell, true, 'dernier recours : cmd.exe');
-  assert.match(h.rec.spawns[0].cmd, /claude\.cmd --settings .*claude-settings-\d+\.json"? --strict-mcp-config -p "a b"$/);
+  assert.match(h.rec.spawns[0].cmd, /claude\.cmd --settings .*claude-settings-\d+\.json"? --strict-mcp-config --plugin-dir PLUGIN -p "a b"$/);
   h.child.emit('exit', 0);
   assert.equal(await run2, 0);
 });
@@ -440,8 +441,11 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.50.0 en tête, puis 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [r, p, e, g, w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.51.0 en tête, puis 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(s.version, '3.51.0');
+  assert.match(s.items[0], /\/fs:conversations/);
+  assert.match(s.items[0], /\/fs:reprendre 3/);
   assert.equal(r.version, '3.50.0');
   assert.match(r.items[0], /--fs-conversations/);
   assert.match(r.items[1], /--fs-conversation "TP nmap"/);
@@ -547,4 +551,15 @@ test('chooseChat : id direct, mot du titre, liste au clavier (Entrée = nouvelle
   assert.match((await L.chooseChat(mk(), { pickChat: true }, 'X')).error, /Impossible de lire/);
   assert.match(L.chatLine(chats[0], 0), /^ {2}1\. TP Nmap · GPT-6 Astra · 19\/11/);
   assert.equal(L.keptArgs(['--fs-conversation', 'cv', '--fs-conversations', '--fs-web']).join(' '), '--fs-web', 'jamais enregistrées par --fs-garder');
+});
+
+test('plugin de session : deux commandes qui posent le marqueur lu par la passerelle', async () => {
+  const { pluginFiles, fsCommand } = await import('../src/gateway/fschats.js');
+  const f = pluginFiles('3.51.0');
+  assert.equal(JSON.parse(f['.claude-plugin/plugin.json']).name, 'fs');
+  assert.match(f['commands/conversations.md'], /^---\ndescription: .+\nargument-hint: .+\n---\nFSCLI-COMMANDE conversations \$ARGUMENTS\n$/);
+  assert.match(f['commands/reprendre.md'], /FSCLI-COMMANDE reprendre \$ARGUMENTS/);
+  assert.deepEqual(fsCommand('<command-name>/fs:reprendre</command-name>\nFSCLI-COMMANDE reprendre 3 '), { name: 'reprendre', arg: '3' });
+  assert.deepEqual(fsCommand('FSCLI-COMMANDE conversations'), { name: 'conversations', arg: '' });
+  assert.equal(fsCommand('explique FSCLI-COMMANDE à quelqu\'un'), null);
 });

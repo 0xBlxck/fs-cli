@@ -871,3 +871,55 @@ test('(n) --fs-conversation : la 1re session continue le chat FS choisi (aucune 
   assert.equal(fake.sent[1].chatId, null, 'une seule session reprend le chat choisi');
   checkInvariants(fake);
 });
+
+test('(o) /fs:conversations et /fs:reprendre : répondues par la passerelle (0 appel au modèle) ; le message suivant part dans le chat choisi', async t => {
+  const fake = fakeFs({ turns: ['Je reprends le CV.'], chats: { 'site-cv': { id: 'site-cv', title: 'Mon CV', chatMessages: [{ role: 'user', content: 'fais mon CV' }, { role: 'assistant', content: 'Voici ton CV.' }] } } });
+  const asked = [];
+  fake.deps.listChats = async o => { asked.push(o); return [
+    { id: 'site-tp', title: 'TP Nmap', lastMessageAt: '2026-11-18T10:00:00Z' },
+    { id: 'site-cv', title: 'Mon CV', lastMessageAt: '2026-11-19T10:00:00Z', agent: { name: 'GPT-6 Astra' } },
+  ]; };
+  const { gw, lines } = await setup(t, {}, { listProject: 'P1' }, { fake });
+  const m = [user('<command-name>/fs:conversations</command-name>\nFSCLI-COMMANDE conversations')];
+  const r1 = await call(gw, ccReq(m));
+  assert.match(r1.sse.text, /1\. Mon CV · GPT-6 Astra/);
+  assert.match(r1.sse.text, /2\. TP Nmap/);
+  assert.match(r1.sse.text, /\/fs:reprendre <numéro>/);
+  assert.deepEqual(asked, [{ projectId: 'P1' }], 'conversations du projet de --fs-projet');
+  m.push(asst(r1), user('FSCLI-COMMANDE reprendre 9'));
+  const r2 = await call(gw, ccReq(m));
+  assert.match(r2.sse.text, /Pas de conversation n° 9/);
+  m.push(asst(r2), user('FSCLI-COMMANDE reprendre 1'));
+  const r3 = await call(gw, ccReq(m));
+  assert.match(r3.sse.text, /« Mon CV » reprise/);
+  assert.equal(fake.sent.length, 0, 'aucun appel au modèle pour les commandes');
+  m.push(asst(r3), user('ajoute mon stage'));
+  const r4 = await call(gw, ccReq(m));
+  assert.equal(r4.sse.text, 'Je reprends le CV.');
+  assert.equal(fake.sent.length, 1);
+  assert.equal(fake.sent[0].chatId, 'site-cv');
+  assert.match(fake.sent[0].content, /^\[Suite de cette conversation : /);
+  assert.match(fake.sent[0].content, /ajoute mon stage/);
+  assert.doesNotMatch(fake.sent[0].content, /FSCLI-COMMANDE/, 'les commandes ne partent jamais au modèle');
+  assert.equal(fake.registered.length, 0, 'aucune nouvelle conversation');
+  assert.ok(lines.some(l => l.event === 'reprise' && l.via === 'commande'));
+  checkInvariants(fake);
+});
+
+test('(o2) /fs:reprendre par un mot du titre ; plusieurs résultats → liste ; liste illisible → message clair', async t => {
+  const fake = fakeFs({});
+  let fail = false;
+  fake.deps.listChats = async () => (fail ? null : [{ id: 'a', title: 'TP Nmap' }, { id: 'b', title: 'TP Wireshark' }, { id: 'c', title: 'CV' }]);
+  const { gw } = await setup(t, {}, {}, { fake });
+  const m = [user('FSCLI-COMMANDE reprendre tp')];
+  const r1 = await call(gw, ccReq(m));
+  assert.match(r1.sse.text, /Plusieurs conversations contiennent « tp »/);
+  m.push(asst(r1), user('FSCLI-COMMANDE reprendre cv'));
+  const r2 = await call(gw, ccReq(m));
+  assert.match(r2.sse.text, /« CV » reprise/);
+  fail = true;
+  m.push(asst(r2), user('FSCLI-COMMANDE conversations'));
+  const r3 = await call(gw, ccReq(m));
+  assert.match(r3.sse.text, /Impossible de lire tes conversations/);
+  assert.equal(fake.sent.length, 0);
+});

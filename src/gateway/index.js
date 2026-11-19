@@ -19,6 +19,7 @@ import { answerLocally, compactFsInBackground, SUBAGENT_REFUSAL } from './backgr
 import { recapOf, quotaState, limitMessage, MESSAGES } from './recover.js';
 import { runFsTurn, reconcile, applyReconcile, resultsText } from './fsturn.js';
 import { decodeId } from './ids.js';
+import { fsCommand, pickChats, chatLine, isChatId } from './fschats.js';
 import { textCleaner } from '../native.js';
 
 const MAX_IMAGES = 4;
@@ -53,6 +54,7 @@ export function createGateway(deps, opts = {}) {
   let disabled = false, unknownBackground = 0;
   // --fs-conversation : la 1re session principale de ce processus continue une conversation France Student existante
   const attach = o.attachChat?.id ? { id: String(o.attachChat.id), used: false } : null;
+  const listed = new Map();                                   // session → dernière liste de /fs:conversations (numéros de /fs:reprendre)
 
   const quota = () => {
     try { return typeof deps.quota === 'function' ? deps.quota() : quotaState(deps); }
@@ -256,6 +258,56 @@ export function createGateway(deps, opts = {}) {
     reply.finish(uses.length ? 'tool_use' : 'end_turn');
   }
 
+  /** Conversations du site (celles du projet de --fs-projet s'il y en a un) ; null si illisibles. */
+  async function siteChats() {
+    try { return typeof deps.listChats === 'function' ? await deps.listChats({ projectId: o.listProject || null }) : null; }
+    catch { return null; }
+  }
+
+  /** /fs:conversations [mot] : liste numérotée ; /fs:reprendre <n° | mot | id> : la session continue dans ce chat FS. */
+  async function runFsCommand(conv, cmd, reply) {
+    const key = conv.key || conv.id;
+    const where = o.listProject ? ' du projet' : '';
+    if (cmd.name === 'conversations') {
+      const list = await siteChats();
+      if (!Array.isArray(list)) return localTurn(conv, reply, 'Impossible de lire tes conversations France Student pour le moment (réessaie dans un instant).');
+      const cands = pickChats(list, cmd.arg);
+      listed.set(key, cands.map(c => ({ id: c.id, title: c.title || '' })));
+      line({ event: 'commande', name: 'conversations', n: cands.length });
+      if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${where}${cmd.arg ? ` dont le titre contient « ${cmd.arg} »` : ''}.`);
+      return localTurn(conv, reply, `Conversations France Student${where}${cmd.arg ? ` (titre contenant « ${cmd.arg} »)` : ''} :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}\n\nPour continuer l'une d'elles ici : /fs:reprendre <numéro>`);
+    }
+    const arg = cmd.arg;
+    if (!arg) return localTurn(conv, reply, 'Indique laquelle : /fs:reprendre <numéro> (après /fs:conversations), un mot du titre, ou son id.');
+    let target = null;
+    if (/^\d+$/.test(arg)) {
+      const prev = listed.get(key);
+      if (!prev) return localTurn(conv, reply, 'Tape d\'abord /fs:conversations pour voir la liste numérotée.');
+      target = prev[Number(arg) - 1] || null;
+      if (!target) return localTurn(conv, reply, `Pas de conversation n° ${arg} dans la dernière liste (1 à ${prev.length}).`);
+    } else if (isChatId(arg)) target = { id: arg.toLowerCase(), title: '' };
+    else {
+      const list = await siteChats();
+      if (!Array.isArray(list)) return localTurn(conv, reply, 'Impossible de lire tes conversations France Student pour le moment (réessaie dans un instant).');
+      const cands = pickChats(list, arg);
+      if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${where} dont le titre contient « ${arg} ».`);
+      if (cands.length > 1) {
+        listed.set(key, cands.map(c => ({ id: c.id, title: c.title || '' })));
+        return localTurn(conv, reply, `Plusieurs conversations contiennent « ${arg} » :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}\n\nChoisis : /fs:reprendre <numéro>`);
+      }
+      target = { id: cands[0].id, title: cands[0].title || '' };
+    }
+    if (target.id === conv.chatId) return localTurn(conv, reply, 'Tu es déjà dans cette conversation.');
+    const owner = store.list().find(c => c.id !== conv.id && c.chatId === target.id);
+    if (owner) { resetChat(owner); owner.borrowedBy = conv.id; store.save(owner); }   // jamais deux conversations sur un même chat FS
+    resetChat(conv);
+    conv.chatId = target.id;
+    conv.fs = { state: 'uncertain', pending: [], lastEventId: null, inflightKey: null };   // vérifié avant le prochain envoi
+    conv.attachNext = true;
+    line({ event: 'reprise', chatId: target.id, via: 'commande' });
+    return localTurn(conv, reply, `Conversation France Student ${target.title ? `« ${target.title} »` : target.id} reprise : ton prochain message part dedans, le modèle se souvient de ce qui y a été dit.`);
+  }
+
   async function processRequest(found, delta, reply, body, cls, turns, entry) {
     const env = extractEnv(body.system, o.cwd || process.cwd());
     const tools = Array.isArray(body.tools) ? body.tools : [];
@@ -299,7 +351,11 @@ export function createGateway(deps, opts = {}) {
 
     const ia = findLastIndex(turns, t => t.role === 'assistant');
     const u = mergeUserTurns(delta.userTurns);
+    // /fs:conversations, /fs:reprendre (plugin de session de fs-cli claude) : répondues ici, aucun appel au modèle
+    const cmd = cls.kind === 'main' && !u.results.length ? fsCommand(u.text) : null;
+    if (cmd) { await runFsCommand(conv, cmd, reply); return { outcome: 'commande', chatId: conv.chatId, cache: false }; }
     const extras = { web: !!o.web, date: isoDay(now()), shellTool, forceClaudeMd: !!o.claudeMd };
+    if (conv.attachNext) { conv.attachNext = false; extras.borrowed = true; extras.attached = true; }   // 1er envoi après /fs:reprendre : note + préambule
     const ctxBase = { deps, store, models, agent, key: delta.key, est: estimateTokens(body), prefix, userText: u.text, timing, quota,
       log: line, debug, onDisabled: () => { disabled = true; },
       toolCtx: { env, tools, sessionId: cls.sessionId, fsExists: deps.fsExists, fsStat: deps.fsStat } };

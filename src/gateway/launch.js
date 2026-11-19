@@ -10,6 +10,7 @@ import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
 import { HOME_DIR, cfg, saveCfgKeys } from '../config.js';
 import { createModels } from './models.js';
 import { quotaState } from './recover.js';
+import { chatLine, pickChats, isChatId, pluginFiles } from './fschats.js';
 
 const GW_DIR = () => path.join(HOME_DIR, 'gateway');
 export const logFile = () => path.join(GW_DIR(), 'gateway.log');
@@ -180,12 +181,7 @@ async function applySaved(h, argv, { claude = true } = {}) {
 
 // ── Reprendre une conversation France Student (--fs-conversation / --fs-conversations) ──
 
-const whenFr = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
-/** ligne d'une conversation dans la liste : « 3. Titre · modèle · 19/11 15:24 » (withId : l'id à la fin, pour --fs-conversation) */
-export function chatLine(c, i, { withId = false } = {}) {
-  const parts = [String(c?.title || '(sans titre)').replace(/\s+/g, ' ').slice(0, 60), c?.agent?.name, whenFr(c?.lastMessageAt || c?.createdAt)].filter(Boolean);
-  return `${String(i + 1).padStart(3)}. ${parts.join(' · ')}${withId ? `  (${c.id})` : ''}`;
-}
+export { chatLine };
 
 /**
  * Conversation France Student à reprendre. → null (nouvelle conversation), { id, title } ou { error }.
@@ -194,15 +190,12 @@ export function chatLine(c, i, { withId = false } = {}) {
 export async function chooseChat(h, o, projectId = null) {
   if (!o.chat && !o.pickChat) return null;
   const want = String(o.chat || '').trim();
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(want)) return { id: want.toLowerCase(), title: '' };
+  if (isChatId(want)) return { id: want.toLowerCase(), title: '' };
   let list = null;
   try { list = projectId ? await h.projectChats(projectId) : await h.recentChats(50); } catch {}
   if (!Array.isArray(list)) return { error: 'Impossible de lire tes conversations France Student (réessaie, ou vérifie ta connexion avec fs-cli --login).' };
-  const at = c => String(c?.lastMessageAt || c?.createdAt || '');
-  let cands = list.filter(c => c?.id).sort((a, b) => at(b).localeCompare(at(a)));
+  let cands = pickChats(list, want, 1000);
   if (want) {
-    const low = want.toLocaleLowerCase('fr-FR');
-    cands = cands.filter(c => String(c.title || '').toLocaleLowerCase('fr-FR').includes(low));
     if (!cands.length) return { error: `Aucune conversation France Student${projectId ? ' de ce projet' : ''} n'a « ${want} » dans son titre.` };
     if (cands.length === 1) return { id: cands[0].id, title: cands[0].title || '' };
   }
@@ -215,6 +208,21 @@ export async function chooseChat(h, o, projectId = null) {
   const n = Number(a);
   if (!Number.isInteger(n) || n < 1 || n > cands.length) return { error: `Numéro invalide : « ${a} ».` };
   return { id: cands[n - 1].id, title: cands[n - 1].title || '' };
+}
+
+/** Plugin de session (commandes /fs:conversations et /fs:reprendre) écrit dans ~/.fs-cli/gateway/claude-plugin ; null en cas d'échec. */
+function writePlugin() {
+  const dir = path.join(GW_DIR(), 'claude-plugin');
+  try {
+    let version = '0.0.0';
+    try { version = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version || version; } catch {}
+    for (const [rel, text] of Object.entries(pluginFiles(version))) {
+      const f = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      if (defaultRead(f) !== text) fs.writeFileSync(f, text);
+    }
+    return dir;
+  } catch { return null; }
 }
 
 async function askLine(q) {
@@ -449,6 +457,8 @@ export async function realDeps() {
     uploadFile: api.uploadFile,
     cancelStream: api.cancelStream,
     fetchAgentsFull: api.fetchAgentsFull,
+    /** /fs:conversations : conversations du site (celles du projet si projectId) */
+    listChats: ({ projectId = null } = {}) => (projectId ? api.projectChats(projectId) : api.fetchChatsList(50)),
     createdToday: () => chats.createdToday(),
     fsExists: p => { try { return fs.existsSync(p); } catch { return false; } },
     fsStat: p => { try { return fs.statSync(p); } catch { return null; } },
@@ -524,6 +534,7 @@ function makeHost(io) {
     recentChats: async n => (await import('../api.js')).fetchChatsList(n),
     projectChats: async id => (await import('../api.js')).projectChats(id),
     ask: askLine,
+    writePlugin,
     openLog,
     silence,
     onSignal: (sig, fn) => { try { process.on(sig, fn); } catch {} },
@@ -578,13 +589,14 @@ export async function runClaude(argv, io = {}) {
 
   const deps = await h.deps();
   const token = crypto.randomBytes(24).toString('base64url');
-  const s = await startOrFail(h, { host: '127.0.0.1', port: 0, token, deps, opts: { ...o, attachChat: chat }, log }, e => `Impossible de démarrer la passerelle : ${e?.message || e}`);
+  const s = await startOrFail(h, { host: '127.0.0.1', port: 0, token, deps, opts: { ...o, attachChat: chat, listProject: proj?.id || null }, log }, e => `Impossible de démarrer la passerelle : ${e?.message || e}`);
   if ('done' in s) return s.done;
   const { gw } = s;
   const url = gw.url || `http://127.0.0.1:${gw.port}`;
   await h.silence(log);
 
   const settings = o.claudeSettings === null ? writeClaudeSettings(claudeSettingsFile(), { url, token, ask: o.ask }) : null;
+  const plugin = h.writePlugin();                                     // /fs:conversations et /fs:reprendre, pour cette session seulement
   const models = createModels(deps);
   const shown = o.claudeModel ? await models.resolve(o.claudeModel) : await models.fromAgentId(cfg.agentId);
   const ccId = o.claudeModel ? null : await models.ccId(cfg.agentId);
@@ -595,7 +607,7 @@ export async function runClaude(argv, io = {}) {
   // Les serveurs MCP ne servent à rien au modèle France Student (il ne voit que les outils de fichiers) et ralentissent
   // le démarrage : coupés par défaut, sauf --fs-mcp ou si l'utilisateur passe lui-même --mcp-config / --strict-mcp-config.
   const noMcp = !o.mcp && claudeOption(rest, '--mcp-config') === null && !rest.includes('--strict-mcp-config');
-  const args = [...(bin.args || []), ...(settings ? ['--settings', settings] : []), ...(noMcp ? ['--strict-mcp-config'] : []), ...rest];
+  const args = [...(bin.args || []), ...(settings ? ['--settings', settings] : []), ...(noMcp ? ['--strict-mcp-config'] : []), ...(plugin ? ['--plugin-dir', plugin] : []), ...rest];
   log.line({ event: 'spawn', cmd: bin.cmd, viaCmd: !!bin.isCmd, args: args.length });
   const child = bin.isCmd
     ? h.spawn([bin.cmd, ...args].map(quoteWin).join(' '), { stdio: 'inherit', env, shell: true })
