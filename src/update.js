@@ -103,7 +103,9 @@ export async function updateAll(deps = {}) {
   const root = deps.root ?? ROOT;
   const log = deps.log ?? (t => process.stdout.write(t + '\n'));
   const platform = deps.platform ?? process.platform;
-  const run = deps.run ?? ((cmd, args) => spawnSync(cmd, args, { stdio: 'inherit', shell: platform === 'win32', env: process.env }));
+  // shell seulement pour npm.cmd (Windows l'exige pour un .cmd) ; Node est lancé DIRECTEMENT : par le shell, son chemin
+  // « C:\Program Files\nodejs\node.exe » était coupé à l'espace (« 'C:\Program' n'est pas reconnu », vu en vrai le 19/11)
+  const run = deps.run ?? ((cmd, args, { shell = false } = {}) => spawnSync(cmd, args, { stdio: 'inherit', shell, env: process.env }));
   const exists = deps.exists ?? (p => fs.existsSync(p));
   if (exists(path.join(root, '.git'))) {
     log('FS-CLI tourne depuis un dossier de développement (git) : mets-le à jour avec « git pull » dans ' + root + '.');
@@ -116,14 +118,15 @@ export async function updateAll(deps = {}) {
     return 1;
   }
   log('1/2  FS-CLI et fs-cli claude (npm)…');
-  const r1 = run(platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', INSTALL_CMD.split(' ').pop()]);
+  const r1 = run(platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', INSTALL_CMD.split(' ').pop()], { shell: platform === 'win32' });
   if (r1?.status !== 0) {
-    log('✗ la mise à jour de FS-CLI a échoué. À la main : ' + INSTALL_CMD);
+    log('ÉCHEC : la mise à jour de FS-CLI n\'a pas marché. À la main : ' + INSTALL_CMD);
     return 1;
   }
   log('2/2  panneau FS-CLI dans tes éditeurs (VS Code, Cursor, Antigravity…)…');
-  const r2 = run(deps.node ?? process.execPath, [path.join(root, 'cli.js'), '--vscode']);
-  log(r2?.status === 0 ? '✓ tout est à jour. Recharge la fenêtre de ton éditeur (Ctrl+Maj+P › « Reload Window ») et relance fs-cli / fs-cli claude.'
-    : '✓ FS-CLI à jour, mais le panneau n\'a pas pu être installé partout (voir ci-dessus).');
+  const r2 = run(deps.node ?? process.execPath, [path.join(root, 'cli.js'), '--vscode'], { shell: false });
+  // pas de ✓ / ✗ : l'invite de commandes de Windows les affiche en « ? »
+  log(r2?.status === 0 ? 'Terminé : tout est à jour. Recharge la fenêtre de ton éditeur (Ctrl+Maj+P › « Reload Window ») et relance fs-cli / fs-cli claude.'
+    : 'FS-CLI est à jour, mais le panneau n\'a pas pu être installé partout (voir ci-dessus). Pour le réessayer : fs-cli --vscode');
   return r2?.status === 0 ? 0 : 1;
 }

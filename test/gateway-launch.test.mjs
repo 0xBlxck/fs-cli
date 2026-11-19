@@ -442,9 +442,10 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.54.1 en tête, puis 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [, m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
-  assert.equal(WHATS_NEW[0].version, '3.54.1');
+test('nouveautés : entrée 3.54.2 en tête, puis 3.54.1, 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [, , m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(WHATS_NEW[0].version, '3.54.2');
+  assert.equal(WHATS_NEW[1].version, '3.54.1');
   assert.equal(m.version, '3.54.0');
   assert.match(m.items[0], /serveurs MCP/);
   assert.equal(z.version, '3.53.0');
@@ -641,15 +642,17 @@ test('chooseChat avec le menu : projets puis conversations ; Échap revient aux 
 test('fs-cli update : npm puis le panneau des éditeurs, sans question ; dossier git → « git pull » ; échec npm → commande à la main', async () => {
   const { updateAll, INSTALL_CMD } = await import('../src/update.js');
   const mk = (over = {}) => {
-    const r = { runs: [], logs: [] };
+    const r = { runs: [], logs: [], shells: [] };
     const deps = { root: 'R', platform: 'win32', exists: () => false, check: async () => ({ current: '3.51.0', latest: '3.52.0', newer: true }),
-      run: (cmd, args) => { r.runs.push([cmd, ...args].join(' ')); return { status: 0 }; }, log: t => r.logs.push(t), node: 'node', ...over };
+      run: (cmd, args, o = {}) => { r.runs.push([cmd, ...args].join(' ')); r.shells.push(!!o.shell); return { status: 0 }; }, log: t => r.logs.push(t), node: 'node', ...over };
     return { r, deps };
   };
   let { r, deps } = mk();
   assert.equal(await updateAll(deps), 0);
   assert.deepEqual(r.runs, [`npm.cmd install -g ${INSTALL_CMD.split(' ').pop()}`, `node ${path.join('R', 'cli.js')} --vscode`]);
   assert.match(r.logs.join('\n'), /v3\.51\.0 → v3\.52\.0[\s\S]*Reload Window/);
+  assert.deepEqual(r.shells, [true, false], 'npm.cmd par le shell ; Node lancé directement (son chemin « C:\\Program Files\\… » était coupé à l\'espace)');
+  assert.doesNotMatch(r.logs.join('\n'), /[✓✗]/, 'pas de symboles que l\'invite de commandes affiche en « ? »');
   ({ r, deps } = mk({ exists: p => p.endsWith('.git') }));
   assert.equal(await updateAll(deps), 1);
   assert.equal(r.runs.length, 0);

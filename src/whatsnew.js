@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.54.2', items: [
+    '`fs-cli update` sous Windows : le panneau des éditeurs s’installe (avant : « C:\\Program n’est pas reconnu »)',
+  ] },
   { version: '3.54.1', items: [
     'Menu de `/fs:conversations` et de `--fs-conversations` plus lisible : titres sans étiquette technique, 2e ligne = modèle et date',
   ] },
