@@ -219,7 +219,7 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
     const team = `t${(++teamSeq).toString(36)}${T0.toString(36).slice(-4)}`;
     const outer = ui.currentSink();
     const ev = (type, data) => { if (outer?.event) try { outer.event(type, { team, ...data }); } catch {} };
-    const say = s => { if (outer) outer.print(s + '\n'); else process.stdout.write(s + '\n'); };   // passe même quand l'affichage des agents est mis de côté
+    const say = s => { if (outer) outer.print(s + '\n'); else ui.rawOut(s + '\n'); };   // passe même quand l'affichage des agents est mis de côté
     const quiet = !!env.agentMap && !!outer?.event;                    // panneau avec la vue « Agents » : le bloc remplace la liste en texte
     const modelLabel = modelName(workerId);
     if (!quiet) {
@@ -274,7 +274,7 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
       ui.attachSink(QUIET);                                            // chaque agent travaille sans écrire à l'écran (sinon les sorties se mélangent)
       if (outer?.event) outer.event('spinner', { label: 'agents…' });
       const line = () => workers.map(W => `${W.titre} ${W.status === 'ok' ? '✓' : W.status === 'en cours' ? '…' : W.status === 'attente' ? '·' : '✗'}`).join(' · ');
-      prog = setInterval(() => { if (outer?.event) return; const t = `${c.accent('✻')} agents : ${line()} ${c.dim('(échap pour interrompre)')}`; if (outer?.spinner) outer.spinner(t); else process.stdout.write(`\r\x1b[K  ${t}`); }, 300);
+      prog = setInterval(() => { if (outer?.event) return; const t = `${c.accent('✻')} agents : ${line()} ${c.dim('(échap pour interrompre)')}`; if (outer?.spinner) outer.spinner(t); else ui.rawOut(`\r\x1b[K  ${t}`); }, 300);
       prog.unref?.();
     }
     try {
@@ -307,7 +307,7 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
       else {
         clearInterval(prog);
         ui.attachSink(outer);
-        if (outer?.event) outer.event('spinner', { label: null }); else if (outer?.spinner) outer.spinner(null); else process.stdout.write('\r\x1b[K');
+        if (outer?.event) outer.event('spinner', { label: null }); else if (outer?.spinner) outer.spinner(null); else ui.rawOut('\r\x1b[K');
         for (const WS of states) S.undo.push(...WS.undo);              // /changes et /rewind voient le travail des agents
         ui.tasks.set(tasksBefore);
       }

@@ -98,12 +98,22 @@ export function sanitize(s) {
     .replace(/\x1b[\s\S]?/g, '')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '');
 }
+/**
+ * Écriture directe dans la sortie standard (hors interface plein écran). Sous « node --test », la sortie standard d'un fichier de
+ * test porte les messages du lanceur : l'affichage du CLI (\r, codes couleur) les cassait parfois (« Unable to deserialize cloned
+ * data », vu en CI). Il est donc ignoré dans ce cas — sauf si un test a remplacé process.stdout.write pour le lire.
+ */
+const IN_TEST_FILE = !!process.env.NODE_TEST_CONTEXT && /\.test\.m?js$/i.test(process.argv[1] || '');   // pas un « fs -p » lancé par un test
+export function rawOut(s) {
+  if (IN_TEST_FILE && !Object.hasOwn(process.stdout, 'write')) return true;
+  return process.stdout.write(s);
+}
 export function out(s) {
   if (sink) {
     if (cell && !committing) commitAction();                         // autre texte (réponse du modèle…) : l'action en cours passe d'abord dans l'historique
     sink.print(s); return;
   }
-  spinner.stop(); process.stdout.write(COLOR ? s : stripAnsi(s));    // sans terminal ni interface (panneau --stdio = sink) : pas de codes couleur
+  spinner.stop(); rawOut(COLOR ? s : stripAnsi(s));                  // sans terminal ni interface (panneau --stdio = sink) : pas de codes couleur
 }
 export function println(s = '') { out(s + '\n'); }
 
@@ -119,7 +129,7 @@ function draw() {
   const frame = FRAMES[Math.floor(sp.i++ / 1.5) % FRAMES.length];
   const text = `${c.accent(frame)} ${c.accent(sp.label)} ${c.dim(`(${dur} · échap pour interrompre)`)}`;
   if (sink) sink.spinner(text);
-  else process.stdout.write(`\r\x1b[K  ${text}`);
+  else rawOut(`\r\x1b[K  ${text}`);
 }
 export const spinner = {
   start(label = 'réflexion…') {
@@ -128,7 +138,7 @@ export const spinner = {
     if (sink?.event) { if (/^réflexion…?$/i.test(label)) label = VERBS[Math.floor(Math.random() * VERBS.length)] + '…'; sp = { label, t0: Date.now(), timer: null }; sink.event('spinner', { label }); return; }   // panneau VS Code : il anime lui-même
     if (/^réflexion…?$/i.test(label)) label = VERBS[Math.floor(Math.random() * VERBS.length)] + '…';   // attente générique : verbe au hasard
     sp = { label, t0: Date.now(), i: 0, timer: null };
-    if (!sink) process.stdout.write('\x1b[?25l');
+    if (!sink) rawOut('\x1b[?25l');
     draw();
     sp.timer = setInterval(draw, 90);
   },
@@ -140,7 +150,7 @@ export const spinner = {
     clearInterval(sp.timer); sp = null;
     if (sink?.event) { sink.event('spinner', { label: null }); return; }
     if (sink) sink.spinner(null);
-    else process.stdout.write('\r\x1b[K\x1b[?25h');
+    else rawOut('\r\x1b[K\x1b[?25h');
   },
   get active() { return !!sp; },
 };
