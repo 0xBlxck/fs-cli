@@ -594,3 +594,64 @@ test('collectResults : document écrit → note ; document refusé → note de r
   assert.match(out.toolResults[0].output, /\[… coupé : relis avec start_line=\d+\]$/);
   assert.ok(!r.ctx.readSet.paths['c:\\proj\\big.txt'], 'lecture coupée oubliée');
 });
+
+test('claude-tool : run_command « claude-tool <Outil> {json} » → vrai appel de l\'outil de Claude Code (MCP, WebFetch…), sans shell ; liste, schema, erreurs claires', async () => {
+  const T = await import('../src/gateway/toolmap.js');
+  const tools = [
+    { name: 'Read', description: 'Lit un fichier.', input_schema: { type: 'object', properties: { file_path: {} }, required: ['file_path'] } },
+    { name: 'Bash', description: 'Shell.', input_schema: { type: 'object', properties: { command: {} }, required: ['command'] } },
+    { name: 'WebFetch', description: 'Fetches a URL. Long text here.', input_schema: { type: 'object', properties: { url: {}, prompt: {} }, required: ['url', 'prompt'] } },
+    { name: 'mcp__Roblox_Studio__execute_luau', description: 'Runs Luau code in Studio.', input_schema: { type: 'object', properties: { code: {} }, required: ['code'] } },
+  ];
+  assert.deepEqual(T.parseClaudeTool('claude-tool WebFetch {"url":"u"}'), { name: 'WebFetch', arg: '{"url":"u"}' });
+  assert.deepEqual(T.parseClaudeTool("claude-tool X '{\"a\":1}'"), { name: 'X', arg: '{"a":1}' }, 'guillemets de shell retirés');
+  assert.equal(T.parseClaudeTool('ls -la'), null);
+  const calls = [
+    { callId: 'c1', name: 'run_command', arguments: { command: 'claude-tool mcp__Roblox_Studio__execute_luau {"code": "print(1)\nprint(2)"}' } },
+    { callId: 'c2', name: 'run_command', arguments: { command: 'claude-tool liste' } },
+    { callId: 'c3', name: 'run_command', arguments: { command: 'claude-tool schema WebFetch' } },
+    { callId: 'c4', name: 'run_command', arguments: { command: 'claude-tool WebFetch {"url": "https://x.fr"}' } },
+    { callId: 'c5', name: 'run_command', arguments: { command: 'claude-tool Inconnu {}' } },
+    { callId: 'c6', name: 'run_command', arguments: { command: 'claude-tool WebFetch {pas du json}' } },
+  ];
+  const plan = T.planToolUses(calls, { env: { cwd: 'C:\proj', platform: 'win32' }, tools, readSet: { paths: {} }, chatId: 'chat-1', fsExists: () => false });
+  assert.equal(plan.uses.length, 1);
+  assert.deepEqual([plan.uses[0].name, plan.uses[0].input], ['mcp__Roblox_Studio__execute_luau', { code: 'print(1)\nprint(2)' }]);
+  const local = Object.fromEntries(plan.pending.filter(p => p.local).map(p => [p.callId, p.local]));
+  assert.match(local.c2.output, /WebFetch : Fetches a URL\.[\s\S]*Serveur MCP « Roblox_Studio » \(1 outil\)[\s\S]*execute_luau/);
+  assert.doesNotMatch(local.c2.output, /- Read |- Bash /, 'les outils déjà couverts par FS ne sont pas listés');
+  assert.match(local.c3.output, /"required":\["url","prompt"\]/);
+  assert.match(local.c4.output, /manquant pour WebFetch : prompt/);
+  assert.match(local.c5.output, /inconnu : Inconnu/);
+  assert.match(local.c6.output, /JSON invalides pour WebFetch/);
+  const note = T.claudeToolsNote(tools);
+  assert.match(note, /claude-tool <NomExact> \{arguments JSON\}/);
+  assert.match(note, /mcp__Roblox_Studio__execute_luau/);
+  assert.equal(T.claudeToolsNote([tools[0], tools[1]]), '', 'rien à annoncer');
+});
+
+test('fs-mcp dans fs-cli claude : « fs-mcp call <serveur> <outil> cle=valeur » → vrai appel mcp__serveur__outil ; list / tools en local ; note quand l\'utilisateur nomme le serveur', async () => {
+  const T = await import('../src/gateway/toolmap.js');
+  const tools = [
+    { name: 'Read', description: 'x', input_schema: { type: 'object', properties: {} } },
+    { name: 'mcp__leboncoin__geocode_place', description: 'Géocode un lieu.', input_schema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } }, required: ['query'] } },
+    { name: 'mcp__Roblox_Studio__execute_luau', description: 'Runs Luau.', input_schema: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] } },
+  ];
+  assert.deepEqual(T.parseFsMcp('fs-mcp call leboncoin geocode_place query="Lyon, France" limit=2').args, ['leboncoin', 'geocode_place', 'query=Lyon, France', 'limit=2']);
+  assert.equal(T.parseFsMcp('"C:/Program Files/npm/fs-mcp.cmd" list').sub, 'list', 'chemin complet entre guillemets');
+  assert.equal(T.parseFsMcp('echo fs-mcp call x'), null);
+  const run = cmd => T.planToolUses([{ callId: 'c', name: 'run_command', arguments: { command: cmd } }], { env: { cwd: 'C:\proj', platform: 'win32' }, tools, readSet: { paths: {} }, chatId: 'chat-1', fsExists: () => false });
+  let p = run('fs-mcp call leboncoin geocode_place query="Lyon, France" limit=2');
+  assert.deepEqual([p.uses[0].name, p.uses[0].input], ['mcp__leboncoin__geocode_place', { query: 'Lyon, France', limit: 2 }], 'limit converti en nombre (schéma)');
+  p = run('fs-mcp call roblox_studio execute_luau --json \'{"code": "print(1)"}\'');
+  assert.deepEqual([p.uses[0].name, p.uses[0].input], ['mcp__Roblox_Studio__execute_luau', { code: 'print(1)' }], 'nom de serveur sans tenir compte de la casse');
+  assert.match(run('fs-mcp list').pending[0].local.output, /2 serveur\(s\) MCP :\n- leboncoin \(1 outil\)\n- Roblox_Studio \(1 outil\)/);
+  assert.match(run('fs-mcp tools leboncoin').pending[0].local.output, /- geocode_place query\*=string limit=integer — Géocode un lieu\./);
+  assert.match(run('fs-mcp call leboncoin geocode_place limit=2').pending[0].local.output, /manquant : query/);
+  assert.match(run('fs-mcp call inconnu x').pending[0].local.output, /Serveur MCP inconnu : inconnu\. Liste : leboncoin, Roblox_Studio/);
+  assert.equal(run('fs-mcp call leboncoin geocode_place query=Lyon').uses.length, 1);
+  assert.deepEqual(T.mcpNamed('avec le mcp leboncoin trouve Lyon', tools), ['leboncoin']);
+  assert.deepEqual(T.mcpNamed('ouvre roblox studio et ajoute un bouton', tools), ['Roblox_Studio']);
+  assert.deepEqual(T.mcpNamed('fais un site', tools), []);
+  assert.match(T.mcpBrief('leboncoin', tools), /^\[Info de FS-CLI : l'utilisateur veut que tu utilises le serveur MCP « leboncoin »[\s\S]*fs-mcp call leboncoin <outil>/);
+});

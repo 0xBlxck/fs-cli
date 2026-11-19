@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.54.0', items: [
+    '`fs-cli claude` utilise tes serveurs MCP (Roblox Studio, Blender, leboncoin…) : nomme le serveur dans ta demande, le modèle appelle ses outils via fs-mcp',
+    'Serveurs MCP gardés par défaut dans `fs-cli claude` (`--fs-mcp=off` pour les couper) ; GPT Astra refuse les MCP, prends un modèle Claude',
+  ] },
   { version: '3.53.0', items: [
     'Plus jamais de changement de modèle à ta place : quand le modèle refuse les outils, un menu te propose de relancer avec Claude Sonnet ou Opus (ou rien)',
     '`/team` avec GPT Astra : tu choisis le modèle des agents (Sonnet, Opus ou Astra quand même) ; ta conversation garde le sien',

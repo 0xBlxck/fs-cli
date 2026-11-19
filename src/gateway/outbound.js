@@ -94,7 +94,7 @@ export function buildSend(conv, delta, agent, env, extras = {}) {
   const send = { agentId: agent.agentId, chatId: conv.chatId || null, webSearch: !!extras.web };
   if (agent.native) send.clientTools = conv.planMode ? [...READ_TOOLS] : [...CLIENT_TOOLS];
   const pre = () => preamble(env, {
-    sid: conv.sid, claudeMd: u.claudeMd, provider: agent.provider, shellTool: extras.shellTool, date: extras.date ?? u.date,
+    sid: conv.sid, claudeMd: u.claudeMd, provider: agent.provider, shellTool: extras.shellTool, date: extras.date ?? u.date, claudeTools: extras.claudeTools || '',
     forceClaudeMd: !!extras.forceClaudeMd, bare: !!conv.bare,
   });
   if (!send.chatId) {

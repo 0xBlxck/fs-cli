@@ -197,6 +197,8 @@ Ou directement **dans Claude Code**, sans le relancer :
 
 Ces commandes sont traitées par FS-CLI : elles ne coûtent ni requête au modèle ni conversation. Le modèle se souvient de tout ce qui a été dit dans la conversation reprise ; Claude Code n'affiche pas les anciens messages. Aucune nouvelle conversation n'est créée.
 
+**Tes serveurs MCP** (Roblox Studio, Blender, leboncoin…) : nomme le serveur dans ta demande (« avec le mcp leboncoin… », « dans Roblox Studio… »). Le modèle reçoit la liste de ses outils et les appelle avec `fs-mcp call <serveur> <outil> …`, comme dans FS-CLI ; FS-CLI en fait un vrai appel MCP de Claude Code, avec ses demandes d'accord habituelles. Les serveurs MCP sont gardés par défaut (`--fs-mcp=off` pour les couper). GPT Astra refuse les MCP (consigne de France Student) : prends un modèle Claude (`/model sonnet`).
+
 **Options de FS-CLI** (toutes commencent par `--fs-`, le reste part à Claude Code) :
 
 | Option | Effet |
@@ -211,7 +213,7 @@ Ces commandes sont traitées par FS-CLI : elles ne coûtent ni requête au modè
 | `--fs-flux N` | réponses France Student en même temps (3 par défaut) |
 | `--fs-demander` | Claude Code demande ta confirmation avant chaque commande |
 | `--fs-journal` | affiche le chemin du journal |
-| `--fs-mcp` | garde tes serveurs MCP (coupés par défaut : le modèle FS ne s'en sert pas) |
+| `--fs-mcp=off` | coupe tes serveurs MCP (gardés par défaut : le modèle FS s'en sert avec claude-tool) |
 | `--fs-debug` | garde les échanges (masqués) dans `~/.fs-cli/gateway/debug/` |
 
 **Passerelle seule** (Claude Code lancé à la main, ou l'extension VS Code de Claude Code) :

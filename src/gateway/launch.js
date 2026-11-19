@@ -42,7 +42,7 @@ const FS_FLAGS = {
 /** Valeurs par défaut des options de la passerelle (opts de createGateway / startGateway). */
 export const FS_DEFAULTS = Object.freeze({
   project: null, web: false, claudeMd: false, rewind: 'auto', subagents: 3, flows: 3,
-  ask: false, port: null, newToken: false, journal: false, debug: false, mcp: false, chat: null, pickChat: false,
+  ask: false, port: null, newToken: false, journal: false, debug: false, mcp: true, chat: null, pickChat: false,
 });
 
 function readValue(spec, flag, raw) {
@@ -643,8 +643,8 @@ export async function runClaude(argv, io = {}) {
   h.err(`FS-CLI → Claude Code · passerelle ${url.replace(/^https?:\/\//, '')} · ${shown?.name || o.claudeModel || 'modèle par défaut'} · ${quotaText(q)} · journal : ${shortHome(logFile(), h.home)}\n`);
 
   const env = childEnv(h.env, { url, token, model: ccId, opts: o });
-  // Les serveurs MCP ne servent à rien au modèle France Student (il ne voit que les outils de fichiers) et ralentissent
-  // le démarrage : coupés par défaut, sauf --fs-mcp ou si l'utilisateur passe lui-même --mcp-config / --strict-mcp-config.
+  // Serveurs MCP gardés par défaut : le modèle FS s'en sert avec « claude-tool mcp__… » (toolmap.js). --fs-mcp=off les coupe
+  // (démarrage plus rapide) ; jamais si l'utilisateur passe lui-même --mcp-config / --strict-mcp-config.
   const noMcp = !o.mcp && claudeOption(rest, '--mcp-config') === null && !rest.includes('--strict-mcp-config');
   const args = [...(bin.args || []), ...(settings ? ['--settings', settings] : []), ...(noMcp ? ['--strict-mcp-config'] : []), ...(plugin ? ['--plugin-dir', plugin] : []), ...rest];
   log.line({ event: 'spawn', cmd: bin.cmd, viaCmd: !!bin.isCmd, args: args.length });

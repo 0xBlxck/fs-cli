@@ -251,7 +251,7 @@ function shellLine(env, shellTool) {
  * Aucun mot propre à Claude Code (vérifié par assertClean). CLAUDE.md : seulement pour un modèle Anthropic, ou forceClaudeMd.
  * opts : { sid, claudeMd, provider, shellTool, date, forceClaudeMd, bare } ; bare → étiquette seule (« [ab12·cc] »).
  */
-export function preamble(env, { sid, claudeMd = null, provider = 'anthropic', shellTool = 'Bash', date = null, forceClaudeMd = false, bare = false } = {}) {
+export function preamble(env, { sid, claudeMd = null, provider = 'anthropic', shellTool = 'Bash', date = null, forceClaudeMd = false, bare = false, claudeTools = '' } = {}) {
   const head = tag(sid || '0000', 'cc');
   if (bare) return head;
   const e = env || {};
@@ -264,6 +264,7 @@ export function preamble(env, { sid, claudeMd = null, provider = 'anthropic', sh
   if (d) lines.push(`Date : ${d}.`);
   const md = (provider === 'anthropic' || forceClaudeMd) ? claudeMdExcerpt(claudeMd) : '';
   if (md) lines.push(`[Consignes du projet (CLAUDE.md, extrait) :\n${md}]`);
+  if (claudeTools) lines.push(claudeTools);                          // claude-tool : MCP, Agent, WebFetch… (toolmap.js)
   // Ligne vide (pas de « --- » : collé sous le texte, le site l'affichait comme un TITRE géant, vu en vrai)
   return lines.join('\n') + '\n\n';
 }

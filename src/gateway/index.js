@@ -11,7 +11,7 @@ import { extractEnv } from './context.js';
 import { canonicalize, computeDelta, requestKey, fpAssistant, findLastIndex } from './transcript.js';
 import { openStore, pushAnchor, pushReply, atomicWrite } from './store.js';
 import { buildSend, afterSend, mergeUserTurns } from './outbound.js';
-import { collectResults, planRetry, translateResult } from './toolmap.js';
+import { collectResults, planRetry, translateResult, mcpNamed, mcpBrief } from './toolmap.js';
 import { Reply, wholeReply, sendError, sendJson, estimateTokens } from './anthropic.js';
 import { handleHttp, listen } from './server.js';
 import { createModels } from './models.js';
@@ -507,6 +507,8 @@ export function createGateway(deps, opts = {}) {
       localTurn(conv, reply, msg);
       return { outcome: 'local', chatId: conv.chatId };
     }
+    // serveur MCP nommé par l'utilisateur (« avec le mcp leboncoin ») : ses outils et la commande fs-mcp, une fois par conversation
+    for (const s of mcpNamed(u.text, tools).filter(x => !(conv.mcpBriefed || []).includes(x))) { conv.notes = [...(conv.notes || []), mcpBrief(s, tools)]; conv.mcpBriefed = [...(conv.mcpBriefed || []), s]; }
     extras.images = await uploadImages(u.images);
 
     const send = buildSend(conv, delta, agent, env, extras);

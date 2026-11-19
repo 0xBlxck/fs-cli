@@ -5,6 +5,7 @@
 //                      (messages d'erreur traduits, numéros de ligne au format du doc FS, tailles bornées).
 // Les chemins sont calculés avec path.win32 ou path.posix selon env.pathMod (jamais le path de la machine qui fait tourner
 // la passerelle). Tout accès disque passe par ctx.fsExists / ctx.fsStat (synchrones, injectés).
+import fs from 'node:fs';
 import path from 'node:path';
 import { fsId, synthId, retryId, decodeId } from './ids.js';
 import { documentFileName, htmlDocumentName, cleanText } from '../native.js';
@@ -24,6 +25,208 @@ export const LOCAL = {
   tooMany: `Non exécuté : plus de ${MAX_CALLS} actions dans un même tour, refais-les.`,
   notRun: 'Non exécuté : interrompu ou ignoré par l\'utilisateur.',
 };
+
+// ── claude-tool : TOUS les outils de Claude Code pour le modèle France Student ──
+// FS ne déclare que 6 outils au modèle. Il lance donc « claude-tool <Outil> {json} » avec run_command, et la passerelle en fait
+// un VRAI appel de cet outil de Claude Code (MCP, Agent, WebFetch, WebSearch, TodoWrite, Skill…), avec les accords habituels
+// de Claude Code. Rien n'est exécuté dans un shell. Autorisé par le créateur de France Student le 19/11/2026 (un seul compte,
+// limites respectées, rien d'illégal).
+export const CLAUDE_TOOL = 'claude-tool';
+/** outils déjà couverts par les 6 outils de FS (inutile de les annoncer) */
+const MAPPED_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'PowerShell', 'Grep', 'Glob']);
+const firstSentence = d => { const t = String(d || '').replace(/\s+/g, ' ').trim(); const m = /^(.{10,140}?[.!?])(\s|$)/.exec(t); return (m ? m[1] : t.slice(0, 140)).trim(); };
+
+/** « claude-tool Nom {json} » → { name, arg } ; null si ce n'est pas une commande claude-tool */
+export function parseClaudeTool(command) {
+  const m = /^\s*claude-tool\s+(\S+)(?:\s+([\s\S]*))?$/.exec(String(command || ''));
+  if (!m) return null;
+  let arg = (m[2] || '').trim();
+  if (/^'[\s\S]*'$/.test(arg) || /^"\{[\s\S]*\}"$/.test(arg)) arg = arg.slice(1, -1);   // JSON entouré de guillemets de shell
+  return { name: m[1], arg };
+}
+
+/** Liste des outils de Claude Code utilisables par claude-tool (texte pour le modèle). limit : nombre de lignes au plus. */
+export function claudeToolsList(tools, limit = 400) {
+  const list = (Array.isArray(tools) ? tools : []).filter(t => t?.name && !MAPPED_TOOLS.has(t.name));
+  const own = list.filter(t => !t.name.startsWith('mcp__'));
+  const mcp = list.filter(t => t.name.startsWith('mcp__'));
+  const lines = own.map(t => `- ${t.name} : ${firstSentence(t.description)}`);
+  const servers = new Map();
+  for (const t of mcp) { const s = t.name.split('__')[1] || '?'; servers.set(s, [...(servers.get(s) || []), t]); }
+  for (const [s, ts] of servers) {
+    lines.push(`- Serveur MCP « ${s} » (${ts.length} outil${ts.length > 1 ? 's' : ''}) :`);
+    for (const t of ts) lines.push(`  - ${t.name} : ${firstSentence(t.description)}`);
+  }
+  return lines.length > limit ? [...lines.slice(0, limit), `… et ${lines.length - limit} de plus : « claude-tool liste » les donne toutes.`].join('\n') : lines.join('\n');
+}
+
+/** Note du préambule : comment appeler les autres outils de Claude Code (vide s'il n'y en a pas). */
+export function claudeToolsNote(tools) {
+  const list = claudeToolsList(tools, 60);
+  if (!list) return '';
+  return `Autres outils disponibles (ceux de Claude Code, sur le PC de l'utilisateur) : appelle-les avec run_command, commande « ${CLAUDE_TOOL} <NomExact> {arguments JSON} » `
+    + `(ex. ${CLAUDE_TOOL} WebFetch {"url": "https://exemple.fr", "prompt": "résume la page"}). Ce n'est pas un programme du shell : FS-CLI exécute l'outil et te renvoie son résultat. `
+    + `« ${CLAUDE_TOOL} schema <NomExact> » donne ses paramètres, « ${CLAUDE_TOOL} liste » la liste complète.\n${list}`;
+}
+
+// ── fs-mcp dans Claude Code : la même commande que dans FS-CLI (mcp-cli.js), traduite en VRAI appel MCP de Claude Code ──
+// « fs-mcp call <serveur> <outil> cle=valeur … » (ou --json '{…}') → tool_use mcp__<serveur>__<outil> ; list / tools → réponse locale.
+// Le modèle n'apprend l'existence d'un serveur que quand l'utilisateur le nomme (mcpBrief), comme dans FS-CLI.
+
+/** mots d'une ligne de commande (guillemets " et ' gérés, sans interprétation du shell) */
+function shellWords(s) {
+  const out = []; let cur = '', q = null, has = false;
+  for (const ch of String(s || '')) {
+    if (q) { if (ch === q) q = null; else cur += ch; continue; }
+    if (ch === '"' || ch === '\'') { q = ch; has = true; continue; }
+    if (/\s/.test(ch)) { if (has || cur) { out.push(cur); cur = ''; has = false; } continue; }
+    cur += ch;
+  }
+  if (has || cur) out.push(cur);
+  return out;
+}
+
+/** « fs-mcp … » (fs-mcp, fs-mcp.cmd, chemin vers fs-mcp ou mcp-cli.js) → { sub, args:[mots], raw } ; null sinon */
+export function parseFsMcp(command) {
+  const m = /^\s*(?:"[^"]*(?:fs-mcp(?:\.cmd)?|mcp-cli\.js)"|\S*(?:fs-mcp(?:\.cmd)?|mcp-cli\.js))\s+(call|list|ls|tools)\b\s*([\s\S]*)$/i.exec(String(command || ''));
+  if (!m) return null;
+  return { sub: m[1].toLowerCase(), raw: m[2], args: shellWords(m[2]) };
+}
+
+const mcpServerOf = name => (/^mcp__(.+?)__/.exec(name) || [])[1] || null;
+const normServer = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+/** serveurs MCP présents dans les outils de Claude Code → Map(nom → [outils]) */
+export function mcpServers(tools) {
+  const map = new Map();
+  for (const t of Array.isArray(tools) ? tools : []) {
+    const s = t?.name && mcpServerOf(t.name);
+    if (s) map.set(s, [...(map.get(s) || []), t]);
+  }
+  return map;
+}
+const findServer = (map, name) => [...map.keys()].find(k => k === name) || [...map.keys()].find(k => normServer(k) === normServer(name)) || null;
+const shortTool = (server, t) => t.name.slice(`mcp__${server}__`.length);
+
+/** Liste des outils d'un serveur, comme « fs-mcp tools » (paramètres, * = obligatoire) */
+export function mcpToolsText(server, tools) {
+  return `Outils de ${server} (* = obligatoire) — appel : fs-mcp call ${server} <outil> cle=valeur … (ou --json '{…}' ; cle=@fichier lit la valeur dans un fichier)\n` + tools.slice(0, 80).map(t => {
+    const props = t.input_schema?.properties && typeof t.input_schema.properties === 'object' ? t.input_schema.properties : {};
+    const req = new Set(Array.isArray(t.input_schema?.required) ? t.input_schema.required : []);
+    const params = Object.entries(props).slice(0, 15).map(([k, v]) => `${k}${req.has(k) ? '*' : ''}=${v?.type || 'valeur'}`).join(' ');
+    return `- ${shortTool(server, t)} ${params}${t.description ? ' — ' + String(t.description).replace(/\s+/g, ' ').slice(0, 200) : ''}`;
+  }).join('\n');
+}
+
+/** valeur « cle=valeur » convertie selon le schéma (nombre, booléen, objet, tableau) */
+function typed(v, prop) {
+  const type = prop?.type;
+  if (type === 'number' || type === 'integer') { const n = Number(v); return Number.isFinite(n) ? n : v; }
+  if (type === 'boolean') return /^(true|1|oui|yes)$/i.test(v) ? true : /^(false|0|non|no)$/i.test(v) ? false : v;
+  if (type === 'object' || type === 'array') { try { return lenientJson(v); } catch { return v; } }
+  return v;
+}
+
+/** Commande fs-mcp → { name, input } (vrai tool_use) ou { local } ; readFile(chemin) pour cle=@fichier */
+export function fsMcpUse(cmd, tools, { readFile = null } = {}) {
+  const servers = mcpServers(tools);
+  const none = 'Aucun serveur MCP dans cette session (fs-cli claude les garde par défaut ; vérifie ta configuration MCP).';
+  if (cmd.sub === 'list' || cmd.sub === 'ls') {
+    if (!servers.size) return { local: { output: none, isError: false } };
+    return { local: { output: `${servers.size} serveur(s) MCP :\n${[...servers].map(([s, ts]) => `- ${s} (${ts.length} outil${ts.length > 1 ? 's' : ''})`).join('\n')}\n\nOutils d'un serveur : fs-mcp tools <serveur> · appel : fs-mcp call <serveur> <outil> cle=valeur …`, isError: false } };
+  }
+  const server = findServer(servers, cmd.args[0]);
+  if (!cmd.args[0]) return { local: { output: cmd.sub === 'tools' ? 'Usage : fs-mcp tools <serveur>' : 'Usage : fs-mcp call <serveur> <outil> cle=valeur … (ou --json \'{…}\')', isError: true } };
+  if (!server) return { local: { output: `Serveur MCP inconnu : ${cmd.args[0]}. ${servers.size ? 'Liste : ' + [...servers.keys()].join(', ') : none}`, isError: true } };
+  const list = servers.get(server);
+  if (cmd.sub === 'tools') return { local: { output: mcpToolsText(server, list), isError: false } };
+  const toolName = cmd.args[1];
+  const t = toolName && (list.find(x => shortTool(server, x) === toolName) || list.find(x => shortTool(server, x).toLowerCase() === toolName.toLowerCase()));
+  if (!t) return { local: { output: `${toolName ? `Outil inconnu sur ${server} : ${toolName}.` : 'Outil manquant.'}\n${mcpToolsText(server, list)}`, isError: true } };
+  const props = t.input_schema?.properties || {};
+  let input = {};
+  const rest = cmd.args.slice(2);
+  for (let i = 0; i < rest.length; i++) {
+    const w = rest[i];
+    if (w === '--json' || w === '--json-file') {
+      let text = rest[++i] ?? '';
+      if (w === '--json-file') { try { text = readFile ? readFile(text) : ''; } catch (e) { return { local: { output: `Fichier illisible : ${rest[i]} (${e.message})`, isError: true } }; } }
+      try { Object.assign(input, lenientJson(text)); }
+      catch (e) { return { local: { output: `JSON invalide pour ${toolName} (${e.message}). Format : fs-mcp call ${server} ${toolName} --json '{"param": "valeur"}'`, isError: true } }; }
+      continue;
+    }
+    const eq = w.indexOf('=');
+    if (eq <= 0) return { local: { output: `Argument incompris : « ${w} ». Format : cle=valeur (ou --json '{…}').`, isError: true } };
+    const k = w.slice(0, eq);
+    let v = w.slice(eq + 1);
+    if (v.startsWith('@') && readFile) { try { v = readFile(v.slice(1)); } catch (e) { return { local: { output: `Fichier illisible pour ${k} : ${v.slice(1)} (${e.message})`, isError: true } }; } }
+    input[k] = typed(v, props[k]);
+  }
+  const miss = (t.input_schema?.required || []).filter(k => !Object.hasOwn(input, k));
+  if (miss.length) return { local: { output: `Paramètre${miss.length > 1 ? 's' : ''} manquant${miss.length > 1 ? 's' : ''} : ${miss.join(', ')}.\n${mcpToolsText(server, [t])}`, isError: true } };
+  return { name: t.name, input };
+}
+
+/** Serveurs MCP nommés par l'utilisateur dans sa demande (« avec le mcp leboncoin », « dans Roblox Studio ») */
+export function mcpNamed(text, tools) {
+  const low = ` ${String(text || '').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ')} `;
+  return [...mcpServers(tools).keys()].filter(s => {
+    const words = s.toLowerCase().replace(/^claude_ai_/, '').split(/[^a-z0-9]+/).filter(w => w.length >= 3);
+    const joined = words.join(' ');
+    return joined && (low.includes(` ${joined} `) || low.includes(` ${words.join('')} `));
+  });
+}
+
+/** Note jointe à la demande quand l'utilisateur nomme un serveur MCP (formulation de FS-CLI, qui passe auprès des modèles) */
+export function mcpBrief(server, tools) {
+  const list = mcpServers(tools).get(server) || [];
+  if (!list.length) return '';
+  return `[Info de FS-CLI : l'utilisateur veut que tu utilises le serveur MCP « ${server} » de son PC. Lance-le avec run_command via le programme fs-mcp. `
+    + 'Si un outil renvoie une image, elle t\'est jointe : tu peux la voir. N\'affirme jamais avoir fait ou vérifié quelque chose sans avoir réellement lancé l\'outil dans cette réponse.\n'
+    + `${mcpToolsText(server, list)}]`;
+}
+
+/** JSON.parse tolérant : un vrai retour à la ligne (ou une tabulation) DANS une chaîne est accepté (code sur plusieurs lignes). */
+export function lenientJson(text) {
+  try { return JSON.parse(text); } catch (e) {
+    let out = '', inStr = false, esc = false;
+    for (const ch of String(text)) {
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        else if (ch === '\n') { out += '\\n'; continue; }
+        else if (ch === '\r') { out += '\\r'; continue; }
+        else if (ch === '\t') { out += '\\t'; continue; }
+      } else if (ch === '"') inStr = true;
+      out += ch;
+    }
+    if (out === text) throw e;
+    return JSON.parse(out);
+  }
+}
+
+/** Appel claude-tool → { name, input } (vrai tool_use), ou { local: { output, isError } } (réponse immédiate de la passerelle). */
+export function claudeToolUse(ct, tools) {
+  const all = (Array.isArray(tools) ? tools : []).filter(t => t?.name);
+  const find = n => all.find(t => t.name === n) || all.find(t => t.name.toLowerCase() === String(n).toLowerCase());
+  if (/^(liste|list|--liste|--list)$/i.test(ct.name)) return { local: { output: claudeToolsList(all, 2000) || 'Aucun autre outil de Claude Code dans cette session.', isError: false } };
+  if (/^(schema|--schema)$/i.test(ct.name)) {
+    const t = find(ct.arg);
+    return t ? { local: { output: `${t.name} : ${firstSentence(t.description)}\nParamètres (JSON Schema) : ${JSON.stringify(t.input_schema || {})}`, isError: false } }
+      : { local: { output: `Outil inconnu : ${ct.arg || '(aucun nom)'}. « ${CLAUDE_TOOL} liste » donne la liste.`, isError: true } };
+  }
+  const t = find(ct.name);
+  if (!t) return { local: { output: `Outil de Claude Code inconnu : ${ct.name}. « ${CLAUDE_TOOL} liste » donne la liste exacte des noms.`, isError: true } };
+  let input = {};
+  if (ct.arg) {
+    try { input = lenientJson(ct.arg); }
+    catch (e) { return { local: { output: `Arguments JSON invalides pour ${t.name} (${e.message}). Format : ${CLAUDE_TOOL} ${t.name} {"param": "valeur"} ; « ${CLAUDE_TOOL} schema ${t.name} » donne les paramètres.`, isError: true } }; }
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { local: { output: `Les arguments de ${t.name} doivent être un objet JSON : ${CLAUDE_TOOL} ${t.name} {"param": "valeur"}.`, isError: true } };
+  const miss = (t.input_schema?.required || []).filter(k => !Object.hasOwn(input, k));
+  if (miss.length) return { local: { output: `Paramètre${miss.length > 1 ? 's' : ''} manquant${miss.length > 1 ? 's' : ''} pour ${t.name} : ${miss.join(', ')}. Paramètres : ${JSON.stringify(t.input_schema || {})}`, isError: true } };
+  return { name: t.name, input };
+}
 
 // arguments obligatoires du catalogue FS (client-tools.md)
 const REQUIRED = {
@@ -254,6 +457,18 @@ export function planToolUses(calls, ctx) {
     if (!REQUIRED[call.name]) { p.local = { output: LOCAL.unavailable, isError: true }; continue; }
     if (miss) { p.local = { output: LOCAL.missing(miss), isError: true }; continue; }
     if (emitted >= MAX_CALLS) { p.local = { output: LOCAL.tooMany, isError: true }; continue; }
+    const fm = call.name === 'run_command' ? parseFsMcp(asText(args.command)) : null;
+    const ct = !fm && call.name === 'run_command' ? parseClaudeTool(asText(args.command)) : null;
+    if (fm || ct) {                                              // fs-mcp / claude-tool : vrai appel d'un outil de Claude Code (MCP, Agent, WebFetch…)
+      const readFile = p => fs.readFileSync(absPath(p, ctx.env), 'utf8');
+      const r = fm ? fsMcpUse(fm, ctx.tools, { readFile }) : claudeToolUse(ct, ctx.tools);
+      if (r.local) { p.local = r.local; continue; }
+      p.ccId = fsId(ctx.chatId, callId);
+      Object.assign(p, { ccName: r.name, input: r.input, claudeTool: true });
+      uses.push({ id: p.ccId, name: r.name, input: r.input });
+      emitted++;
+      continue;
+    }
     const m = mapUse(call.name, args, ctx, avail, shell);
     const input = m && fitSchema(m.name, m.input, ctx);
     if (!input) { p.local = { output: LOCAL.unavailable, isError: true }; continue; }

@@ -243,7 +243,7 @@ test('runClaude : passerelle sur 127.0.0.1 port libre, Claude Code lancé avec -
   assert.notEqual(L.claudeSettingsFile(111), L.claudeSettingsFile(222), 'deux « fs-cli claude » ne partagent pas leurs réglages');
   const sp = rec.spawns[0];
   assert.equal(sp.cmd, 'C:\\outils\\claude.exe');
-  assert.deepEqual(sp.args, ['--settings', settingsFile, '--strict-mcp-config', '--plugin-dir', 'PLUGIN', '-p', 'bonjour & 100%']);
+  assert.deepEqual(sp.args, ['--settings', settingsFile, '--plugin-dir', 'PLUGIN', '-p', 'bonjour & 100%'], 'MCP gardés par défaut (claude-tool)');
   assert.equal(sp.opts.shell, false, 'exe lancé directement : cmd.exe n\'interprète ni & ni %');
   assert.equal(sp.opts.stdio, 'inherit');
   assert.equal(sp.opts.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:53412');
@@ -278,7 +278,7 @@ test('runClaude : --model de l\'utilisateur, --settings personnel, version non t
   const run = L.runClaude(['--model', 'claude-fs/gpt-6-astra', '--settings', 'perso.json', '--fs-demander'], io);
   await spawned.promise;
   const sp = rec.spawns[0];
-  assert.deepEqual(sp.args, ['--strict-mcp-config', '--plugin-dir', 'PLUGIN', '--model', 'claude-fs/gpt-6-astra', '--settings', 'perso.json'], 'pas de second --settings');
+  assert.deepEqual(sp.args, ['--plugin-dir', 'PLUGIN', '--model', 'claude-fs/gpt-6-astra', '--settings', 'perso.json'], 'pas de second --settings');
   assert.ok(!('ANTHROPIC_MODEL' in sp.opts.env));
   assert.match(rec.err, /· GPT-6 Astra ·/);
   assert.match(rec.err, /ton propre --settings.*--fs-demander est sans effet/);
@@ -328,7 +328,7 @@ test('runClaude : erreurs avant le lancement (options, session, Claude Code abse
   const run2 = L.runClaude(['-p', 'a b'], h.io);
   await h.spawned.promise;
   assert.equal(h.rec.spawns[0].opts.shell, true, 'dernier recours : cmd.exe');
-  assert.match(h.rec.spawns[0].cmd, /claude\.cmd --settings .*claude-settings-\d+\.json"? --strict-mcp-config --plugin-dir PLUGIN -p "a b"$/);
+  assert.match(h.rec.spawns[0].cmd, /claude\.cmd --settings .*claude-settings-\d+\.json"? --plugin-dir PLUGIN -p "a b"$/);
   h.child.emit('exit', 0);
   assert.equal(await run2, 0);
 });
@@ -442,8 +442,10 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.53.0 en tête, puis 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.54.0 en tête, puis 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(m.version, '3.54.0');
+  assert.match(m.items[0], /serveurs MCP/);
   assert.equal(z.version, '3.53.0');
   assert.match(z.items[0], /Plus jamais de changement de modèle à ta place/);
   assert.equal(y.version, '3.52.2');
@@ -669,5 +671,13 @@ test('runClaude : nouvelle version sur GitHub → une ligne « fs-cli update » 
   await h.spawned.promise;
   assert.ok(Date.now() - t0 < 3000, 'jamais bloqué');
   assert.doesNotMatch(h.rec.err, /Nouvelle version/);
+  h.child.emit('exit', 0, null); await run;
+});
+
+test('runClaude --fs-mcp=off : serveurs MCP coupés (--strict-mcp-config)', async () => {
+  const h = harness();
+  const run = L.runClaude(['--fs-mcp=off', '-p', 'x'], h.io);
+  await h.spawned.promise;
+  assert.ok(h.rec.spawns[0].args.includes('--strict-mcp-config'));
   h.child.emit('exit', 0, null); await run;
 });
