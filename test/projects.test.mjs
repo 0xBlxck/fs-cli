@@ -101,3 +101,33 @@ test('conversation rangée à l\'instant, absente de la 1re liste (cas réel qui
     assert.ok(f.st.calls.indexOf('DELETE /projects/P/chats/n') < f.st.calls.indexOf('DELETE /projects/P'));
   } finally { m.mock.restore(); }
 });
+
+test('findOrCreateFsProject : un id trouve le projet, un id inconnu ne crée JAMAIS de projet nommé comme lui ; un nom inconnu est créé', async () => {
+  const ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';   // scan-ignore (faux id de test)
+  const calls = [];
+  const projects = [{ id: ID, name: 'SandBox Test' }];
+  const request = (opts, cb) => {
+    const req = new EventEmitter();
+    let sent = '';
+    req.write = d => { sent += d; }; req.setTimeout = () => req; req.destroy = () => {};
+    req.end = () => setImmediate(() => {
+      calls.push(`${opts.method} ${opts.path}`);
+      let status = 404, body = {};
+      if (opts.method === 'GET' && opts.path === '/projects') { status = 200; body = projects; }
+      if (opts.method === 'POST' && opts.path === '/projects') { status = 201; body = { id: 'nouveau', name: JSON.parse(sent).name }; }
+      const res = new EventEmitter(); res.statusCode = status; res.setEncoding = () => {}; res.resume = () => {};
+      cb(res);
+      setImmediate(() => { res.emit('data', JSON.stringify(body)); res.emit('end'); });
+    });
+    return req;
+  };
+  const m = mock.method(https, 'request', request);
+  try {
+    assert.deepEqual(await api.findOrCreateFsProject(ID), { project: projects[0], created: false });
+    assert.deepEqual(await api.findOrCreateFsProject(ID.toUpperCase()), { project: projects[0], created: false });
+    assert.deepEqual(await api.findOrCreateFsProject('sandbox test'), { project: projects[0], created: false });
+    await assert.rejects(api.findOrCreateFsProject('11111111-2222-3333-4444-555555555555'), /introuvable/);   // scan-ignore (faux id de test)
+    assert.ok(!calls.includes('POST /projects'), 'aucun projet créé pour un id');
+    assert.deepEqual((await api.findOrCreateFsProject('Mon projet')).created, true);
+  } finally { m.mock.restore(); }
+});

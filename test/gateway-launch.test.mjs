@@ -440,8 +440,10 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.49.1 en tête, puis 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [e, g, w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.49.2 en tête, puis 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(p.version, '3.49.2');
+  assert.match(p.items[0], /--fs-projet <id>/);
   assert.equal(e.version, '3.49.1');
   assert.equal(e.items.length, 2);
   assert.match(e.items[0], /403/);

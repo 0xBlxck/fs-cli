@@ -399,8 +399,11 @@ export async function findOrCreateFsProject(name) {
   const clean = String(name || '').trim().slice(0, 255);
   if (!clean) throw new Error('nom de projet vide');
   const want = clean.toLocaleLowerCase('fr-FR');
-  const found = (await listFsProjects()).find(p => String(p?.name || '').trim().toLocaleLowerCase('fr-FR') === want);
+  const list = await listFsProjects();
+  // id d'abord (« --fs-projet 7d5d58c8-… » créait un projet NOMMÉ comme l'id), puis nom
+  const found = list.find(p => String(p?.id || '').toLowerCase() === want) || list.find(p => String(p?.name || '').trim().toLocaleLowerCase('fr-FR') === want);
   if (found) return { project: found, created: false };
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean)) throw new Error(`projet introuvable : ${clean} (un identifiant ne crée jamais de projet)`);
   const r = await requestJson('POST', '/projects', { name: clean });
   if (!r.data?.id) throw new Error(`création du projet refusée (HTTP ${r.status})`);
   return { project: r.data, created: true };
