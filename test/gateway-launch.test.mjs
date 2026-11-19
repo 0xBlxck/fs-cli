@@ -219,6 +219,7 @@ function harness(over = {}) {
     silence: async () => { rec.silenced++; },
     onSignal: (sig, fn) => { rec.signals[sig] = fn; },
     writePlugin: () => 'PLUGIN',
+    checkUpdate: async () => null,
     ...over,
   };
   return { fake, rec, io, child, spawned };
@@ -441,8 +442,10 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.52.0 en tête, puis 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.52.1 en tête, puis 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(x.version, '3.52.1');
+  assert.match(x.items[0], /fs-cli update/);
   assert.equal(u.version, '3.52.0');
   assert.match(u.items[0], /fs-cli update/);
   assert.match(u.items[2], /\/fs:conversations/);
@@ -648,4 +651,19 @@ test('fs-cli update : npm puis le panneau des éditeurs, sans question ; dossier
   assert.equal(await updateAll(deps), 1);
   assert.equal(r.runs.length, 1, 'panneau pas tenté si npm échoue');
   assert.match(r.logs.at(-1), /À la main : npm install -g/);
+});
+
+test('runClaude : nouvelle version sur GitHub → une ligne « fs-cli update » ; vérification lente (> 1,5 s) → on lance sans attendre', async () => {
+  let h = harness({ checkUpdate: async () => ({ current: '3.52.0', latest: '3.53.0', newer: true }) });
+  let run = L.runClaude(['-p', 'x'], h.io);
+  await h.spawned.promise;
+  assert.match(h.rec.err, /Nouvelle version de FS-CLI : v3\.53\.0 \(tu as la v3\.52\.0\)\. Pour tout mettre à jour : fs-cli update/);
+  h.child.emit('exit', 0, null); await run;
+  h = harness({ checkUpdate: () => new Promise(() => {}) });
+  const t0 = Date.now();
+  run = L.runClaude(['-p', 'x'], h.io);
+  await h.spawned.promise;
+  assert.ok(Date.now() - t0 < 3000, 'jamais bloqué');
+  assert.doesNotMatch(h.rec.err, /Nouvelle version/);
+  h.child.emit('exit', 0, null); await run;
 });

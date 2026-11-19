@@ -570,6 +570,7 @@ function makeHost(io) {
     pick: async o => (await import('./picker.js')).pickInTerminal(o),
     projects: async () => (await import('../api.js')).listFsProjects(),
     writePlugin,
+    checkUpdate: async () => (await import('../update.js')).checkUpdate(),
     openLog,
     silence,
     onSignal: (sig, fn) => { try { process.on(sig, fn); } catch {} },
@@ -615,6 +616,9 @@ export async function runClaude(argv, io = {}) {
   const version = h.version(bin);
   log.line({ event: 'claude', version, ...(testedVersion(version) ? {} : { warning: 'version de Claude Code non testée (passerelle prévue pour 2.1.2xx)' }) });
   for (const w of inspectClaudeSettings(h.cwd, h.home, { subagents: o.subagents }).warnings) h.err(w + '\n');
+  // nouvelle version sur GitHub ? (cache de 12 h ; on attend 1,5 s au plus, le lancement n'est jamais bloqué)
+  const upd = await Promise.race([Promise.resolve().then(() => h.checkUpdate()).catch(() => null), new Promise(r => setTimeout(() => r(null), 1500))]);
+  if (upd?.newer) h.err(`Nouvelle version de FS-CLI : v${upd.latest} (tu as la v${upd.current}). Pour tout mettre à jour : fs-cli update\n`);
   if (o.claudeSettings !== null) h.err('Tu passes ton propre --settings : FS-CLI branche Claude Code par les variables d\'environnement seulement' + (o.ask ? ' (--fs-demander est sans effet).' : '.') + '\n');
   const proj = o.project ? await h.project(o.project) : null;
   if (o.project && !proj) h.err(`Projet France Student « ${o.project} » inaccessible : les conversations sont rangées comme d'habitude.\n`);

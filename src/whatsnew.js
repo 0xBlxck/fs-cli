@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.52.1', items: [
+    '`fs-cli claude` te prévient aussi quand une nouvelle version sort (comme FS-CLI et le bouton ⬆ du panneau) : `fs-cli update` pour tout mettre à jour',
+    'Pare-feu de France Student (403) : nouvel essai tout seul ; s’il refuse le contenu d’un fichier lu, le modèle reçoit « contenu non transmis » et la demande continue au lieu de s’arrêter',
+  ] },
   { version: '3.52.0', items: [
     '`fs-cli update` : tout se met à jour en une commande (FS-CLI, `fs-cli claude` et le panneau de tes éditeurs)',
     '`fs-cli claude --fs-conversations` : menu à flèches, tes projets du site puis leurs conversations (5 visibles, ça défile)',

@@ -325,7 +325,7 @@ test('403 en page HTML (pare-feu, Cloudflare) avec outils client → 403 ordinai
     reset();
     route = (req, res) => { res.writeHead(403, { 'content-type': 'text/html' }); res.end(page); };
     await assert.rejects(api.streamChat({ agentId: -2003, chatId: 'c', content: 'x', clientTools: api.CLIENT_TOOLS }),
-      e => e.status === 403 && e.code === undefined && /^403 — le pare-feu de France Student \(Cloudflare\)/.test(e.message));
+      e => e.status === 403 && e.code === 'FIREWALL' && /^403 — le pare-feu de France Student \(Cloudflare\)/.test(e.message));
   }
 });
 

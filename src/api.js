@@ -210,6 +210,7 @@ function httpError(st, b, { native = false } = {}) {
     : `HTTP ${st}: ${b.slice(0, 200)}`;
   const e = new ApiError(msg, { status: st, retry: st === 429 || st >= 500 });
   e.body = b.slice(0, 2000);                                          // ex. 400 « missing: … » / « pending », 409 : lus par la passerelle Claude Code
+  if (firewall) e.code = 'FIREWALL';                                  // lu par native.js : nouvel essai, puis résultats remplacés par une note
   return e;
 }
 

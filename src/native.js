@@ -23,7 +23,9 @@ const TOOL_REFUSAL = /servir de moteur|(?:moteur|outil|agent) (?:d'un |à un |po
 export const looksLikeToolRefusal = text => TOOL_REFUSAL.test(String(text || '').slice(0, 400));
 // GPT-6 Astra + recherche web : OpenAI échoue souvent juste après la recherche (« 502 BAD_GATEWAY openai_v2 responses request failed »,
 // 6 essais sur 7 le 18/11/2026 ; sans recherche web : écrit du premier coup). Erreur du serveur, pas un refus.
-export const isUpstreamError = e => !!e && e.name !== 'AbortError' && e.code !== 'DAILY_CHAT_LIMIT'
+/** remplace un résultat d'outil que le pare-feu de France Student refuse de laisser passer (jamais déguisé) */
+export const FIREWALL_NOTE = 'Contenu non transmis : le pare-feu de France Student a refusé ce résultat (souvent à cause de ce que contient le fichier ou la sortie). Dis-le à l\'utilisateur et continue sans ce contenu.';
+export const isUpstreamError =e => !!e && e.name !== 'AbortError' && e.code !== 'DAILY_CHAT_LIMIT'
   && ((e.serverError && /openai_v2|BAD_GATEWAY|\b50[0234]\b|error occurred while processing your request|overloaded|internal server error/i.test(e.message || '')) || e.status >= 500);   // list_directory, read_file, search_files : seuls outils proposés en mode plan
 const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi
@@ -205,9 +207,32 @@ export async function runNative(S, userText, opts) {
           while ((i = thinkBuf.indexOf('\n')) >= 0) { ui.println(c.dim(c.italic('  ✻ ' + thinkBuf.slice(0, i)))); thinkBuf = thinkBuf.slice(i + 1); }
         },
       });
+    // Pare-feu de France Student (Cloudflare, 403 en page HTML) : un nouvel essai 3 s plus tard (blocage passager).
+    // S'il bloque encore l'envoi de résultats d'outils, c'est leur CONTENU qui est refusé : on ne le déguise pas,
+    // on envoie à la place une note « contenu non transmis » pour que la demande continue (et on le dit).
+    const sendPastFirewall = async web => {
+      try { return await send(web); }
+      catch (e) {
+        if (e?.code !== 'FIREWALL' || signal.aborted) throw e;
+        ui.spinner.stop();
+        ui.println(c.yellow('  ⚠ le pare-feu de France Student a bloqué l\'envoi : nouvel essai dans 3 s'));
+        await new Promise(r => setTimeout(r, opts.firewallDelayMs ?? 3000));
+        ui.spinner.start('réflexion…');
+        try { return await send(web); }
+        catch (e2) {
+          if (e2?.code !== 'FIREWALL' || !results?.length || signal.aborted) throw e2;
+          ui.spinner.stop();
+          ui.println(c.yellow(`  ⚠ le pare-feu bloque le contenu renvoyé au modèle (${results.length} résultat${results.length > 1 ? 's' : ''}) : il reçoit une note « contenu non transmis » à la place`));
+          results = results.map(r => ({ callId: r.callId, output: FIREWALL_NOTE, isError: true }));
+          resultFiles = [];
+          ui.spinner.start('réflexion…');
+          return await send(web);
+        }
+      }
+    };
     try {
       const web = !!cfg.webSearch && !noWeb;
-      try { res = await send(web); }
+      try { res = await sendPastFirewall(web); }
       catch (e) {
         // recherche web active et erreur d'OpenAI : la même demande repart une fois sans recherche web (affiché, rien de caché)
         if (!web || signal.aborted || !isUpstreamError(e)) throw e;
@@ -215,7 +240,7 @@ export async function runNative(S, userText, opts) {
         ui.spinner.stop();
         ui.println(c.yellow('  ⚠ le serveur d\'OpenAI a échoué après la recherche web : nouvel essai sans recherche web pour cette demande'));
         ui.spinner.start('réflexion…');
-        try { res = await send(false); } catch (e2) { throw e2?.name === 'AbortError' ? e2 : e; }
+        try { res = await sendPastFirewall(false); } catch (e2) { throw e2?.name === 'AbortError' ? e2 : e; }
       }
     } finally { ui.spinner.stop(); }
     { const t = clean.flush(); if (t) md.push(t); }

@@ -324,3 +324,34 @@ test('erreur d\'OpenAI : sans recherche web, ou erreur qui n\'est pas du serveur
     }
   } finally { cfg.webSearch = before; }
 });
+
+test('pare-feu de France Student (403 FIREWALL) : un nouvel essai ; encore bloqué sur des résultats → note « contenu non transmis » (jamais le contenu déguisé)', async () => {
+  const { FIREWALL_NOTE } = await import('../src/native.js');
+  const fw = () => Object.assign(new Error('403 — le pare-feu de France Student (Cloudflare) a bloqué la requête.'), { status: 403, code: 'FIREWALL' });
+  const { dir, S } = mk();
+  fs.writeFileSync(path.join(dir, 'secret.txt'), '<script>alert(1)</script> UNION SELECT');
+  const reqs = []; let n = 0;
+  const stream = async o => {
+    reqs.push({ content: o.content, results: o.toolResults && o.toolResults.map(r => ({ ...r })) });
+    if (!o.chatId) o.onChat?.('chat-fw');
+    n++;
+    if (n === 1) throw fw();                                          // passager : le 2e essai passe
+    if (n === 2) return { text: '', usage: null, toolCalls: [{ callId: 'r1', name: 'read_file', arguments: JSON.stringify({ path: 'secret.txt' }) }], documents: [] };
+    if (n === 3 || n === 4) throw fw();                               // les résultats sont refusés deux fois
+    return { text: 'fini', usage: null, toolCalls: [], documents: [] };
+  };
+  await runNative(S, 'lis secret.txt', { ...io(), stream, firewallDelayMs: 0 });
+  assert.equal(reqs.length, 5);
+  assert.equal(reqs[1].content, reqs[0].content, 'même demande renvoyée');
+  assert.match(reqs[2].results[0].output, /UNION SELECT/);
+  assert.match(reqs[3].results[0].output, /UNION SELECT/, '2e essai : contenu identique (rien de déguisé)');
+  assert.deepEqual(reqs[4].results, [{ callId: 'r1', output: FIREWALL_NOTE, isError: true }]);
+});
+
+test('pare-feu : bloqué deux fois sans résultats d\'outils → erreur affichée (pas de note inventée)', async () => {
+  const { S } = mk();
+  let n = 0;
+  const err = Object.assign(new Error('403 — pare-feu'), { status: 403, code: 'FIREWALL' });
+  await assert.rejects(runNative(S, 'x', { ...io(), stream: async () => { n++; throw err; }, firewallDelayMs: 0 }), err);
+  assert.equal(n, 2);
+});
