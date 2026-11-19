@@ -58,7 +58,7 @@ const DEFAULTS = {
   toolRefusals: {},
   btwChat: null,           // /btw : conversation « à côté » réutilisée { id } (n'encombre pas la conversation en cours ni la limite de 50 par jour)
   webhook: '',             // URL appelée (POST JSON) à la fin de chaque demande : CI, notifications… (vide = désactivé)
-  refusalRecover: true,    // un modèle croit ne pas avoir le droit d'utiliser les outils : 1 précision factuelle, puis la demande repart avec Sonnet (affiché)
+  refusalRecover: true,    // un modèle croit ne pas avoir le droit d'utiliser les outils : nouvel essai avec le même modèle (demande seule ou 1 précision) ; changer de modèle = choix de l'utilisateur
   mcpChat: null,           // conversation France Student utilisée par le serveur MCP { id, title } : réutilisée même après un redémarrage
   mcpAskWhere: true,       // serveur MCP : au premier appel de chaque session, l'IDE (Claude Code…) affiche un choix de conversation (boutons)
   mcpProject: 'same',      // où ranger la conversation du MCP : 'same' = comme FS-CLI · false = conversations normales · { id, name } = ce projet

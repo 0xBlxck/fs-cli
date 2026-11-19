@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.53.0', items: [
+    'Plus jamais de changement de modèle à ta place : quand le modèle refuse les outils, un menu te propose de relancer avec Claude Sonnet ou Opus (ou rien)',
+    '`/team` avec GPT Astra : tu choisis le modèle des agents (Sonnet, Opus ou Astra quand même) ; ta conversation garde le sien',
+    '`fs-cli claude` : après un refus, la passerelle te dit de choisir un autre modèle avec /model au lieu de basculer seule sur Sonnet',
+  ] },
   { version: '3.52.2', items: [
     'GPT Astra : quand il refuse les outils, la demande part tout de suite chez Claude Sonnet (la « précision » ne le faisait jamais changer d’avis, une requête de gagnée)',
     '`/team` (ou « lance multi agent ») avec GPT Astra : les agents travaillent avec Claude Sonnet, Astra refusant les tâches d’une équipe d’agents',

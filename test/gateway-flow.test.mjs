@@ -265,11 +265,31 @@ test('(h) refus GPT au 1er tour → chat « bare » ; texte du refus jamais mont
   checkInvariants(fake);
 });
 
-test('(h) refus GPT au 3e tour → CLARIFY dans le même chat, puis Claude Sonnet', async t => {
+test('(h) refus GPT au 3e tour → CLARIFY dans le même chat (même modèle), puis abandon avec « /model » — jamais Sonnet tout seul', async t => {
   const { fake, gw } = await setup(t, {
     files: { [HELLO]: 'x\n' },
-    turns: ['Bonjour, que veux-tu faire ?', 'D\'accord, dis-moi quel fichier.', REFUSAL, REFUSAL, { text: 'Je lis. ', toolCalls: [readCall('call_1')] }],
+    turns: ['Bonjour, que veux-tu faire ?', 'D\'accord, dis-moi quel fichier.', REFUSAL, REFUSAL],
   });
+  const opt = { model: 'gpt-6-luna' };
+  const m = [user('salut')];
+  const r1 = await call(gw, ccReq(m, opt));
+  m.push(asst(r1), user('aide-moi'));
+  const r2 = await call(gw, ccReq(m, opt));
+  m.push(asst(r2), user('lis hello.txt'));
+  const r3 = await call(gw, ccReq(m, opt));
+  assert.equal(fake.sent.length, 4);
+  assert.equal(fake.registered.length, 1);
+  assert.equal(fake.sent[3].content, CLARIFY);
+  assert.equal(fake.sent[3].chatId, 'chat-1');
+  assert.ok(fake.sent.every(s => s.agentId === -1002), 'toujours le modèle choisi');
+  assert.ok(r3.sse.text.startsWith(MESSAGES.giveUp));
+  assert.match(MESSAGES.giveUp, /\/model/);
+  assert.ok(r3.sse.text.includes('accéder à tes fichiers'), 'personne ne prend le relais : la réponse du modèle est montrée sous l\'avis');
+  checkInvariants(fake);
+});
+
+test('(h2) refus de GPT Astra au 3e tour → abandon tout de suite (ni précision, ni autre modèle)', async t => {
+  const { fake, gw } = await setup(t, { turns: ['Bonjour.', 'D\'accord.', REFUSAL] });
   const opt = { model: 'gpt-6-astra' };
   const m = [user('salut')];
   const r1 = await call(gw, ccReq(m, opt));
@@ -277,15 +297,9 @@ test('(h) refus GPT au 3e tour → CLARIFY dans le même chat, puis Claude Sonne
   const r2 = await call(gw, ccReq(m, opt));
   m.push(asst(r2), user('lis hello.txt'));
   const r3 = await call(gw, ccReq(m, opt));
-  assert.equal(fake.sent.length, 5);
-  assert.equal(fake.registered.length, 1);
-  assert.equal(fake.sent[3].content, CLARIFY);
-  assert.equal(fake.sent[3].chatId, 'chat-1');
-  assert.equal(fake.sent[4].agentId, -2003);
-  assert.equal(fake.sent[4].content, 'lis hello.txt');
-  assert.ok(r3.sse.text.startsWith('(GPT a refusé d\'utiliser les outils : la demande est passée à Claude Sonnet 5.5.)'));
-  assert.ok(!r3.text.includes('accéder à tes fichiers'));
-  assert.equal(r3.sse.toolUses.length, 1);
+  assert.equal(fake.sent.length, 3);
+  assert.ok(fake.sent.every(s => s.agentId === -1004));
+  assert.ok(r3.sse.text.startsWith(MESSAGES.giveUp));
   checkInvariants(fake);
 });
 

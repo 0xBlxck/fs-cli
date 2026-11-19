@@ -1,7 +1,7 @@
 // Passerelle Claude Code : refus GPT, récapitulatif d'une conversation, quota de 50 nouvelles conversations par jour,
 // et lecture des erreurs de France Student (spécification § 3.12). Fonctions pures ou presque : fsturn.js décide quoi faire.
 import fs from 'node:fs';
-import { looksLikeToolRefusal, CLARIFY } from '../native.js';
+import { looksLikeToolRefusal, CLARIFY, NO_CLARIFY_MODELS } from '../native.js';
 import { isBrokenHistory, isLockedChat } from '../api.js';
 import { createdToday, lastReset, localTime, DAILY_LIMIT } from '../chats.js';
 import { cfg, FILES } from '../config.js';
@@ -20,7 +20,7 @@ export const MESSAGES = Object.freeze({
   chatGone: '(La conversation France Student n\'est plus disponible : reprise dans une nouvelle conversation.)',
   contentPolicy: '(France Student a bloqué cette demande : filtre de contenu.)',
   accountDisabled: 'Compte France Student désactivé : la passerelle ne peut plus rien envoyer. Vérifie ton compte sur le site de France Student.',
-  giveUp: '(Le modèle a refusé d\'utiliser les outils. Reformule, ou change de modèle avec /model.)',
+  giveUp: '(Le modèle a refusé d\'utiliser les outils : il n\'a rien lu ni modifié. Choisis un autre modèle avec /model, par exemple sonnet, puis renvoie ta demande. Ou reformule.)',
   continueCut: 'Continue : ta réponse précédente a été coupée par une coupure réseau.',
   lost: '\n\n[FS-CLI] Connexion à France Student perdue. Renvoie ton message pour reprendre.',
   serverError: '\n\n[FS-CLI] Réponse interrompue par une erreur de France Student. Renvoie ton message pour réessayer.',
@@ -41,8 +41,9 @@ export const isRefusal = text => looksLikeToolRefusal(text);
 /**
  * Étape suivante après un refus (comme native.js) :
  * - 0 : 'bare' (1er tour, quota suffisant : la demande seule dans un chat neuf) sinon 'clarify' (précision CLARIFY dans le même chat) ;
- * - 1 : 'switch' (même chat, Claude Sonnet, ou Opus si on était déjà sur Sonnet) ;
- * - ensuite, ou modèle non GPT, ou récupération désactivée (/config refusalRecover) : 'give_up'.
+ * - GPT Astra (-1004, -1006) : pas de 'clarify' (la précision ne le fait jamais changer d'avis, vu en vrai) ;
+ * - ensuite, ou modèle non GPT, ou récupération désactivée (/config refusalRecover) : 'give_up'. JAMAIS de changement
+ *   de modèle à la place de l'utilisateur : le message (MESSAGES.giveUp) lui dit de choisir avec /model.
  * L'appelant fait avancer conv.refusal.stage.
  */
 export function nextRefusalStep(conv, agent, quota, { enabled = cfg.refusalRecover !== false } = {}) {
@@ -50,9 +51,10 @@ export function nextRefusalStep(conv, agent, quota, { enabled = cfg.refusalRecov
   const stage = Number(conv?.refusal?.stage) || 0;
   if (stage === 0) {
     const roomy = !quota?.limitHit && (Number(quota?.remaining) || 0) > 5;
-    return (Number(conv?.turn) || 0) === 0 && !conv?.bare && roomy ? 'bare' : 'clarify';
+    if ((Number(conv?.turn) || 0) === 0 && !conv?.bare && roomy) return 'bare';
+    return NO_CLARIFY_MODELS.has(String(agent?.agentId)) ? 'give_up' : 'clarify';
   }
-  return stage === 1 ? 'switch' : 'give_up';
+  return 'give_up';
 }
 
 /** Agent de l'étape « switch » : Claude Sonnet 5.5, ou Claude Opus 5.5 si le modèle était déjà Sonnet. */

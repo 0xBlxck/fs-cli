@@ -11,7 +11,7 @@ import * as mem from './memory.js';
 import { workPreferences } from './pseudo.js';
 import * as ui from './ui.js';
 import { c, println } from './ui.js';
-import { NO_CLARIFY_MODELS } from './native.js';
+import { NO_CLARIFY_MODELS, RETRY_MODELS } from './native.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -201,11 +201,18 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
   S.turnMarks ||= []; S.turnMarks.push({ at: S.undo.length, text: `/team ${task}`.replace(/\s+/g, ' ').slice(0, 70), t: Date.now() });   // /rewind
   await withAbort(async signal => {
     let workerId = cfg.workerModel != null ? cfg.workerModel : S.agentId;
-    // GPT-6 / 6.2 Astra refuse les tâches confiées par une équipe d'agents (« ne peut pas servir de moteur à un agent externe »),
-    // même avec le contexte de la passerelle : 2 refus sur 2 en vrai le 19/11/2026. Les agents travaillent donc avec Sonnet (affiché).
+    // GPT-6 / 6.2 Astra refuse souvent les tâches confiées par une équipe d'agents (« ne peut pas servir de moteur à un agent externe ») :
+    // 2 refus sur 2 en vrai le 19/11/2026. On ne change JAMAIS de modèle à la place de l'utilisateur : on lui demande (terminal, panneau),
+    // sinon (fs-cli -p) on garde son modèle et on le prévient.
     if (cfg.workerModel == null && NO_CLARIFY_MODELS.has(String(workerId))) {
-      workerId = -2003;
-      println(c.dim('  ↳ GPT Astra refuse les tâches d\'une équipe d\'agents : les agents de cette équipe travaillent avec Claude Sonnet (/model pour ta conversation)'));
+      const choices = [...RETRY_MODELS, { id: workerId, name: 'GPT Astra quand même' }];
+      const canAsk = S.interactive === true && typeof env.select === 'function';
+      const idx = canAsk
+        ? await env.select({ title: 'Modèle des agents de cette équipe ?', detail: 'GPT Astra refuse souvent les tâches d\'une équipe d\'agents (il répond qu\'il ne peut pas servir de moteur à un agent externe). Ta conversation garde son modèle.', options: choices.map(m => m.name), defaultIndex: 0 })
+        : null;
+      if (Number.isInteger(idx) && choices[idx]) workerId = choices[idx].id;
+      else if (!canAsk) println(c.yellow('  ⚠ GPT Astra refuse souvent les tâches d\'une équipe d\'agents : si les agents refusent, relance avec /model sonnet (ou /config pour le modèle des agents)'));
+      else return println(c.dim('  équipe annulée'));                 // Échap sur la question
     }
     const dir = baseDir(S);
     const T0 = Date.now();

@@ -579,7 +579,7 @@ let remoteCache = [];
 let lastProjects = [];                                               // projets France Student vus au dernier passage (onglet « Projets » du panneau)
 // déclarées tôt : le panneau peut envoyer des messages pendant le démarrage (await plus bas)
 let markSeq = 0;
-const SETTING_KEYS = { webSearch: 'recherche web', refusalRecover: 'reprise avec un autre modèle en cas de refus', autoCompact: 'résumé automatique', showThinking: 'réflexion du modèle affichée', sound: 'bip de fin', mcpAskWhere: 'le MCP demande où écrire' };
+const SETTING_KEYS = { webSearch: 'recherche web', refusalRecover: 'nouvel essai (même modèle) quand le modèle refuse les outils', autoCompact: 'résumé automatique', showThinking: 'réflexion du modèle affichée', sound: 'bip de fin', mcpAskWhere: 'le MCP demande où écrire' };
 let effortCache;
 let folderWaiter = null;
 const within = (p, ms, dflt) => Promise.race([Promise.resolve(p).catch(() => dflt), new Promise(r => setTimeout(() => r(dflt), ms).unref?.())]);
@@ -1297,7 +1297,7 @@ async function chatTurn(text, { keepLast = false, retry = false } = {}) {
     if (!S.title) S.title = own.replace(/\s+/g, ' ').trim().slice(0, 60) || 'Conversation';   // provisoire (sans le contexte de l'éditeur) : remplacé par le titre de France Student dès qu'il est connu
     try {
       const agentBefore = S.agentId, turnT0 = Date.now();
-      try { await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text }); } finally { attachSentToChat(); }   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
+      try { await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text, choose: interactive && input.select ? o => input.select(o) : null }); } finally { attachSentToChat(); }   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
       if (cfg.webhook) {                                               // fin de demande → webhook (CI, notifications) : jamais de jeton ni de contenu de fichier
         const mark = (S.turnMarks || []).at(-1);
         const files = mark && S.undo.length > mark.at ? summarizeChanges(S.undo, mark.at).map(f => ({ file: path.relative(S.cwd, f.path), added: f.added, removed: f.removed, created: !!f.created, deleted: !!f.deleted })) : [];

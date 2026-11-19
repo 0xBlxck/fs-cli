@@ -368,20 +368,27 @@ test('le serveur MCP de FS-CLI (« france-student ») n\'est jamais réimporté 
   assert.deepEqual(mentionedServers(cwd, 'cherche avec leboncoin'), ['leboncoin']);
 });
 
-test('/team avec GPT Astra : les agents travaillent avec Sonnet (Astra refuse ces tâches, vu en vrai), affiché ; un modèle d\'agents choisi est respecté', async () => {
+test('/team avec GPT Astra : l\'utilisateur choisit le modèle des agents (menu) ; sans menu on garde Astra ; Échap annule ; modèle d\'agents réglé respecté', async () => {
   cfg.maxParallel = 3;
-  for (const [main, worker, expected] of [[-1004, null, -2003], [-1006, null, -2003], [-1004, -1001, -1001], [-2001, null, -2001]]) {
+  // [modèle principal, modèle d'agents réglé, interactif, réponse au menu, modèle attendu des agents (null = équipe annulée)]
+  const cases = [[-1004, null, true, 0, -2003], [-1006, null, true, 1, -2001], [-1004, null, true, 2, -1004], [-1004, null, false, undefined, -1004],
+    [-1004, null, true, null, null], [-1004, -1001, true, undefined, -1001], [-2001, null, true, undefined, -2001]];
+  for (const [main, worker, inter, answer, expected] of cases) {
     const S = baseS();
-    S.agentId = main;
+    S.agentId = main; S.interactive = inter;
     const before = cfg.workerModel;
     cfg.workerModel = worker;
     const f = fakeTeam();
-    const ids = [];
+    const ids = [], menus = [];
     const stream = o => { ids.push(o.agentId); return f.stream(o); };
-    try { await runTeam(envOf(S, { stream, contextPercent: async () => null }), TASK, { mode: 'pool' }); }
+    const env = { ...envOf(S, { stream, contextPercent: async () => null }), select: async o => { menus.push(o.options); return answer; } };
+    try { await runTeam(env, TASK, { mode: 'pool' }); }
     finally { cfg.workerModel = before; }
-    assert.ok(ids.length >= 3);
-    assert.deepEqual([...new Set(ids)], [expected], `modèle principal ${main}, modèle d'agents ${worker}`);
+    const label = `principal ${main}, agents réglés ${worker}, interactif ${inter}, réponse ${answer}`;
+    if (expected === null) assert.equal(ids.length, 0, `${label} : équipe annulée`);
+    else assert.deepEqual([...new Set(ids)], [expected], label);
+    assert.equal(menus.length, inter && worker == null && [-1004, -1006].includes(main) ? 1 : 0, `${label} : menu`);
+    if (menus.length) assert.deepEqual(menus[0], ['Claude Sonnet 5.5', 'Claude Opus 5.5', 'GPT Astra quand même']);
     assert.equal(S.agentId, main, 'ta conversation garde son modèle');
   }
 });

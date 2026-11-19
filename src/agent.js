@@ -329,9 +329,9 @@ export async function runBlock(S, b, io) {
  * Tour complet. Moteur natif (outils client officiels de FS) par défaut ; mode « chat » en secours :
  * le modèle écrit du code dans sa réponse et le CLI l'exécute (avec les mêmes garde-fous).
  */
-export async function runAgent(S, userText, { signal, ask, bare }) {
+export async function runAgent(S, userText, { signal, ask, bare, choose = null }) {
   if (cfg.engine === 'native' && !S.nativeOff) {                    // vrais appels d'outils (mode officiel « outils client » de FS)
-    try { return await runNative(S, userText, { signal, ask, bare }); }
+    try { return await runNative(S, userText, { signal, ask, bare, choose }); }
     catch (e) {
       if (e.code !== 'NATIVE_UNSUPPORTED') throw e;
       S.nativeOff = true;

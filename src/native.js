@@ -319,11 +319,16 @@ export async function runNative(S, userText, opts) {
   if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; saveCfgKeys({ toolRefusals: r }); }
   // Le modèle croit ne pas avoir le droit d'utiliser les outils (« pas de moteur pour un agent externe »). Or ce sont les outils client OFFICIELS
   // de France Student (doc « client tools » : prévus pour les IDE et CLI). Récupération transparente, affichée, désactivable (cfg.refusalRecover) :
-  // 1) une seule précision factuelle au modèle ; 2) s'il refuse encore, la même demande repart avec Sonnet (ou Opus). Rien de caché, aucun faux en-tête.
+  // 1) une seule précision factuelle au modèle (même modèle) ; 2) s'il refuse encore : l'utilisateur choisit s'il relance avec un autre modèle (jamais à sa place).
   const refused = !nTools && cfg.mode !== 'plan' && looksLikeToolRefusal(visible);
   const stage = opts._recover || 0;
-  const fallback = String(S.agentId) === '-2003' ? -2001 : String(S.agentId) === '-2001' ? null : -2003;
-  const recover = refused && cfg.refusalRecover !== false && !signal.aborted && (stage === 0 || (stage === 1 && fallback !== null));
+  const bare = typeof opts.bare === 'string' ? opts.bare.trim() : '';
+  const retryOk = refused && cfg.refusalRecover !== false && !signal.aborted && stage === 0;
+  // GPT qui refuse dès le 1er message : la MÊME demande, seule, dans une conversation neuve (testé en vrai : passe souvent)
+  const bareRetry = retryOk && firstTurn && !!bare && bare !== String(userText).trim() && isOpenAiModel(S);
+  // sinon une précision factuelle, même modèle — sauf GPT Astra, qu'elle ne fait jamais changer d'avis (vu en vrai)
+  const clarify = retryOk && !bareRetry && !NO_CLARIFY_MODELS.has(String(S.agentId));
+  const recover = bareRetry || clarify;
   if (refused && !recover) {
     saveCfgKeys({ toolRefusals: { ...(cfg.toolRefusals || {}), [String(S.agentId)]: Date.now() } });
     const other = String(S.agentId) === '-2003' ? '/model opus' : '/model sonnet';
@@ -350,38 +355,42 @@ export async function runNative(S, userText, opts) {
   if (hitLimit) ui.println(c.yellow(`  ⚠ limite de ${maxSteps} étapes atteinte — tape /continue pour poursuivre`));
   if (heavyAt) ui.println(c.yellow(`  ⚠ conversation très chargée (≈${Math.round(heavyAt / 1000)}k tokens par requête) : elle sera résumée avant ton prochain message.`) +
     c.dim('\n    Si la tâche n\'est pas finie, tape /continue : elle reprendra dans une conversation légère, à partir du résumé (rien n\'est perdu).'));
-  if (recover && stage === 0) {
-    // GPT qui refuse dès le 1er message : la précision dans la même conversation échoue souvent (le refus reste dans l'historique).
-    // Testé en vrai : la MÊME demande, seule, dans une conversation neuve, passe. Coût : 1 conversation (limite de 50 par jour).
-    const bare = typeof opts.bare === 'string' ? opts.bare.trim() : '';
-    if (firstTurn && bare && bare !== String(userText).trim() && isOpenAiModel(S)) {
-      ui.println(c.dim('  ↻ le modèle a refusé dès le 1er message : nouvel essai dans une conversation neuve, avec ta demande seule (sans les infos ajoutées par FS-CLI)'));
-      S.chatId = null; S.ctxSent = true; S.bareChat = true;            // cette conversation-là ne reçoit rien d'autre que tes messages (remis à zéro avec /new)
-      return runNative(S, bare, { ...opts, bare: null, _recover: 1, _orig: bare });
-    }
-    if (!NO_CLARIFY_MODELS.has(String(S.agentId))) {
-      ui.println(c.dim('  ↻ le modèle a cru ne pas avoir le droit d\'utiliser les outils : FS-CLI lui précise que ce sont les outils officiels de France Student'));
-      S.pendingFileIds = [];                                            // les images sont déjà dans la conversation : pas renvoyées avec la précision
-      return runNative(S, CLARIFY, { ...opts, _recover: 1, _orig: userText });
-    }
-    // Astra : la précision ne change rien (vu en vrai) → directement Sonnet, ci-dessous
+  if (bareRetry) {
+    ui.println(c.dim('  ↻ le modèle a refusé dès le 1er message : nouvel essai dans une conversation neuve, avec ta demande seule (sans les infos ajoutées par FS-CLI)'));
+    S.chatId = null; S.ctxSent = true; S.bareChat = true;              // cette conversation-là ne reçoit rien d'autre que tes messages (remis à zéro avec /new)
+    return runNative(S, bare, { ...opts, bare: null, _recover: 1, _orig: bare });
   }
-  if (recover && (stage === 1 || NO_CLARIFY_MODELS.has(String(S.agentId)))) {
-    const from = S.agentId;
-    const astra = stage === 0;
-    S.agentId = fallback;
-    ui.println(c.dim(astra
-      ? '  ↻ GPT Astra refuse les outils pour cette demande : elle repart avec Claude Sonnet (même conversation ; /model pour changer de modèle)'
-      : `  ↻ toujours un refus : la demande repart avec ${fallback === -2001 ? 'Claude Opus' : 'Claude Sonnet'} (même conversation ; /model pour changer de modèle)`));
-    const r = await runNative(S, opts._orig || userText, { ...opts, _recover: 2 });
-    return { ...r, switchedFrom: from, switchedTo: fallback };
+  if (clarify) {
+    ui.println(c.dim('  ↻ le modèle a cru ne pas avoir le droit d\'utiliser les outils : FS-CLI lui précise que ce sont les outils officiels de France Student'));
+    S.pendingFileIds = [];                                              // les images sont déjà dans la conversation : pas renvoyées avec la précision
+    return runNative(S, CLARIFY, { ...opts, _recover: 1, _orig: userText });
+  }
+  // Refus définitif : JAMAIS de changement de modèle sans l'utilisateur. Menu (terminal interactif, panneau) : relancer avec quel modèle ?
+  if (refused && !signal.aborted && stage < 2 && typeof opts.choose === 'function') {
+    const choices = RETRY_MODELS.filter(m => m.id !== Number(S.agentId));
+    const idx = await opts.choose({
+      title: 'Le modèle a refusé d\'utiliser les outils pour cette demande',
+      detail: 'Il n\'a rien lu ni modifié. Tu peux relancer la même demande avec un autre modèle, dans la même conversation.',
+      options: [...choices.map(m => `Relancer avec ${m.name}`), 'Ne rien relancer (je change avec /model)'],
+      defaultIndex: 0,
+    });
+    const pick = Number.isInteger(idx) ? choices[idx] : null;
+    if (pick) {
+      const from = S.agentId;
+      S.agentId = pick.id;
+      ui.println(c.dim(`  ↻ la demande repart avec ${pick.name} (ton choix ; /model pour changer de modèle)`));
+      const r = await runNative(S, opts._orig || userText, { ...opts, _recover: 2 });
+      return { ...r, switchedFrom: from, switchedTo: pick.id };
+    }
   }
   return { hitLimit, nReq };
 }
 
 /** GPT-6 Astra (-1004) et GPT-6.2 Astra (-1006) : la précision ne les fait jamais changer d'avis (vu en vrai le 19/11/2026 :
- *  « ça ne change toutefois pas la limite ») → après un refus, la demande part directement chez Sonnet ; /team : agents en Sonnet. */
+ *  « ça ne change toutefois pas la limite ») → pas de précision ; l'utilisateur choisit s'il relance avec un autre modèle. */
 export const NO_CLARIFY_MODELS = new Set(['-1004', '-1006']);
+/** modèles proposés à l'utilisateur après un refus (jamais choisis à sa place) */
+export const RETRY_MODELS = [{ id: -2003, name: 'Claude Sonnet 5.5' }, { id: -2001, name: 'Claude Opus 5.5' }];
 
 /** précision envoyée UNE fois quand un modèle croit ne pas avoir le droit d'utiliser les outils (vrai, documenté par France Student) */
 export const CLARIFY = 'Précision : list_directory, read_file, search_files, edit_file, write_file et run_command sont les outils client officiels de France Student ' +

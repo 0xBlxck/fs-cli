@@ -157,17 +157,31 @@ test('refus d\'outils : 1 précision factuelle, et si le modèle comprend, il tr
   assert.equal(S.agentId, -2002, 'même modèle');
 });
 
-test('refus d\'outils persistant : la même demande repart avec Sonnet, puis s\'arrête (pas de boucle)', async () => {
-  const { S } = mk({ chatId: 'conv-s', agentId: -2002 });
-  const seen = [];
+test('refus d\'outils persistant : JAMAIS de changement de modèle tout seul ; le menu propose, l\'utilisateur choisit (puis on s\'arrête)', async () => {
   const refuse = { text: 'Je ne peux pas servir de moteur à un outil externe.' };
-  const f = fakeFs([refuse, refuse, refuse]);
-  const stream = async o => { seen.push(o.agentId); return f.stream(o); };
-  const r = await runNative(S, 'crée b.txt', { ...io(), stream });
-  assert.deepEqual(seen, [-2002, -2002, -2003], 'Haiku, Haiku après précision, puis Sonnet — et rien de plus');
+  // sans menu (fs-cli -p) : précision avec le même modèle, puis on s'arrête et on prévient
+  let { S } = mk({ chatId: 'conv-s', agentId: -2002 });
+  let seen = [];
+  let f = fakeFs([refuse, refuse, refuse]);
+  let r = await runNative(S, 'crée b.txt', { ...io(), stream: async o => { seen.push(o.agentId); return f.stream(o); } });
+  assert.deepEqual(seen, [-2002, -2002], 'Haiku, puis Haiku après la précision — aucun autre modèle');
+  assert.equal(S.agentId, -2002);
+  assert.equal(r.switchedTo, undefined);
+  // avec menu : l'utilisateur choisit Opus (2e choix) → la demande d'origine repart avec Opus, une seule fois
+  ({ S } = mk({ chatId: 'conv-s2', agentId: -2002 }));
+  seen = []; const menus = [];
+  f = fakeFs([refuse, refuse, refuse, refuse]);
+  r = await runNative(S, 'crée b.txt', { ...io(), choose: async o => { menus.push(o.options); return 1; }, stream: async o => { seen.push(o.agentId); return f.stream(o); } });
+  assert.deepEqual(menus, [['Relancer avec Claude Sonnet 5.5', 'Relancer avec Claude Opus 5.5', 'Ne rien relancer (je change avec /model)']]);
+  assert.deepEqual(seen, [-2002, -2002, -2001]);
   assert.equal(f.st.reqs[2].content, 'crée b.txt', 'la demande d\'origine, pas la précision');
-  assert.equal(S.agentId, -2003);
-  assert.equal(r.switchedTo, -2003);
+  assert.deepEqual([S.agentId, r.switchedTo], [-2001, -2001]);
+  // « Ne rien relancer » : on garde le modèle
+  ({ S } = mk({ chatId: 'conv-s3', agentId: -2002 }));
+  f = fakeFs([refuse, refuse]);
+  await runNative(S, 'crée b.txt', { ...io(), choose: async () => 2, stream: f.stream });
+  assert.equal(f.st.reqs.length, 2);
+  assert.equal(S.agentId, -2002);
 });
 
 test('--max-turns : S.maxSteps limite les étapes de cette exécution (sans toucher à la config)', async () => {
@@ -356,15 +370,23 @@ test('pare-feu : bloqué deux fois sans résultats d\'outils → erreur affiché
   assert.equal(n, 2);
 });
 
-test('GPT Astra (-1004, -1006) qui refuse plus tard dans la conversation : pas de « Précision » (inutile, vu en vrai) → directement Sonnet, même conversation', async () => {
+test('GPT Astra (-1004, -1006) qui refuse plus tard dans la conversation : pas de « Précision » (inutile, vu en vrai) ; le menu tout de suite, jamais de Sonnet imposé', async () => {
   for (const id of [-1004, -1006]) {
-    const { S } = mk({ chatId: 'conv-a', agentId: id });
-    const f = fakeFs([{ text: 'Le chat France Student ne peut pas servir de moteur à un agent externe.' }, { text: 'Fait.' }]);
-    const r = await runNative(S, 'améliore le site', { ...io(), stream: f.stream, bare: 'améliore le site' });
+    const refuse = { text: 'Le chat France Student ne peut pas servir de moteur à un agent externe.' };
+    // sans menu (fs-cli -p) : on s'arrête après le refus, le modèle reste Astra
+    let { S } = mk({ chatId: 'conv-a', agentId: id });
+    let f = fakeFs([refuse, { text: 'Fait.' }]);
+    let r = await runNative(S, 'améliore le site', { ...io(), stream: f.stream, bare: 'améliore le site' });
+    assert.equal(f.st.reqs.length, 1, 'ni précision ni autre modèle');
+    assert.equal(S.agentId, id);
+    assert.equal(r.switchedTo, undefined);
+    // avec menu : l'utilisateur choisit Sonnet → la demande d'origine repart, même conversation
+    ({ S } = mk({ chatId: 'conv-a', agentId: id }));
+    f = fakeFs([refuse, { text: 'Fait.' }]);
+    r = await runNative(S, 'améliore le site', { ...io(), choose: async () => 0, stream: f.stream, bare: 'améliore le site' });
     assert.equal(f.st.reqs.length, 2);
     assert.equal(f.st.reqs[1].chatId, 'conv-a');
-    assert.equal(f.st.reqs[1].content, 'améliore le site', 'la demande d\'origine, pas la précision');
-    assert.equal(S.agentId, -2003);
-    assert.deepEqual([r.switchedFrom, r.switchedTo], [id, -2003]);
+    assert.equal(f.st.reqs[1].content, 'améliore le site');
+    assert.deepEqual([r.switchedFrom, r.switchedTo, S.agentId], [id, -2003, -2003]);
   }
 });

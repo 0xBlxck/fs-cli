@@ -442,8 +442,10 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.52.2 en tête, puis 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.53.0 en tête, puis 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(z.version, '3.53.0');
+  assert.match(z.items[0], /Plus jamais de changement de modèle à ta place/);
   assert.equal(y.version, '3.52.2');
   assert.match(y.items[1], /\/team/);
   assert.equal(x.version, '3.52.1');

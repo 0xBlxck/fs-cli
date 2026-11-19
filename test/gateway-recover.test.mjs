@@ -27,8 +27,13 @@ test('isRefusal : refus des outils au début de la réponse seulement', () => {
   assert.match(R.CLARIFY, /outils client officiels de France Student/);
 });
 
-test('nextRefusalStep : bare au 1er tour, sinon clarify, puis switch, puis give_up', () => {
-  const gpt = { provider: 'openai', agentId: -1004 };
+test('nextRefusalStep : bare au 1er tour, sinon clarify (pas pour Astra), puis give_up — jamais de changement de modèle', () => {
+  const astra = { provider: 'openai', agentId: -1004 };
+  const conv0 = (stage, turn) => ({ refusal: { stage, toolsSeen: false }, turn, bare: false });
+  assert.equal(R.nextRefusalStep(conv0(0, 0), astra, { remaining: 40 }, { enabled: true }), 'bare', 'Astra, 1er tour : la demande seule');
+  assert.equal(R.nextRefusalStep(conv0(0, 3), astra, { remaining: 40 }, { enabled: true }), 'give_up', 'Astra : pas de précision');
+  assert.equal(R.nextRefusalStep(conv0(0, 3), { provider: 'openai', agentId: -1006 }, { remaining: 40 }, { enabled: true }), 'give_up');
+  const gpt = { provider: 'openai', agentId: -1002 };
   const conv = (stage, turn, bare = false) => ({ refusal: { stage, toolsSeen: false }, turn, bare });
   const q = (remaining, limitHit = false) => ({ created: 50 - remaining, remaining, limitHit, resetText: 'jeu. 05:00' });
   const on = { enabled: true };
@@ -37,7 +42,7 @@ test('nextRefusalStep : bare au 1er tour, sinon clarify, puis switch, puis give_
   assert.equal(R.nextRefusalStep(conv(0, 0), gpt, q(40, true), on), 'clarify', 'limite atteinte');
   assert.equal(R.nextRefusalStep(conv(0, 0, true), gpt, q(40), on), 'clarify', 'déjà dans un chat « bare »');
   assert.equal(R.nextRefusalStep(conv(0, 3), gpt, q(40), on), 'clarify', '3e tour');
-  assert.equal(R.nextRefusalStep(conv(1, 3), gpt, q(40), on), 'switch');
+  assert.equal(R.nextRefusalStep(conv(1, 3), gpt, q(40), on), 'give_up', 'plus de bascule vers Sonnet : l\'utilisateur choisit avec /model');
   assert.equal(R.nextRefusalStep(conv(2, 3), gpt, q(40), on), 'give_up');
   assert.equal(R.nextRefusalStep(conv(0, 0), { provider: 'anthropic' }, q(40), on), 'give_up', 'seulement GPT');
   assert.equal(R.nextRefusalStep(conv(0, 0), gpt, q(40), { enabled: false }), 'give_up', 'récupération désactivée');
