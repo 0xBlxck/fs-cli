@@ -302,9 +302,10 @@ test('erreurs HTTP : accepted=false ; 400 garde le corps (e.body) ; 401 ; 403 et
   const cases = [
     [400, { message: 'missing: call_1' }, { clientTools: api.CLIENT_TOOLS }, e => e.status === 400 && /missing: call_1/.test(e.body) && /^HTTP 400: /.test(e.message) && e.retry === false],
     [409, { message: 'pending' }, {}, e => e.status === 409 && /pending/.test(e.body)],
-    [401, {}, {}, e => e.status === 401 && /^401 — token/.test(e.message)],
+    [401, {}, {}, e => e.status === 401 && /^401 — clé de session expirée ou invalide.*fs-cli --login/.test(e.message)],
     [403, {}, { clientTools: api.CLIENT_TOOLS }, e => e.code === 'NATIVE_UNSUPPORTED' && e.status === 403],
-    [403, {}, {}, e => e.code === undefined && /^403 — accès refusé/.test(e.message)],
+    [403, {}, {}, e => e.code === undefined && /^403 — France Student refuse cette demande. .*fs-cli --login/.test(e.message)],
+    [403, { message: 'Model not available on your plan' }, {}, e => /^403 — France Student refuse cette demande : « Model not available on your plan »/.test(e.message)],
     [400, { message: 'Client tools are not supported for this model' }, { toolResults: [] }, e => e.code === 'NATIVE_UNSUPPORTED' && e.status === 400],
   ];
   for (const [status, body, extra, check] of cases) {
@@ -324,7 +325,7 @@ test('403 en page HTML (pare-feu, Cloudflare) avec outils client → 403 ordinai
     reset();
     route = (req, res) => { res.writeHead(403, { 'content-type': 'text/html' }); res.end(page); };
     await assert.rejects(api.streamChat({ agentId: -2003, chatId: 'c', content: 'x', clientTools: api.CLIENT_TOOLS }),
-      e => e.status === 403 && e.code === undefined && /^403 — accès refusé/.test(e.message));
+      e => e.status === 403 && e.code === undefined && /^403 — le pare-feu de France Student \(Cloudflare\)/.test(e.message));
   }
 });
 
@@ -476,4 +477,12 @@ test('serveur MCP : fs_models fonctionne avec la forme tableau de fetchAgentsFul
   const r = await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fs_models', arguments: {} } });
   const text = r.result.content[0].text;
   assert.match(text, /^1 modèle France Student/); assert.match(text, /Claude Sonnet 5\.5 \(id -2003\)/); assert.doesNotMatch(text, /Inactif/);
+});
+
+test('serverMessage : message JSON lisible, une ligne, 200 caractères au plus ; rien pour du HTML', () => {
+  assert.equal(api.serverMessage('{"message":"Accès\\nrefusé"}'), 'Accès refusé');
+  assert.equal(api.serverMessage('{"error":{"message":"plan"}}'), 'plan');
+  assert.equal(api.serverMessage('{"error":"interdit"}'), 'interdit');
+  assert.equal(api.serverMessage('<html>bloqué</html>'), '');
+  assert.equal(api.serverMessage(JSON.stringify({ message: 'x'.repeat(500) })).length, 200);
 });

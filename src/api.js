@@ -180,6 +180,15 @@ function chatRequest({ agentId, chatId, content, webSearch, clientTools, toolRes
   };
 }
 
+/** message lisible d'une réponse d'erreur JSON de l'API ({ message } ou { error: { message } }) ; '' si HTML ou illisible */
+export function serverMessage(b) {
+  try {
+    const j = JSON.parse(b || '');
+    const m = j?.message || j?.error?.message || (typeof j?.error === 'string' ? j.error : '') || j?.detail || '';
+    return String(m).replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+  } catch { return ''; }
+}
+
 /** réponse HTTP ≥ 300 d'un flux → ApiError claire (status, code, body) */
 function httpError(st, b, { native = false } = {}) {
   // limite quotidienne de nouvelles conversations : inutile de réessayer, on explique
@@ -192,8 +201,11 @@ function httpError(st, b, { native = false } = {}) {
     e.code = 'NATIVE_UNSUPPORTED';
     return e;
   }
-  const msg = st === 401 ? '401 — token de session expiré (récupère un nouveau cookie next-auth.session-token)'
-    : st === 403 ? '403 — accès refusé (token invalide ?)'
+  // 403 : une clé invalide ou absente donne 401 (vérifié le 19/11/2026) ; 403 = connecté mais refusé → on montre la raison du serveur
+  const why = serverMessage(b);
+  const msg = st === 401 ? '401 — clé de session expirée ou invalide : reconnecte-toi avec « fs-cli --login » dans un terminal'
+    : st === 403 && firewall ? '403 — le pare-feu de France Student (Cloudflare) a bloqué la requête. Réessaie dans une minute ; si ça continue, ouvre francestudent.org dans ton navigateur ou change de réseau (VPN, partage 4G).'
+    : st === 403 ? `403 — France Student refuse cette demande${why ? ` : « ${why} »` : ''}. Si ta session a changé (déconnexion, autre appareil), reconnecte-toi avec « fs-cli --login » ; sinon essaie un autre modèle (/model).`
     : st === 429 ? '429 — trop de requêtes, patiente quelques secondes'
     : `HTTP ${st}: ${b.slice(0, 200)}`;
   const e = new ApiError(msg, { status: st, retry: st === 429 || st >= 500 });

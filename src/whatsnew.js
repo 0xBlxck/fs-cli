@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.49.1', items: [
+    'Erreur 403 : la vraie raison donnée par France Student est affichée (avant : « token invalide ? », souvent faux) ; pare-feu Cloudflare reconnu et expliqué',
+    'Erreur 401 : « reconnecte-toi avec fs-cli --login » directement dans le message',
+  ] },
   { version: '3.49.0', items: [
     '`fs-cli claude --fs-garder --model gpt-6-astra --fs-projet "Mon projet"` : tes options sont enregistrées, ensuite `fs-cli claude` tout court suffit',
     '`fs-cli claude --fs-garder` seul montre tes réglages, `--fs-oublier` les efface',

@@ -1445,7 +1445,7 @@ async function handleInput(text) {
   } catch (e) {
     ui.spinner.stop();
     println(c.red(`\n  Erreur: ${e.message}`));
-    if (/401|expiré/.test(e.message)) println(c.dim('  → ta clé de session a expiré : quitte puis lance « fs-cli --login »'));
+    if (/401|expiré/.test(e.message) && !/--login/.test(e.message)) println(c.dim('  → ta clé de session a expiré : quitte puis lance « fs-cli --login »'));
   } finally {
     busy = false; if (!holdInput) input.setBusy(false);              // démarrage du panneau : la file reste fermée jusqu'à la confiance
     refreshPrompt();
