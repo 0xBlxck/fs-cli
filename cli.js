@@ -56,6 +56,11 @@ if (['claude', '--claude', 'gateway', '--gateway'].includes(sub)) {
   const L = await import('./src/gateway/launch.js');
   await (sub.includes('claude') ? L.runClaude : L.runGatewayCmd)(process.argv.slice(3));
 }
+// fs-cli update : FS-CLI + fs-cli claude + panneau des éditeurs, en une commande (« fs-cli -- update » reste une demande)
+if (['update', '--update', 'maj', '--maj'].includes(sub)) {
+  const { updateAll } = await import('./src/update.js');
+  process.exit(await updateAll());
+}
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -119,6 +124,7 @@ if (opts.help) {
   fs claude --fs-conversations  reprendre dans Claude Code une conversation du site (--fs-conversation "mot du titre")
                            dans Claude Code : /fs:conversations puis /fs:reprendre <n°>
   fs gateway               la passerelle seule (port 8787), pour Claude Code lancé à la main ou depuis VS Code
+  fs update                tout mettre à jour : FS-CLI, fs claude et le panneau des éditeurs (alias : fs maj)
   -h, --help  -v, --version`);
   process.exit(0);
 }

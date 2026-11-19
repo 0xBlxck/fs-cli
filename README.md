@@ -43,7 +43,7 @@ Au premier lancement, un **assistant** connecte ton compte France Student : il o
 
 | Besoin | Commande |
 |---|---|
-| Mettre à jour | relance la commande de l'étape 2 (FS-CLI te prévient quand une nouvelle version sort) |
+| Mettre à jour | `fs-cli update` : FS-CLI, `fs-cli claude` et le panneau des éditeurs en une fois (ou `/update` dans FS-CLI) |
 | Changer de compte / clé expirée | `fs-cli --login` |
 | Reprendre la dernière session du dossier | `fs-cli -c` |
 | Une seule demande, puis quitter | `fs-cli -p "résume ce dossier"` |
@@ -183,8 +183,8 @@ Sont enregistrées les options `--fs-*` et `--model` / `--permission-mode` de Cl
 **Reprendre une conversation du site France Student** dans Claude Code :
 
 ```bash
-fs-cli claude --fs-conversations                          # liste tes conversations récentes, tu tapes le numéro
-fs-cli claude --fs-projet "Mon projet" --fs-conversations # seulement celles de ce projet
+fs-cli claude --fs-conversations                          # menu à flèches : tes projets, puis leurs conversations (5 visibles, ça défile)
+fs-cli claude --fs-projet "Mon projet" --fs-conversations # directement les conversations de ce projet
 fs-cli claude --fs-conversation "TP nmap"                 # directement, par un mot du titre (ou son id)
 ```
 
@@ -192,7 +192,7 @@ Ou directement **dans Claude Code**, sans le relancer :
 
 | Commande | Effet |
 |---|---|
-| `/fs:conversations` | liste tes conversations France Student (un mot pour filtrer les titres ; celles du projet avec `--fs-projet`) |
+| `/fs:conversations` | menu à flèches : tes projets du site, puis leurs conversations, 3 par page avec « Suivantes ▸ » (un mot pour filtrer les titres ; directement celles du projet avec `--fs-projet`) |
 | `/fs:reprendre 3` | la session continue dans la conversation n° 3 de la liste (ou un mot du titre, ou son id) |
 
 Ces commandes sont traitées par FS-CLI : elles ne coûtent ni requête au modèle ni conversation. Le modèle se souvient de tout ce qui a été dit dans la conversation reprise ; Claude Code n'affiche pas les anciens messages. Aucune nouvelle conversation n'est créée.

@@ -191,6 +191,7 @@ export async function chooseChat(h, o, projectId = null) {
   if (!o.chat && !o.pickChat) return null;
   const want = String(o.chat || '').trim();
   if (isChatId(want)) return { id: want.toLowerCase(), title: '' };
+  if (!want && h.isTTY && typeof h.pick === 'function') return pickMenu(h, projectId);   // menu à flèches (projets, puis conversations)
   let list = null;
   try { list = projectId ? await h.projectChats(projectId) : await h.recentChats(50); } catch {}
   if (!Array.isArray(list)) return { error: 'Impossible de lire tes conversations France Student (réessaie, ou vérifie ta connexion avec fs-cli --login).' };
@@ -208,6 +209,36 @@ export async function chooseChat(h, o, projectId = null) {
   const n = Number(a);
   if (!Number.isInteger(n) || n < 1 || n > cands.length) return { error: `Numéro invalide : « ${a} ».` };
   return { id: cands[n - 1].id, title: cands[n - 1].title || '' };
+}
+
+/**
+ * Menu à flèches du lancement : tes projets France Student (ou « toutes les conversations »), puis leurs conversations,
+ * 5 lignes visibles qui défilent. Échap sur les conversations revient aux projets ; Échap sur les projets = nouvelle conversation.
+ */
+async function pickMenu(h, projectId = null) {
+  const fail = { error: 'Impossible de lire tes conversations France Student (réessaie, ou vérifie ta connexion avec fs-cli --login).' };
+  let projects = [];
+  if (!projectId) { try { projects = (await h.projects()) || []; } catch {} }
+  for (;;) {
+    let pid = projectId, pname = '';
+    if (!projectId && projects.length) {
+      const items = [{ label: 'Toutes mes conversations récentes', description: 'tous projets' }, ...projects.map(p => ({ label: `📁 ${p.name || 'sans nom'}`, description: 'projet' }))];
+      const i = await h.pick({ title: 'Reprendre une conversation France Student : où chercher ?', items, hint: '↑↓ défiler · Entrée choisir · Échap nouvelle conversation' });
+      if (i == null) return null;
+      if (i > 0) { pid = projects[i - 1].id; pname = projects[i - 1].name || ''; }
+    }
+    let list = null;
+    try { list = pid ? await h.projectChats(pid) : await h.recentChats(50); } catch {}
+    if (!Array.isArray(list)) return fail;
+    const cands = pickChats(list, '', 1000);
+    const items = [{ label: '＋ Nouvelle conversation' }, ...cands.map((c, i) => ({ label: String(c.title || '(sans titre)').replace(/\s+/g, ' '), description: chatLine(c, i).replace(/^\s*\d+\.\s*[^·]*·?\s*/, '') }))];
+    const back = !projectId && projects.length;
+    const j = await h.pick({ title: pname ? `Conversations du projet « ${pname} » (${cands.length})` : `Conversations récentes (${cands.length})`, items,
+      hint: `↑↓ défiler · Entrée choisir · Échap ${back ? 'retour aux projets' : 'nouvelle conversation'}` });
+    if (j == null) { if (back) continue; return null; }
+    if (j === 0) return null;
+    return { id: cands[j - 1].id, title: cands[j - 1].title || '' };
+  }
 }
 
 /** Plugin de session (commandes /fs:conversations et /fs:reprendre) écrit dans ~/.fs-cli/gateway/claude-plugin ; null en cas d'échec. */
@@ -458,7 +489,9 @@ export async function realDeps() {
     cancelStream: api.cancelStream,
     fetchAgentsFull: api.fetchAgentsFull,
     /** /fs:conversations : conversations du site (celles du projet si projectId) */
-    listChats: ({ projectId = null } = {}) => (projectId ? api.projectChats(projectId) : api.fetchChatsList(50)),
+    listChats: ({ projectId = null } = {}) => (projectId ? api.projectChats(projectId) : api.allRecentChats()),
+    /** /fs:conversations : projets du site (1er menu) */
+    listProjects: () => api.listFsProjects(),
     createdToday: () => chats.createdToday(),
     fsExists: p => { try { return fs.existsSync(p); } catch { return false; } },
     fsStat: p => { try { return fs.statSync(p); } catch { return null; } },
@@ -531,9 +564,11 @@ function makeHost(io) {
     project: useFsProject,
     savedDefaults,
     saveDefaults: list => saveCfgKeys({ claudeDefaults: list }),
-    recentChats: async n => (await import('../api.js')).fetchChatsList(n),
+    recentChats: async () => (await import('../api.js')).allRecentChats(),
     projectChats: async id => (await import('../api.js')).projectChats(id),
     ask: askLine,
+    pick: async o => (await import('./picker.js')).pickInTerminal(o),
+    projects: async () => (await import('../api.js')).listFsProjects(),
     writePlugin,
     openLog,
     silence,

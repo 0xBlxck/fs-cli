@@ -441,8 +441,11 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.51.0 en tête, puis 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [s, r, p, e, g, w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.52.0 en tête, puis 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(u.version, '3.52.0');
+  assert.match(u.items[0], /fs-cli update/);
+  assert.match(u.items[2], /\/fs:conversations/);
   assert.equal(s.version, '3.51.0');
   assert.match(s.items[0], /\/fs:conversations/);
   assert.match(s.items[0], /\/fs:reprendre 3/);
@@ -562,4 +565,87 @@ test('plugin de session : deux commandes qui posent le marqueur lu par la passer
   assert.deepEqual(fsCommand('<command-name>/fs:reprendre</command-name>\nFSCLI-COMMANDE reprendre 3 '), { name: 'reprendre', arg: '3' });
   assert.deepEqual(fsCommand('FSCLI-COMMANDE conversations'), { name: 'conversations', arg: '' });
   assert.equal(fsCommand('explique FSCLI-COMMANDE à quelqu\'un'), null);
+});
+
+test('menu du lancement : 5 lignes qui défilent, ↑ en haut repart du bas, indicateurs ↑/↓ « de plus »', async () => {
+  const P = await import('../src/gateway/picker.js');
+  let st = { idx: 0, top: 0 };
+  for (let i = 0; i < 6; i++) st = P.movePicker(st, 'down', 12, 5);
+  assert.deepEqual(st, { idx: 6, top: 2 });
+  st = P.movePicker({ idx: 0, top: 0 }, 'up', 12, 5);
+  assert.deepEqual(st, { idx: 11, top: 7 }, 'en haut : on repart du bas');
+  assert.deepEqual(P.movePicker(st, 'home', 12, 5), { idx: 0, top: 0 });
+  assert.deepEqual(P.movePicker({ idx: 0, top: 0 }, 'pagedown', 12, 5), { idx: 5, top: 1 });
+  const items = Array.from({ length: 12 }, (_, i) => ({ label: `Conversation ${i + 1}`, description: 'GPT-6 Astra' }));
+  const plain = s => s.replace(/\x1b\[[0-9;]*m/g, '');
+  const lines = P.renderPicker({ title: 'Titre', items }, { idx: 6, top: 2 }, 5, 60).map(plain);
+  assert.equal(lines.length, 9, 'titre + ↑ + 5 lignes + ↓ + aide');
+  assert.equal(lines[1], '  ↑ 2 de plus');
+  assert.match(lines[6], /^❯ Conversation 7 · GPT-6 Astra$/);
+  assert.equal(lines[7], '  ↓ 5 de plus');
+  assert.ok(P.renderPicker({ title: 'x'.repeat(200), items: [{ label: 'y'.repeat(200) }] }, { idx: 0, top: 0 }, 5, 40).map(plain).every(l => l.length <= 39));
+});
+
+test('menu du lancement dans un faux terminal : flèches puis Entrée → index ; Échap → null ; terminal rétabli', async () => {
+  const P = await import('../src/gateway/picker.js');
+  const { EventEmitter } = await import('node:events');
+  const fakeTerm = () => {
+    const input = Object.assign(new EventEmitter(), { isTTY: true, raw: null, setRawMode(v) { this.raw = v; }, resume() {}, pause() {} });
+    const output = { columns: 80, out: '', write(s) { this.out += s; } };
+    return { input, output };
+  };
+  const items = Array.from({ length: 8 }, (_, i) => ({ label: `C${i}` }));
+  let t = fakeTerm();
+  let p = P.pickInTerminal({ title: 'T', items, input: t.input, output: t.output });
+  t.input.emit('data', '\x1b[B'); t.input.emit('data', '\x1b[B'); t.input.emit('data', '\r');
+  assert.equal(await p, 2);
+  assert.equal(t.input.raw, false, 'mode brut rendu');
+  assert.match(t.output.out, /\x1b\[\?25h$/, 'curseur rendu');
+  t = fakeTerm();
+  p = P.pickInTerminal({ title: 'T', items, input: t.input, output: t.output });
+  t.input.emit('data', '\x1b');
+  assert.equal(await p, null, 'Échap seul');
+  assert.equal(await P.pickInTerminal({ title: 'T', items, input: { isTTY: false }, output: t.output }), null, 'pas de terminal : null');
+});
+
+test('chooseChat avec le menu : projets puis conversations ; Échap revient aux projets ; « Nouvelle conversation » → null', async () => {
+  const picks = [];
+  const answers = [];
+  const h = {
+    isTTY: true, err() {},
+    projects: async () => [{ id: 'pA', name: 'Cours' }],
+    projectChats: async id => (id === 'pA' ? [{ id: 'c1', title: 'TP', lastMessageAt: '2026-11-19T10:00:00Z' }] : null),
+    recentChats: async () => [{ id: 'r1', title: 'Récente', lastMessageAt: '2026-11-19T11:00:00Z' }, { id: 'r2', title: 'Vieille', lastMessageAt: '2026-11-01T11:00:00Z' }],
+    pick: async o => { picks.push(o.items.map(i => i.label)); return answers.shift(); },
+  };
+  answers.push(1, null, 0, 2);   // projet « Cours », Échap (retour), « toutes », 2e conversation
+  assert.deepEqual(await L.chooseChat(h, { pickChat: true }), { id: 'r2', title: 'Vieille' }, 'index 2 du menu (0 = nouvelle conversation)');
+  assert.deepEqual(picks, [['Toutes mes conversations récentes', '📁 Cours'], ['＋ Nouvelle conversation', 'TP'], ['Toutes mes conversations récentes', '📁 Cours'], ['＋ Nouvelle conversation', 'Récente', 'Vieille']]);
+  answers.push(0, 0);
+  assert.equal(await L.chooseChat(h, { pickChat: true }), null, '« Nouvelle conversation »');
+  picks.length = 0; answers.push(1);
+  assert.deepEqual(await L.chooseChat(h, { pickChat: true }, 'pA'), { id: 'c1', title: 'TP' }, 'avec --fs-projet : directement ses conversations');
+  assert.deepEqual(picks, [['＋ Nouvelle conversation', 'TP']]);
+});
+
+test('fs-cli update : npm puis le panneau des éditeurs, sans question ; dossier git → « git pull » ; échec npm → commande à la main', async () => {
+  const { updateAll, INSTALL_CMD } = await import('../src/update.js');
+  const mk = (over = {}) => {
+    const r = { runs: [], logs: [] };
+    const deps = { root: 'R', platform: 'win32', exists: () => false, check: async () => ({ current: '3.51.0', latest: '3.52.0', newer: true }),
+      run: (cmd, args) => { r.runs.push([cmd, ...args].join(' ')); return { status: 0 }; }, log: t => r.logs.push(t), node: 'node', ...over };
+    return { r, deps };
+  };
+  let { r, deps } = mk();
+  assert.equal(await updateAll(deps), 0);
+  assert.deepEqual(r.runs, [`npm.cmd install -g ${INSTALL_CMD.split(' ').pop()}`, `node ${path.join('R', 'cli.js')} --vscode`]);
+  assert.match(r.logs.join('\n'), /v3\.51\.0 → v3\.52\.0[\s\S]*Reload Window/);
+  ({ r, deps } = mk({ exists: p => p.endsWith('.git') }));
+  assert.equal(await updateAll(deps), 1);
+  assert.equal(r.runs.length, 0);
+  assert.match(r.logs[0], /git pull/);
+  ({ r, deps } = mk({ run: (cmd) => { r.runs.push(cmd); return { status: 1 }; } }));
+  assert.equal(await updateAll(deps), 1);
+  assert.equal(r.runs.length, 1, 'panneau pas tenté si npm échoue');
+  assert.match(r.logs.at(-1), /À la main : npm install -g/);
 });

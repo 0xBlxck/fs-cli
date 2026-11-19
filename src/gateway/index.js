@@ -19,7 +19,8 @@ import { answerLocally, compactFsInBackground, SUBAGENT_REFUSAL } from './backgr
 import { recapOf, quotaState, limitMessage, MESSAGES } from './recover.js';
 import { runFsTurn, reconcile, applyReconcile, resultsText } from './fsturn.js';
 import { decodeId } from './ids.js';
-import { fsCommand, pickChats, chatLine, isChatId } from './fschats.js';
+import { fsCommand, pickChats, chatLine, isChatId, pickLabel, pickAnswer } from './fschats.js';
+import { synthId } from './ids.js';
 import { textCleaner } from '../native.js';
 
 const MAX_IMAGES = 4;
@@ -258,45 +259,48 @@ export function createGateway(deps, opts = {}) {
     reply.finish(uses.length ? 'tool_use' : 'end_turn');
   }
 
-  /** Conversations du site (celles du projet de --fs-projet s'il y en a un) ; null si illisibles. */
-  async function siteChats() {
-    try { return typeof deps.listChats === 'function' ? await deps.listChats({ projectId: o.listProject || null }) : null; }
+  /** Conversations du site : projectId donné (null = toutes), sinon celles du projet de --fs-projet ; null si illisibles. */
+  async function siteChats(projectId = o.listProject || null) {
+    try { return typeof deps.listChats === 'function' ? await deps.listChats({ projectId }) : null; }
     catch { return null; }
   }
 
-  /** /fs:conversations [mot] : liste numérotée ; /fs:reprendre <n° | mot | id> : la session continue dans ce chat FS. */
-  async function runFsCommand(conv, cmd, reply) {
+  const PICK_PAGE = 3;                                        // menu de Claude Code : 4 choix au plus → 3 + « Suivantes ▸ »
+  const NO_LIST = 'Impossible de lire tes conversations France Student pour le moment (réessaie dans un instant).';
+
+  /** Menu à flèches de Claude Code (AskUserQuestion), une page de st.items ; la réponse revient dans conv.pick. */
+  function askPage(conv, reply, st, text) {
+    const total = st.items.length, pages = Math.max(1, Math.ceil(total / PICK_PAGE)), fits = total <= 4;
+    const page = fits ? 0 : st.page % pages;
+    const shown = (fits ? st.items : st.items.slice(page * PICK_PAGE, page * PICK_PAGE + PICK_PAGE)).map(it => ({ ...it }));
+    if (!fits) shown.push({ label: page + 1 < pages ? `Suivantes ▸ (page ${page + 1}/${pages})` : `↺ Retour au début (page ${pages}/${pages})`, description: 'faire défiler la liste', nav: true });
+    const id = synthId('pick');
+    conv.pick = { ccId: id, stage: st.stage, page, items: st.items, shown: shown.map(x => ({ label: x.label, nav: !!x.nav, value: x.value })), question: st.question, header: st.header };
+    return localTurn(conv, reply, text, [{
+      id, name: 'AskUserQuestion',
+      input: { questions: [{ question: st.question, header: st.header, multiSelect: false, options: shown.map(x => ({ label: x.label, description: x.description || '' })) }] },
+    }]);
+  }
+
+  /** liste des conversations (toutes, d'un projet, ou filtrées par un mot) : texte numéroté + menu à flèches si possible */
+  async function chatStage(conv, reply, avail, { projectId, projectName = '', word = '' } = {}) {
     const key = conv.key || conv.id;
-    const where = o.listProject ? ' du projet' : '';
-    if (cmd.name === 'conversations') {
-      const list = await siteChats();
-      if (!Array.isArray(list)) return localTurn(conv, reply, 'Impossible de lire tes conversations France Student pour le moment (réessaie dans un instant).');
-      const cands = pickChats(list, cmd.arg);
-      listed.set(key, cands.map(c => ({ id: c.id, title: c.title || '' })));
-      line({ event: 'commande', name: 'conversations', n: cands.length });
-      if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${where}${cmd.arg ? ` dont le titre contient « ${cmd.arg} »` : ''}.`);
-      return localTurn(conv, reply, `Conversations France Student${where}${cmd.arg ? ` (titre contenant « ${cmd.arg} »)` : ''} :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}\n\nPour continuer l'une d'elles ici : /fs:reprendre <numéro>`);
-    }
-    const arg = cmd.arg;
-    if (!arg) return localTurn(conv, reply, 'Indique laquelle : /fs:reprendre <numéro> (après /fs:conversations), un mot du titre, ou son id.');
-    let target = null;
-    if (/^\d+$/.test(arg)) {
-      const prev = listed.get(key);
-      if (!prev) return localTurn(conv, reply, 'Tape d\'abord /fs:conversations pour voir la liste numérotée.');
-      target = prev[Number(arg) - 1] || null;
-      if (!target) return localTurn(conv, reply, `Pas de conversation n° ${arg} dans la dernière liste (1 à ${prev.length}).`);
-    } else if (isChatId(arg)) target = { id: arg.toLowerCase(), title: '' };
-    else {
-      const list = await siteChats();
-      if (!Array.isArray(list)) return localTurn(conv, reply, 'Impossible de lire tes conversations France Student pour le moment (réessaie dans un instant).');
-      const cands = pickChats(list, arg);
-      if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${where} dont le titre contient « ${arg} ».`);
-      if (cands.length > 1) {
-        listed.set(key, cands.map(c => ({ id: c.id, title: c.title || '' })));
-        return localTurn(conv, reply, `Plusieurs conversations contiennent « ${arg} » :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}\n\nChoisis : /fs:reprendre <numéro>`);
-      }
-      target = { id: cands[0].id, title: cands[0].title || '' };
-    }
+    const list = await siteChats(projectId === undefined ? (o.listProject || null) : projectId);
+    if (!Array.isArray(list)) return localTurn(conv, reply, NO_LIST);
+    const cands = pickChats(list, word, 50);
+    listed.set(key, cands.map(c => ({ id: c.id, title: c.title || '' })));
+    line({ event: 'commande', name: 'conversations', n: cands.length });
+    const where = projectName ? ` du projet « ${projectName} »` : (projectId === undefined && o.listProject) ? ' du projet' : '';
+    if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${where}${word ? ` dont le titre contient « ${word} »` : ''}.`);
+    const text = `Conversations France Student${where}${word ? ` (titre contenant « ${word} »)` : ''} :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}`;
+    if (!avail.has('AskUserQuestion') || cands.length < 2) return localTurn(conv, reply, `${text}\n\nPour continuer l'une d'elles ici : /fs:reprendre <numéro>`);
+    const items = cands.map((c, i) => ({ label: pickLabel(c, i), description: chatLine(c, i).trim().replace(/^\d+\.\s*[^·]*·?\s*/, ''), value: { id: c.id, title: c.title || '' } }));
+    return askPage(conv, reply, { stage: 'chat', page: 0, items, question: 'Quelle conversation continuer ici ? (« Other » : un numéro ou un mot du titre)', header: 'Conversation' },
+      `${text}\n\nChoisis avec les flèches, ou plus tard : /fs:reprendre <numéro>`);
+  }
+
+  /** la session continue dans ce chat FS (le prochain message y part, avec la note « suite de cette conversation ») */
+  function resumeChat(conv, reply, target) {
     if (target.id === conv.chatId) return localTurn(conv, reply, 'Tu es déjà dans cette conversation.');
     const owner = store.list().find(c => c.id !== conv.id && c.chatId === target.id);
     if (owner) { resetChat(owner); owner.borrowedBy = conv.id; store.save(owner); }   // jamais deux conversations sur un même chat FS
@@ -306,6 +310,62 @@ export function createGateway(deps, opts = {}) {
     conv.attachNext = true;
     line({ event: 'reprise', chatId: target.id, via: 'commande' });
     return localTurn(conv, reply, `Conversation France Student ${target.title ? `« ${target.title} »` : target.id} reprise : ton prochain message part dedans, le modèle se souvient de ce qui y a été dit.`);
+  }
+
+  /** réponse au menu à flèches (résultat d'AskUserQuestion) */
+  async function answerPick(conv, picked, reply, avail) {
+    const st = conv.pick;
+    conv.pick = null;
+    const answer = pickAnswer(picked);
+    if (picked.is_error || !answer) return localTurn(conv, reply, 'Aucune conversation reprise (choix annulé). /fs:conversations pour revoir la liste.');
+    const opt = (st.shown || []).find(x => x.label === answer);
+    if (opt?.nav) {
+      const pages = Math.max(1, Math.ceil(st.items.length / PICK_PAGE)), next = (st.page + 1) % pages;
+      return askPage(conv, reply, { ...st, page: next }, `Page ${next + 1}/${pages}`);
+    }
+    if (st.stage === 'project') {
+      if (opt) return chatStage(conv, reply, avail, { projectId: opt.value?.projectId ?? null, projectName: opt.value?.name || '' });
+      return chatStage(conv, reply, avail, { projectId: null, word: answer });   // « Other » : un mot cherché dans toutes les conversations
+    }
+    if (opt?.value?.id) return resumeChat(conv, reply, opt.value);
+    return runFsCommand(conv, { name: 'reprendre', arg: answer }, reply, avail);   // « Other » : numéro de la liste ou mot du titre
+  }
+
+  /** /fs:conversations [mot] : projets puis conversations (menu à flèches) ; /fs:reprendre <n° | mot | id> : la session continue dans ce chat FS. */
+  async function runFsCommand(conv, cmd, reply, avail = new Set()) {
+    const key = conv.key || conv.id;
+    if (cmd.name === 'conversations') {
+      // sans mot ni --fs-projet : d'abord tes projets du site (menu à flèches), puis leurs conversations
+      if (!cmd.arg && !o.listProject && avail.has('AskUserQuestion') && typeof deps.listProjects === 'function') {
+        let projects = null;
+        try { projects = await deps.listProjects(); } catch {}
+        if (Array.isArray(projects) && projects.length) {
+          const items = [{ label: 'Toutes mes conversations', description: 'les plus récentes, tous projets', value: { projectId: null } },
+            ...projects.map(p => ({ label: `📁 ${String(p.name || 'sans nom').replace(/["“”]/g, '\'').slice(0, 40)}`, description: 'projet du site France Student', value: { projectId: p.id, name: p.name || '' } }))];
+          line({ event: 'commande', name: 'projets', n: projects.length });
+          return askPage(conv, reply, { stage: 'project', page: 0, items, question: 'Quelles conversations afficher ? (« Other » : un mot cherché dans les titres)', header: 'Projet' },
+            `Projets France Student : ${projects.map(p => p.name).join(', ')}`);
+        }
+      }
+      return chatStage(conv, reply, avail, { word: cmd.arg });
+    }
+    const arg = cmd.arg;
+    if (!arg) return localTurn(conv, reply, 'Indique laquelle : /fs:reprendre <numéro> (après /fs:conversations), un mot du titre, ou son id.');
+    if (/^\d+$/.test(arg)) {
+      const prev = listed.get(key);
+      if (!prev) return localTurn(conv, reply, 'Tape d\'abord /fs:conversations pour voir la liste numérotée.');
+      const target = prev[Number(arg) - 1];
+      if (!target) return localTurn(conv, reply, `Pas de conversation n° ${arg} dans la dernière liste (1 à ${prev.length}).`);
+      return resumeChat(conv, reply, target);
+    }
+    if (isChatId(arg)) return resumeChat(conv, reply, { id: arg.toLowerCase(), title: '' });
+    const list = await siteChats();
+    if (!Array.isArray(list)) return localTurn(conv, reply, NO_LIST);
+    const cands = pickChats(list, arg);
+    if (cands.length === 1) return resumeChat(conv, reply, { id: cands[0].id, title: cands[0].title || '' });
+    if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${o.listProject ? ' du projet' : ''} dont le titre contient « ${arg} ».`);
+    listed.set(key, cands.map(c => ({ id: c.id, title: c.title || '' })));
+    return localTurn(conv, reply, `Plusieurs conversations contiennent « ${arg} » :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}\n\nChoisis : /fs:reprendre <numéro>`);
   }
 
   async function processRequest(found, delta, reply, body, cls, turns, entry) {
@@ -352,8 +412,10 @@ export function createGateway(deps, opts = {}) {
     const ia = findLastIndex(turns, t => t.role === 'assistant');
     const u = mergeUserTurns(delta.userTurns);
     // /fs:conversations, /fs:reprendre (plugin de session de fs-cli claude) : répondues ici, aucun appel au modèle
+    const picked = conv.pick && u.results.find(r => r.id === conv.pick.ccId);
+    if (picked) { await answerPick(conv, picked, reply, avail); return { outcome: 'commande', chatId: conv.chatId, cache: false }; }   // réponse au menu de /fs:conversations
     const cmd = cls.kind === 'main' && !u.results.length ? fsCommand(u.text) : null;
-    if (cmd) { await runFsCommand(conv, cmd, reply); return { outcome: 'commande', chatId: conv.chatId, cache: false }; }
+    if (cmd) { await runFsCommand(conv, cmd, reply, avail); return { outcome: 'commande', chatId: conv.chatId, cache: false }; }
     const extras = { web: !!o.web, date: isoDay(now()), shellTool, forceClaudeMd: !!o.claudeMd };
     if (conv.attachNext) { conv.attachNext = false; extras.borrowed = true; extras.attached = true; }   // 1er envoi après /fs:reprendre : note + préambule
     const ctxBase = { deps, store, models, agent, key: delta.key, est: estimateTokens(body), prefix, userText: u.text, timing, quota,

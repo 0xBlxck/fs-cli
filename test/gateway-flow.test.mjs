@@ -923,3 +923,90 @@ test('(o2) /fs:reprendre par un mot du titre ; plusieurs résultats → liste ; 
   assert.match(r3.sse.text, /Impossible de lire tes conversations/);
   assert.equal(fake.sent.length, 0);
 });
+
+test('(o3) menu à flèches : /fs:conversations propose AskUserQuestion (3 par page + Suivantes) ; choix, « Other » tapé, ou Échap', async t => {
+  const fake = fakeFs({ turns: ['Suite du TP.'] });
+  fake.deps.listChats = async () => [
+    { id: 'a', title: 'TP "Nmap"', lastMessageAt: '2026-11-19T10:00:00Z', agent: { name: 'GPT-6 Astra' } },
+    { id: 'b', title: 'CV', lastMessageAt: '2026-11-19T09:00:00Z' },
+    { id: 'c', title: 'Projet web', lastMessageAt: '2026-11-18T09:00:00Z' },
+    { id: 'd', title: 'Maths', lastMessageAt: '2026-11-17T09:00:00Z' },
+    { id: 'e', title: 'Vieux', lastMessageAt: '2026-11-01T09:00:00Z' },
+  ];
+  const { gw } = await setup(t, {}, {}, { fake });
+  const body = { tools: [...BASE.body.tools, { name: 'AskUserQuestion', description: 'pose une question', input_schema: { type: 'object' } }] };
+  const m = [user('FSCLI-COMMANDE conversations')];
+  const r1 = await call(gw, ccReq(m, { body }));
+  const [ask] = r1.sse.toolUses;
+  assert.equal(ask.name, 'AskUserQuestion');
+  const q = ask.input.questions[0];
+  assert.deepEqual(q.options.map(o => o.label), ['1. TP \'Nmap\'', '2. CV', '3. Projet web', 'Suivantes ▸ (page 1/2)'], '3 plus récentes + défilement, sans guillemets doubles');
+  assert.match(q.options[0].description, /GPT-6 Astra/);
+  assert.match(r1.sse.text, /5\. Vieux/, 'la liste complète reste affichée');
+  // Échap : rien n'est repris
+  m.push(asst(r1), results([ask.id, 'The user doesn\'t want to proceed with this tool use.', true]));
+  const r2 = await call(gw, ccReq(m, { body }));
+  assert.match(r2.sse.text, /choix annulé/);
+  // nouveau menu, choix « 2. CV »
+  m.push(asst(r2), user('FSCLI-COMMANDE conversations'));
+  const r3 = await call(gw, ccReq(m, { body }));
+  const ask2 = r3.sse.toolUses[0];
+  m.push(asst(r3), results([ask2.id, 'User has answered your questions: "Quelle conversation France Student continuer ici ?"="2. CV". You can now continue with the user\'s answers in mind.']));
+  const r4 = await call(gw, ccReq(m, { body }));
+  assert.match(r4.sse.text, /« CV » reprise/);
+  // « Other » : le numéro 5 tapé à la main (hors des 4 du menu)
+  m.push(asst(r4), user('FSCLI-COMMANDE conversations'));
+  const r5 = await call(gw, ccReq(m, { body }));
+  const ask3 = r5.sse.toolUses[0];
+  m.push(asst(r5), results([ask3.id, 'User has answered your questions: "Quelle conversation France Student continuer ici ?"="5". You can now continue with the user\'s answers in mind.']));
+  const r6 = await call(gw, ccReq(m, { body }));
+  assert.match(r6.sse.text, /« Vieux » reprise/);
+  assert.equal(fake.sent.length, 0, 'tout le menu sans appel au modèle');
+  m.push(asst(r6), user('on continue'));
+  const r7 = await call(gw, ccReq(m, { body }));
+  assert.equal(r7.sse.text, 'Suite du TP.');
+  assert.equal(fake.sent[0].chatId, 'e');
+  checkInvariants(fake);
+});
+
+test('(o4) /fs:conversations : d\'abord les projets du site, puis leurs conversations ; « Suivantes ▸ » fait défiler et revient au début', async t => {
+  const fake = fakeFs({});
+  const asked = [];
+  fake.deps.listProjects = async () => [{ id: 'pA', name: 'Cours "EPSI"' }, { id: 'pB', name: 'Perso' }];
+  fake.deps.listChats = async o => { asked.push(o.projectId); return o.projectId === 'pA'
+    ? Array.from({ length: 7 }, (_, i) => ({ id: `a${i}`, title: `TP ${i}`, lastMessageAt: `2026-11-1${9 - i}T10:00:00Z` }))
+    : [{ id: 'x', title: 'Autre' }]; };
+  const { gw } = await setup(t, {}, {}, { fake });
+  const body = { tools: [...BASE.body.tools, { name: 'AskUserQuestion', description: 'q', input_schema: { type: 'object' } }] };
+  const answer = (ask, label) => results([ask.id, `User has answered your questions: "${ask.input.questions[0].question}"="${label}". You can now continue with the user's answers in mind.`]);
+  const m = [user('FSCLI-COMMANDE conversations')];
+  const r1 = await call(gw, ccReq(m, { body }));
+  const p = r1.sse.toolUses[0];
+  assert.equal(p.input.questions[0].header, 'Projet');
+  assert.deepEqual(p.input.questions[0].options.map(o => o.label), ['Toutes mes conversations', '📁 Cours \'EPSI\'', '📁 Perso']);
+  m.push(asst(r1), answer(p, '📁 Cours \'EPSI\''));
+  const r2 = await call(gw, ccReq(m, { body }));
+  assert.deepEqual(asked, ['pA']);
+  assert.match(r2.sse.text, /du projet « Cours "EPSI" »/);
+  const c1 = r2.sse.toolUses[0];
+  assert.deepEqual(c1.input.questions[0].options.map(o => o.label), ['1. TP 0', '2. TP 1', '3. TP 2', 'Suivantes ▸ (page 1/3)']);
+  m.push(asst(r2), answer(c1, 'Suivantes ▸ (page 1/3)'));
+  const r3 = await call(gw, ccReq(m, { body }));
+  const c2 = r3.sse.toolUses[0];
+  assert.deepEqual(c2.input.questions[0].options.map(o => o.label), ['4. TP 3', '5. TP 4', '6. TP 5', 'Suivantes ▸ (page 2/3)']);
+  m.push(asst(r3), answer(c2, 'Suivantes ▸ (page 2/3)'));
+  const r4 = await call(gw, ccReq(m, { body }));
+  const c3 = r4.sse.toolUses[0];
+  assert.deepEqual(c3.input.questions[0].options.map(o => o.label), ['7. TP 6', '↺ Retour au début (page 3/3)']);
+  m.push(asst(r4), answer(c3, '7. TP 6'));
+  const r5 = await call(gw, ccReq(m, { body }));
+  assert.match(r5.sse.text, /« TP 6 » reprise/);
+  assert.equal(fake.sent.length, 0);
+  // « Other » dans le menu des projets : un mot cherché dans toutes les conversations
+  m.push(asst(r5), user('FSCLI-COMMANDE conversations'));
+  const r6 = await call(gw, ccReq(m, { body }));
+  m.push(asst(r6), answer(r6.sse.toolUses[0], 'autre'));
+  const r7 = await call(gw, ccReq(m, { body }));
+  assert.equal(asked.at(-1), null, 'toutes les conversations');
+  assert.match(r7.sse.text, /titre contenant « autre »/);
+});

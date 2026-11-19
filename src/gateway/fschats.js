@@ -17,7 +17,18 @@ export function pickChats(list, word = '', max = 30) {
   return out.slice(0, max);
 }
 
-export const isChatId = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || '').trim());
+/** libellé d'un choix du menu à flèches : « 2. Titre » (court, sans guillemets : il revient tel quel dans la réponse) */
+export const pickLabel = (c, i) => `${i + 1}. ${String(c?.title || '(sans titre)').replace(/["“”]/g, '\'').replace(/\s+/g, ' ').trim().slice(0, 40)}`;
+
+/** réponse de l'utilisateur au menu (résultat d'AskUserQuestion : « …"question"="réponse"… ») ; '' si illisible */
+export function pickAnswer(result) {
+  const c = result?.content;
+  const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map(b => (typeof b === 'string' ? b : b?.text || '')).join('\n') : '';
+  const all = [...text.matchAll(/"=\s*"([^"]*)"/g)];
+  return (all.length ? all.at(-1)[1] : '').trim();
+}
+
+export const isChatId =s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || '').trim());
 
 /** Marqueur posé par les commandes du plugin de session (commands/*.md) : « FSCLI-COMMANDE <nom> <arguments> ». */
 export const COMMAND_MARK = 'FSCLI-COMMANDE';

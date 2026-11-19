@@ -426,9 +426,9 @@ export async function detachChatFromProject(projectId, chatId) {
   return r.status >= 200 && r.status < 300;
 }
 /** conversations d'un projet (toutes les pages) → [{ id, title, … }] ; null si illisible */
-export async function projectChats(projectId) {
+export async function projectChats(projectId, { maxPages = 20 } = {}) {
   const out = [];
-  for (let page = 0, before = ''; page < 20; page++) {
+  for (let page = 0, before = ''; page < maxPages; page++) {
     const r = await requestJson('GET', `/projects/${encodeURIComponent(projectId)}/chats?limit=50${before ? '&before=' + encodeURIComponent(before) : ''}`);
     if (r.status !== 200) return page ? out : null;
     const chats = r.data?.chats || [];
@@ -576,6 +576,15 @@ export async function downloadApiFile(apiPath, dest) {
 }
 
 /** Dernières conversations du compte */
+/** Toutes les conversations récentes : hors projet (/chats) ET la 1re page de chaque projet (/chats ne renvoie pas celles des projets). */
+export async function allRecentChats() {
+  const [free, projects] = await Promise.all([fetchChatsList(50).catch(() => null), listFsProjects().catch(() => [])]);
+  const lists = await Promise.all(projects.map(p => projectChats(p.id, { maxPages: 1 }).catch(() => null)));
+  if (!Array.isArray(free) && lists.every(l => !Array.isArray(l))) return null;
+  const seen = new Set(), out = [];
+  for (const c of [...(free || []), ...lists.flatMap(l => l || [])]) if (c?.id && !seen.has(c.id)) { seen.add(c.id); out.push(c); }
+  return out;
+}
 export async function fetchChatsList(limit = 15) {
   const j = await getJson(`/chats?limit=${Math.min(50, Math.max(1, limit))}`);
   return Array.isArray(j) ? j : (j?.chats || []);

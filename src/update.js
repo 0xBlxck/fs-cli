@@ -3,6 +3,7 @@
 // Désactivable : variable FS_CLI_NO_UPDATE_CHECK=1.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { HOME_DIR, VERSION } from './config.js';
 
 export const REPO = '0xBlxck/fs-cli';
@@ -88,4 +89,41 @@ export function globalDirWritable(root, access = p => fs.accessSync(p, fs.consta
   const dir = path.dirname(path.resolve(root));
   if (path.basename(dir) !== 'node_modules') return null;
   try { access(dir); return true; } catch { return false; }
+}
+
+// ── fs-cli update : tout mettre à jour en une commande (FS-CLI, fs-cli claude, panneau des éditeurs) ──
+
+/**
+ * Met à jour FS-CLI (npm, ce qui comprend fs-cli claude et la passerelle), puis le panneau dans les éditeurs trouvés
+ * (VS Code, Cursor, Antigravity…). Pas de question : c'est une commande explicite. → code de sortie (0 si tout va bien).
+ * deps (tests) : { root, run(cmd, args) → { status }, check(), log(texte), platform, writable(root) }
+ */
+export async function updateAll(deps = {}) {
+  const { ROOT } = await import('./config.js');
+  const root = deps.root ?? ROOT;
+  const log = deps.log ?? (t => process.stdout.write(t + '\n'));
+  const platform = deps.platform ?? process.platform;
+  const run = deps.run ?? ((cmd, args) => spawnSync(cmd, args, { stdio: 'inherit', shell: platform === 'win32', env: process.env }));
+  const exists = deps.exists ?? (p => fs.existsSync(p));
+  if (exists(path.join(root, '.git'))) {
+    log('FS-CLI tourne depuis un dossier de développement (git) : mets-le à jour avec « git pull » dans ' + root + '.');
+    return 1;
+  }
+  const u = await (deps.check ?? (() => checkUpdate({ force: true })))().catch(() => ({}));
+  log(u?.latest ? (u.newer ? `FS-CLI : v${u.current} → v${u.latest}` : `FS-CLI : déjà en v${u.current}, réinstallation (panneau compris)`) : 'FS-CLI : version en ligne inconnue (GitHub injoignable ?), on essaie quand même');
+  if (platform !== 'win32' && (deps.writable ?? globalDirWritable)(root) === false) {
+    for (const l of npmPermissionHelp('EACCES')) log('  ' + l);
+    return 1;
+  }
+  log('1/2  FS-CLI et fs-cli claude (npm)…');
+  const r1 = run(platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', INSTALL_CMD.split(' ').pop()]);
+  if (r1?.status !== 0) {
+    log('✗ la mise à jour de FS-CLI a échoué. À la main : ' + INSTALL_CMD);
+    return 1;
+  }
+  log('2/2  panneau FS-CLI dans tes éditeurs (VS Code, Cursor, Antigravity…)…');
+  const r2 = run(deps.node ?? process.execPath, [path.join(root, 'cli.js'), '--vscode']);
+  log(r2?.status === 0 ? '✓ tout est à jour. Recharge la fenêtre de ton éditeur (Ctrl+Maj+P › « Reload Window ») et relance fs-cli / fs-cli claude.'
+    : '✓ FS-CLI à jour, mais le panneau n\'a pas pu être installé partout (voir ci-dessus).');
+  return r2?.status === 0 ? 0 : 1;
 }
