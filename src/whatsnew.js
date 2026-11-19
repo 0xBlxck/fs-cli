@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.52.2', items: [
+    'GPT Astra : quand il refuse les outils, la demande part tout de suite chez Claude Sonnet (la « précision » ne le faisait jamais changer d’avis, une requête de gagnée)',
+    '`/team` (ou « lance multi agent ») avec GPT Astra : les agents travaillent avec Claude Sonnet, Astra refusant les tâches d’une équipe d’agents',
+  ] },
   { version: '3.52.1', items: [
     '`fs-cli claude` te prévient aussi quand une nouvelle version sort (comme FS-CLI et le bouton ⬆ du panneau) : `fs-cli update` pour tout mettre à jour',
     'Pare-feu de France Student (403) : nouvel essai tout seul ; s’il refuse le contenu d’un fichier lu, le modèle reçoit « contenu non transmis » et la demande continue au lieu de s’arrêter',

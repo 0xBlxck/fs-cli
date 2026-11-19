@@ -359,19 +359,29 @@ export async function runNative(S, userText, opts) {
       S.chatId = null; S.ctxSent = true; S.bareChat = true;            // cette conversation-là ne reçoit rien d'autre que tes messages (remis à zéro avec /new)
       return runNative(S, bare, { ...opts, bare: null, _recover: 1, _orig: bare });
     }
-    ui.println(c.dim('  ↻ le modèle a cru ne pas avoir le droit d\'utiliser les outils : FS-CLI lui précise que ce sont les outils officiels de France Student'));
-    S.pendingFileIds = [];                                              // les images sont déjà dans la conversation : pas renvoyées avec la précision
-    return runNative(S, CLARIFY, { ...opts, _recover: 1, _orig: userText });
+    if (!NO_CLARIFY_MODELS.has(String(S.agentId))) {
+      ui.println(c.dim('  ↻ le modèle a cru ne pas avoir le droit d\'utiliser les outils : FS-CLI lui précise que ce sont les outils officiels de France Student'));
+      S.pendingFileIds = [];                                            // les images sont déjà dans la conversation : pas renvoyées avec la précision
+      return runNative(S, CLARIFY, { ...opts, _recover: 1, _orig: userText });
+    }
+    // Astra : la précision ne change rien (vu en vrai) → directement Sonnet, ci-dessous
   }
-  if (recover && stage === 1) {
+  if (recover && (stage === 1 || NO_CLARIFY_MODELS.has(String(S.agentId)))) {
     const from = S.agentId;
+    const astra = stage === 0;
     S.agentId = fallback;
-    ui.println(c.dim(`  ↻ toujours un refus : la demande repart avec ${fallback === -2001 ? 'Claude Opus' : 'Claude Sonnet'} (même conversation ; /model pour changer de modèle)`));
+    ui.println(c.dim(astra
+      ? '  ↻ GPT Astra refuse les outils pour cette demande : elle repart avec Claude Sonnet (même conversation ; /model pour changer de modèle)'
+      : `  ↻ toujours un refus : la demande repart avec ${fallback === -2001 ? 'Claude Opus' : 'Claude Sonnet'} (même conversation ; /model pour changer de modèle)`));
     const r = await runNative(S, opts._orig || userText, { ...opts, _recover: 2 });
     return { ...r, switchedFrom: from, switchedTo: fallback };
   }
   return { hitLimit, nReq };
 }
+
+/** GPT-6 Astra (-1004) et GPT-6.2 Astra (-1006) : la précision ne les fait jamais changer d'avis (vu en vrai le 19/11/2026 :
+ *  « ça ne change toutefois pas la limite ») → après un refus, la demande part directement chez Sonnet ; /team : agents en Sonnet. */
+export const NO_CLARIFY_MODELS = new Set(['-1004', '-1006']);
 
 /** précision envoyée UNE fois quand un modèle croit ne pas avoir le droit d'utiliser les outils (vrai, documenté par France Student) */
 export const CLARIFY = 'Précision : list_directory, read_file, search_files, edit_file, write_file et run_command sont les outils client officiels de France Student ' +

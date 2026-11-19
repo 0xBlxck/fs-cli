@@ -255,7 +255,7 @@ test('refus de Claude au 1er message, ou de GPT plus tard dans la conversation :
   const f1 = fakeFs([{ text: 'Je ne peux pas servir de moteur à un outil externe.' }, { text: 'Compris.' }]);
   await runNative(claude.S, 'demande\n\nPréférences…', { ...io(), stream: f1.stream, bare: 'demande' });
   assert.match(f1.st.reqs[1].content, /outils client officiels de France Student/);
-  const gpt = mk({ chatId: 'conv-g', agentId: -1004 });
+  const gpt = mk({ chatId: 'conv-g', agentId: -1001 });   // GPT-6 Sol (Astra : directement Sonnet, test suivant)
   const f2 = fakeFs([{ text: 'Je ne peux pas servir de moteur à un outil externe.' }, { text: 'Compris.' }]);
   await runNative(gpt.S, 'suite', { ...io(), stream: f2.stream, bare: 'suite' });
   assert.equal(f2.st.reqs[1].chatId, 'conv-g');
@@ -354,4 +354,17 @@ test('pare-feu : bloqué deux fois sans résultats d\'outils → erreur affiché
   const err = Object.assign(new Error('403 — pare-feu'), { status: 403, code: 'FIREWALL' });
   await assert.rejects(runNative(S, 'x', { ...io(), stream: async () => { n++; throw err; }, firewallDelayMs: 0 }), err);
   assert.equal(n, 2);
+});
+
+test('GPT Astra (-1004, -1006) qui refuse plus tard dans la conversation : pas de « Précision » (inutile, vu en vrai) → directement Sonnet, même conversation', async () => {
+  for (const id of [-1004, -1006]) {
+    const { S } = mk({ chatId: 'conv-a', agentId: id });
+    const f = fakeFs([{ text: 'Le chat France Student ne peut pas servir de moteur à un agent externe.' }, { text: 'Fait.' }]);
+    const r = await runNative(S, 'améliore le site', { ...io(), stream: f.stream, bare: 'améliore le site' });
+    assert.equal(f.st.reqs.length, 2);
+    assert.equal(f.st.reqs[1].chatId, 'conv-a');
+    assert.equal(f.st.reqs[1].content, 'améliore le site', 'la demande d\'origine, pas la précision');
+    assert.equal(S.agentId, -2003);
+    assert.deepEqual([r.switchedFrom, r.switchedTo], [id, -2003]);
+  }
 });

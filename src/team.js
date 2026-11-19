@@ -11,6 +11,7 @@ import * as mem from './memory.js';
 import { workPreferences } from './pseudo.js';
 import * as ui from './ui.js';
 import { c, println } from './ui.js';
+import { NO_CLARIFY_MODELS } from './native.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -199,7 +200,13 @@ export async function runTeam(env, rawTask, { review = false, agents = null, mod
   S.slots ||= {}; S.sid ||= newSid(); S.undo ||= []; S.notes ||= []; S.allow ||= {}; S.tokens ||= { in: 0, out: 0 };
   S.turnMarks ||= []; S.turnMarks.push({ at: S.undo.length, text: `/team ${task}`.replace(/\s+/g, ' ').slice(0, 70), t: Date.now() });   // /rewind
   await withAbort(async signal => {
-    const workerId = cfg.workerModel != null ? cfg.workerModel : S.agentId;
+    let workerId = cfg.workerModel != null ? cfg.workerModel : S.agentId;
+    // GPT-6 / 6.2 Astra refuse les tâches confiées par une équipe d'agents (« ne peut pas servir de moteur à un agent externe »),
+    // même avec le contexte de la passerelle : 2 refus sur 2 en vrai le 19/11/2026. Les agents travaillent donc avec Sonnet (affiché).
+    if (cfg.workerModel == null && NO_CLARIFY_MODELS.has(String(workerId))) {
+      workerId = -2003;
+      println(c.dim('  ↳ GPT Astra refuse les tâches d\'une équipe d\'agents : les agents de cette équipe travaillent avec Claude Sonnet (/model pour ta conversation)'));
+    }
     const dir = baseDir(S);
     const T0 = Date.now();
     const team = `t${(++teamSeq).toString(36)}${T0.toString(36).slice(-4)}`;

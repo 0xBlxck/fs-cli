@@ -367,3 +367,21 @@ test('le serveur MCP de FS-CLI (« france-student ») n\'est jamais réimporté 
   assert.deepEqual(mentionedServers(cwd, 'mon compte france student ne marche plus'), [], 'mais jamais proposé au modèle');
   assert.deepEqual(mentionedServers(cwd, 'cherche avec leboncoin'), ['leboncoin']);
 });
+
+test('/team avec GPT Astra : les agents travaillent avec Sonnet (Astra refuse ces tâches, vu en vrai), affiché ; un modèle d\'agents choisi est respecté', async () => {
+  cfg.maxParallel = 3;
+  for (const [main, worker, expected] of [[-1004, null, -2003], [-1006, null, -2003], [-1004, -1001, -1001], [-2001, null, -2001]]) {
+    const S = baseS();
+    S.agentId = main;
+    const before = cfg.workerModel;
+    cfg.workerModel = worker;
+    const f = fakeTeam();
+    const ids = [];
+    const stream = o => { ids.push(o.agentId); return f.stream(o); };
+    try { await runTeam(envOf(S, { stream, contextPercent: async () => null }), TASK, { mode: 'pool' }); }
+    finally { cfg.workerModel = before; }
+    assert.ok(ids.length >= 3);
+    assert.deepEqual([...new Set(ids)], [expected], `modèle principal ${main}, modèle d'agents ${worker}`);
+    assert.equal(S.agentId, main, 'ta conversation garde son modèle');
+  }
+});
