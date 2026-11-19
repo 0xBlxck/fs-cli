@@ -747,7 +747,7 @@ async function pickConversation() {
         ? (here.length ? `Tes conversations dans ce dossier (${ui.shortPath(S.cwd, 50)}). Entrée = reprendre.` : `Aucune conversation faite dans ce dossier (${ui.shortPath(S.cwd, 50)}) : → pour voir toutes tes conversations.`)
         : 'Toutes tes conversations, la plus récente en haut. Entrée = reprendre.';
       push('＋ Nouvelle conversation', { new: true });
-      for (const s of items.slice(0, 14)) push(label(s), { chat: s });
+      for (const s of items) push(label(s), { chat: s });                 // toutes (le menu défile) : avant, coupé à 14
     } else if (proj === undefined) {
       title = 'Projets';
       detail = 'Choisis un projet du site pour voir ses conversations ou en commencer une dedans.';
@@ -759,7 +759,7 @@ async function pickConversation() {
       detail = proj ? `Conversations du projet « ${p?.name || '?'} ». Entrée = reprendre.` : 'Conversations rangées dans aucun projet. Entrée = reprendre.';
       push('← Revenir à la liste des projets', { back: true });
       push(proj ? `＋ Nouvelle conversation dans le projet « ${p?.name} »` : '＋ Nouvelle conversation hors projet', { newIn: proj ? p : false });
-      for (const s of list.filter(x => (proj ? x.projectId === proj : !x.projectId)).slice(0, 14)) push(label(s), { chat: s });
+      for (const s of list.filter(x => (proj ? x.projectId === proj : !x.projectId))) push(label(s), { chat: s });   // toutes (le menu défile)
     }
     const first = acts.findIndex(a => a.chat && a.chat.chatId !== S.chatId);
     const r = await input.select({ title, detail, options: opts, defaultIndex: first >= 0 ? first : 0, tabs: TABS, tab });

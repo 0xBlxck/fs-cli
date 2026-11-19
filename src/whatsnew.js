@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.54.4', items: [
+    '/resume : toutes tes conversations dans chaque onglet (avant : 14 au plus), la liste défile aux flèches',
+  ] },
   { version: '3.54.3', items: [
     '`/effort` : réglette ← → comme dans Claude Code ; `/model`, `/mode` et `/theme` sans valeur ouvrent un menu à flèches ; après l’espace, les valeurs possibles sont proposées',
     'Réponses du modèle comme dans Claude Code : « ● » en tête, texte passé à la ligne proprement (plus de mots coupés au bord), retrait aligné, listes et tableaux alignés',
