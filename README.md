@@ -180,11 +180,23 @@ fs-cli claude --fs-oublier     # les effacer
 
 Sont enregistrées les options `--fs-*` et `--model` / `--permission-mode` de Claude Code ; jamais `-p`, `-c` ou `--resume`. Les options `--fs-*` enregistrées servent aussi à `fs-cli gateway`.
 
+**Reprendre une conversation du site France Student** dans Claude Code :
+
+```bash
+fs-cli claude --fs-conversations                          # liste tes conversations récentes, tu tapes le numéro
+fs-cli claude --fs-projet "Mon projet" --fs-conversations # seulement celles de ce projet
+fs-cli claude --fs-conversation "TP nmap"                 # directement, par un mot du titre (ou son id)
+```
+
+Le modèle se souvient de tout ce qui a été dit dans la conversation ; Claude Code n'affiche pas les anciens messages. Aucune nouvelle conversation n'est créée.
+
 **Options de FS-CLI** (toutes commencent par `--fs-`, le reste part à Claude Code) :
 
 | Option | Effet |
 |---|---|
 | `--fs-projet "Nom"` | range les conversations dans ce projet du site |
+| `--fs-conversations` | choisir une conversation du site à reprendre (celles du projet avec `--fs-projet`) |
+| `--fs-conversation "mot"` | reprendre directement la conversation dont le titre contient ce mot (ou son id) |
 | `--fs-web` | recherche web de France Student (et réponses à WebSearch) |
 | `--fs-claude-md` | envoie aussi le CLAUDE.md du projet aux modèles GPT |
 | `--fs-retour auto\|note\|chat` | comment traiter un retour en arrière (`auto` par défaut) |

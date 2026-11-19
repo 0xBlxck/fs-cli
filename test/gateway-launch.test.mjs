@@ -440,8 +440,11 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.49.2 en tête, puis 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [p, e, g, w, n, v] = WHATS_NEW;
+test('nouveautés : entrée 3.50.0 en tête, puis 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(r.version, '3.50.0');
+  assert.match(r.items[0], /--fs-conversations/);
+  assert.match(r.items[1], /--fs-conversation "TP nmap"/);
   assert.equal(p.version, '3.49.2');
   assert.match(p.items[0], /--fs-projet <id>/);
   assert.equal(e.version, '3.49.1');
@@ -519,4 +522,29 @@ test('runClaude --fs-garder : enregistre puis lance ; ensuite « fs-cli claude �
   h = harness(over);
   assert.equal(await L.runClaude(['--fs-garder', '--fs-retour', 'bof'], h.io), 2, 'réglage invalide : rien enregistré');
   assert.deepEqual(store, []);
+});
+
+test('chooseChat : id direct, mot du titre, liste au clavier (Entrée = nouvelle), hors terminal → liste avec les id ; projet', async () => {
+  const chats = [
+    { id: 'c1', title: 'TP Nmap', lastMessageAt: '2026-11-19T10:00:00Z', agent: { name: 'GPT-6 Astra' } },
+    { id: 'c2', title: 'CV', lastMessageAt: '2026-11-19T12:00:00Z' },
+    { id: 'c3', title: 'TP Wireshark', lastMessageAt: '2026-11-18T09:00:00Z' },
+  ];
+  const asked = [];
+  const mk = (over = {}) => ({ isTTY: true, err() {}, recentChats: async () => chats, projectChats: async id => (id === 'P' ? [chats[0]] : null), ask: async q => { asked.push(q); return over.answer ?? ''; }, ...over });
+  const ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';   // scan-ignore (faux id de test)
+  assert.equal(await L.chooseChat(mk(), {}), null, 'sans option : nouvelle conversation');
+  assert.deepEqual(await L.chooseChat(mk(), { chat: ID.toUpperCase() }), { id: ID, title: '' });
+  assert.deepEqual(await L.chooseChat(mk(), { chat: 'cv' }), { id: 'c2', title: 'CV' });
+  assert.match((await L.chooseChat(mk(), { chat: 'blender' })).error, /Aucune conversation .*« blender »/);
+  assert.deepEqual(await L.chooseChat(mk({ answer: '2' }), { chat: 'tp' }), { id: 'c3', title: 'TP Wireshark' }, 'plusieurs « tp » : choix au clavier (1 = TP Nmap, la plus récente ; 2 = TP Wireshark)');
+  assert.equal(await L.chooseChat(mk({ answer: '' }), { pickChat: true }), null, 'Entrée : nouvelle conversation');
+  assert.deepEqual(await L.chooseChat(mk({ answer: '1' }), { pickChat: true }), { id: 'c2', title: 'CV' });
+  assert.match((await L.chooseChat(mk({ answer: '9' }), { pickChat: true })).error, /Numéro invalide/);
+  const off = await L.chooseChat(mk({ isTTY: false }), { pickChat: true });
+  assert.match(off.error, /--fs-conversation <id>/); assert.match(off.error, /\(c1\)/);
+  assert.deepEqual(await L.chooseChat(mk({ answer: '1' }), { pickChat: true }, 'P'), { id: 'c1', title: 'TP Nmap' }, 'projet : ses conversations seulement');
+  assert.match((await L.chooseChat(mk(), { pickChat: true }, 'X')).error, /Impossible de lire/);
+  assert.match(L.chatLine(chats[0], 0), /^ {2}1\. TP Nmap · GPT-6 Astra · 19\/11/);
+  assert.equal(L.keptArgs(['--fs-conversation', 'cv', '--fs-conversations', '--fs-web']).join(' '), '--fs-web', 'jamais enregistrées par --fs-garder');
 });

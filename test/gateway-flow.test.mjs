@@ -853,3 +853,21 @@ test('(k-bis) NATIVE_UNSUPPORTED : texte seul pour un temps, jamais enregistré 
   assert.ok(fake.sent[3].clientTools?.length, 'outils client réessayés');
   checkInvariants(fake);
 });
+
+test('(n) --fs-conversation : la 1re session continue le chat FS choisi (aucune nouvelle conversation) ; la session suivante repart sur un chat neuf', async t => {
+  const SITE = { id: 'site-chat', title: 'Mon TP', chatMessages: [{ role: 'user', content: 'mon TP nmap' }, { role: 'assistant', content: 'Voici le TP.' }] };
+  const { fake, gw } = await setup(t, { turns: ['Je me souviens du TP.', 'Nouvelle conversation.'], chats: { 'site-chat': SITE } }, { attachChat: { id: 'site-chat', title: 'Mon TP' } });
+  const r1 = await call(gw, ccReq([user('continue le TP')]));
+  assert.equal(r1.sse.text, 'Je me souviens du TP.');
+  assert.equal(fake.sent[0].chatId, 'site-chat', 'envoyé dans le chat existant');
+  assert.match(fake.sent[0].content, /^\[Suite de cette conversation : /);
+  assert.doesNotMatch(fake.sent[0].content, /Nouvelle tâche, sans rapport/);
+  assert.match(fake.sent[0].content, /continue le TP/);
+  assert.equal(fake.registered.length, 0, 'aucune nouvelle conversation créée');
+  assert.deepEqual(fake.calls.fetchChat.map(c => c.chatId), ['site-chat'], 'état du chat vérifié avant d\'envoyer');
+
+  const r2 = await call(gw, ccReq([user('autre chose')], { session: 'sess-b' }));
+  assert.equal(r2.sse.text, 'Nouvelle conversation.');
+  assert.equal(fake.sent[1].chatId, null, 'une seule session reprend le chat choisi');
+  checkInvariants(fake);
+});

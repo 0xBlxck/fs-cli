@@ -34,12 +34,14 @@ const FS_FLAGS = {
   '--fs-journal': { key: 'journal', type: 'bool' },
   '--fs-debug': { key: 'debug', type: 'bool' },
   '--fs-mcp': { key: 'mcp', type: 'bool' },
+  '--fs-conversation': { key: 'chat', type: 'string' },
+  '--fs-conversations': { key: 'pickChat', type: 'bool' },
 };
 
 /** Valeurs par défaut des options de la passerelle (opts de createGateway / startGateway). */
 export const FS_DEFAULTS = Object.freeze({
   project: null, web: false, claudeMd: false, rewind: 'auto', subagents: 3, flows: 3,
-  ask: false, port: null, newToken: false, journal: false, debug: false, mcp: false,
+  ask: false, port: null, newToken: false, journal: false, debug: false, mcp: false, chat: null, pickChat: false,
 });
 
 function readValue(spec, flag, raw) {
@@ -99,7 +101,7 @@ export function splitArgs(argv) {
 // ── Réglages enregistrés (--fs-garder / --fs-oublier) ─────────────────────────
 
 /** Options jamais enregistrées (ponctuelles). */
-const NOT_KEPT = new Set(['--fs-journal', '--fs-nouveau-jeton']);
+const NOT_KEPT = new Set(['--fs-journal', '--fs-nouveau-jeton', '--fs-conversation', '--fs-conversations']);
 /** Options de Claude Code enregistrables (avec leur valeur) : le reste (-p, -c, --resume…) est propre à une exécution. */
 const CC_KEPT = ['--model', '--permission-mode'];
 const flagOf = a => { const eq = a.indexOf('='); return eq < 0 ? a : a.slice(0, eq); };
@@ -174,6 +176,51 @@ async function applySaved(h, argv, { claude = true } = {}) {
   const used = merged.slice(0, merged.length - clean.length);
   if (used.length) h.err(`Réglages enregistrés : ${showArgs(used)}  (--fs-oublier pour les effacer)\n`);
   return { argv: merged };
+}
+
+// ── Reprendre une conversation France Student (--fs-conversation / --fs-conversations) ──
+
+const whenFr = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
+/** ligne d'une conversation dans la liste : « 3. Titre · modèle · 19/11 15:24 » (withId : l'id à la fin, pour --fs-conversation) */
+export function chatLine(c, i, { withId = false } = {}) {
+  const parts = [String(c?.title || '(sans titre)').replace(/\s+/g, ' ').slice(0, 60), c?.agent?.name, whenFr(c?.lastMessageAt || c?.createdAt)].filter(Boolean);
+  return `${String(i + 1).padStart(3)}. ${parts.join(' · ')}${withId ? `  (${c.id})` : ''}`;
+}
+
+/**
+ * Conversation France Student à reprendre. → null (nouvelle conversation), { id, title } ou { error }.
+ * o.chat : id, ou mot du titre ; o.pickChat : liste et choix au clavier. projectId : seulement les conversations de ce projet.
+ */
+export async function chooseChat(h, o, projectId = null) {
+  if (!o.chat && !o.pickChat) return null;
+  const want = String(o.chat || '').trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(want)) return { id: want.toLowerCase(), title: '' };
+  let list = null;
+  try { list = projectId ? await h.projectChats(projectId) : await h.recentChats(50); } catch {}
+  if (!Array.isArray(list)) return { error: 'Impossible de lire tes conversations France Student (réessaie, ou vérifie ta connexion avec fs-cli --login).' };
+  const at = c => String(c?.lastMessageAt || c?.createdAt || '');
+  let cands = list.filter(c => c?.id).sort((a, b) => at(b).localeCompare(at(a)));
+  if (want) {
+    const low = want.toLocaleLowerCase('fr-FR');
+    cands = cands.filter(c => String(c.title || '').toLocaleLowerCase('fr-FR').includes(low));
+    if (!cands.length) return { error: `Aucune conversation France Student${projectId ? ' de ce projet' : ''} n'a « ${want} » dans son titre.` };
+    if (cands.length === 1) return { id: cands[0].id, title: cands[0].title || '' };
+  }
+  if (!cands.length) return { error: `Aucune conversation France Student${projectId ? ' dans ce projet' : ''}.` };
+  cands = cands.slice(0, 30);
+  if (!h.isTTY) return { error: `Plusieurs conversations possibles : choisis avec --fs-conversation <id>.\n${cands.map((c, i) => chatLine(c, i, { withId: true })).join('\n')}` };
+  h.err(`Conversations France Student${projectId ? ' du projet' : ' récentes'} :\n${cands.map((c, i) => chatLine(c, i)).join('\n')}\n`);
+  const a = String((await h.ask('Numéro à reprendre (Entrée = nouvelle conversation) : ')) ?? '').trim();
+  if (!a) return null;
+  const n = Number(a);
+  if (!Number.isInteger(n) || n < 1 || n > cands.length) return { error: `Numéro invalide : « ${a} ».` };
+  return { id: cands[n - 1].id, title: cands[n - 1].title || '' };
+}
+
+async function askLine(q) {
+  const rl = (await import('node:readline')).createInterface({ input: process.stdin, output: process.stderr });
+  try { return await new Promise(resolve => { rl.question(q, resolve); rl.once('close', () => resolve(null)); }); }
+  finally { rl.close(); }
 }
 
 // ── Recherche de Claude Code ──────────────────────────────────────────────────
@@ -474,6 +521,9 @@ function makeHost(io) {
     project: useFsProject,
     savedDefaults,
     saveDefaults: list => saveCfgKeys({ claudeDefaults: list }),
+    recentChats: async n => (await import('../api.js')).fetchChatsList(n),
+    projectChats: async id => (await import('../api.js')).projectChats(id),
+    ask: askLine,
     openLog,
     silence,
     onSignal: (sig, fn) => { try { process.on(sig, fn); } catch {} },
@@ -520,11 +570,15 @@ export async function runClaude(argv, io = {}) {
   log.line({ event: 'claude', version, ...(testedVersion(version) ? {} : { warning: 'version de Claude Code non testée (passerelle prévue pour 2.1.2xx)' }) });
   for (const w of inspectClaudeSettings(h.cwd, h.home, { subagents: o.subagents }).warnings) h.err(w + '\n');
   if (o.claudeSettings !== null) h.err('Tu passes ton propre --settings : FS-CLI branche Claude Code par les variables d\'environnement seulement' + (o.ask ? ' (--fs-demander est sans effet).' : '.') + '\n');
-  if (o.project && !(await h.project(o.project))) h.err(`Projet France Student « ${o.project} » inaccessible : les conversations sont rangées comme d'habitude.\n`);
+  const proj = o.project ? await h.project(o.project) : null;
+  if (o.project && !proj) h.err(`Projet France Student « ${o.project} » inaccessible : les conversations sont rangées comme d'habitude.\n`);
+  const chat = await chooseChat(h, o, proj?.id || null);
+  if (chat?.error) return h.fail(1, chat.error);
+  if (chat) h.err(`Reprise de la conversation France Student ${chat.title ? `« ${chat.title} »` : chat.id} : le modèle se souvient de ce qui y a été dit (Claude Code n'affiche pas les anciens messages).\n`);
 
   const deps = await h.deps();
   const token = crypto.randomBytes(24).toString('base64url');
-  const s = await startOrFail(h, { host: '127.0.0.1', port: 0, token, deps, opts: o, log }, e => `Impossible de démarrer la passerelle : ${e?.message || e}`);
+  const s = await startOrFail(h, { host: '127.0.0.1', port: 0, token, deps, opts: { ...o, attachChat: chat }, log }, e => `Impossible de démarrer la passerelle : ${e?.message || e}`);
   if ('done' in s) return s.done;
   const { gw } = s;
   const url = gw.url || `http://127.0.0.1:${gw.port}`;
@@ -579,6 +633,7 @@ export async function runGatewayCmd(argv, io = {}) {
   if ('done' in p) return p.done;
   const { o, rest } = p;
   if (rest.length) h.err(`Arguments ignorés par fs-cli gateway : ${rest.join(' ')}\n`);
+  if (o.chat || o.pickChat) h.err('--fs-conversation(s) ne marche qu\'avec fs-cli claude : ignoré ici.\n');
   const port = o.port ?? DEFAULT_GATEWAY_PORT;
   const token = gatewayToken(path.join(GW_DIR(), 'token'), { renew: o.newToken });
   if (!(await h.token())) h.err('Pas encore de session France Student : lance fs-cli --login dans un autre terminal (inutile de redémarrer la passerelle).\n');

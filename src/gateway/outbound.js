@@ -24,6 +24,7 @@ export function frenchNote(kind, data = {}) {
     case 'rewound': return 'Annulé (retour en arrière).';
     case 'notRun': return LOCAL.notRun;
     case 'borrowed': return '[Nouvelle tâche, sans rapport avec ce qui précède.]';
+    case 'attached': return '[Suite de cette conversation : l\'utilisateur la continue maintenant depuis son dossier de travail (ci-dessous). Ce qui précède reste valable.]';
     case 'continue': return CONTINUE_FR;
     case 'cwd': return `(Le dossier de travail est maintenant ${data.cwd} : les chemins relatifs partent de ce dossier.)`;
     case 'shell': return data.shellTool === 'PowerShell'
@@ -108,7 +109,7 @@ export function buildSend(conv, delta, agent, env, extras = {}) {
     }
     const allNotes = extras.borrowed ? notes : [...changeNotes(conv, env, u, agent, extras), ...notes];
     const text = [allNotes.join('\n'), u.text].filter(Boolean).join('\n\n');
-    if (extras.borrowed) send.content = `${frenchNote('borrowed')}\n${conv.bare ? tag(conv.sid, 'cc') : pre()}${text || frenchNote('continue')}`;
+    if (extras.borrowed) send.content = `${frenchNote(extras.attached ? 'attached' : 'borrowed')}\n${conv.bare ? tag(conv.sid, 'cc') : pre()}${text || frenchNote('continue')}`;
     else if (text) send.content = text;
     else if (!send.toolResults) send.content = frenchNote('continue');     // I7 : un content texte est toujours accepté
   }

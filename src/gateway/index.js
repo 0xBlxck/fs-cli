@@ -51,6 +51,8 @@ export function createGateway(deps, opts = {}) {
   const live = new Map();                                     // 's:<session|agent>' et 'c:<convId>' → génération en cours
   const seen = new Set();                                     // conversations déjà vues par ce processus
   let disabled = false, unknownBackground = 0;
+  // --fs-conversation : la 1re session principale de ce processus continue une conversation France Student existante
+  const attach = o.attachChat?.id ? { id: String(o.attachChat.id), used: false } : null;
 
   const quota = () => {
     try { return typeof deps.quota === 'function' ? deps.quota() : quotaState(deps); }
@@ -322,6 +324,16 @@ export function createGateway(deps, opts = {}) {
       fresh = true;
       conv.borrowedBy = null;
       if (ia >= 0) extras.recap = recapOf(turns.slice(0, ia + 1));
+    }
+    if (fresh && kind === 'new' && cls.kind === 'main' && attach && !attach.used) {
+      attach.used = true;
+      const owner = store.list().find(c => c.id !== conv.id && c.chatId === attach.id);
+      if (owner) { resetChat(owner); owner.borrowedBy = conv.id; store.save(owner); }   // jamais deux conversations sur un même chat FS
+      conv.chatId = attach.id;
+      conv.fs = { state: 'uncertain', pending: [], lastEventId: null, inflightKey: null };   // vérifié avant d'envoyer (appel d'outil en attente ?)
+      fresh = false;
+      extras.borrowed = true; extras.attached = true;
+      line({ event: 'reprise', chatId: attach.id });
     }
     if (fresh && (q.limitHit || q.remaining === 0)) {
       if (!borrowInto(conv, prefix)) {

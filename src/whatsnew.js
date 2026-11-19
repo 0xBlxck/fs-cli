@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.50.0', items: [
+    '`fs-cli claude --fs-conversations` : reprends dans Claude Code une conversation du site France Student (liste, tu tapes le numéro) ; avec `--fs-projet`, celles du projet',
+    '`fs-cli claude --fs-conversation "TP nmap"` : directement par un mot du titre ; le modèle se souvient de tout, aucune nouvelle conversation créée',
+  ] },
   { version: '3.49.2', items: [
     '`fs-cli claude --fs-projet <id>` et `/projet <id>` : l\'identifiant trouve le projet (avant : un projet nommé comme l\'identifiant était créé)',
   ] },

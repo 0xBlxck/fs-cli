@@ -116,6 +116,7 @@ if (opts.help) {
   --install-mcp            inscrit ce serveur MCP (« france-student ») dans les agents trouvés sur le PC
   fs claude [options]      Claude Code avec ton compte France Student (options --fs-*, le reste va à Claude Code)
   fs claude --fs-garder …  enregistre ces options : ensuite « fs claude » tout court suffit (--fs-oublier pour les effacer)
+  fs claude --fs-conversations  reprendre dans Claude Code une conversation du site (--fs-conversation "mot du titre")
   fs gateway               la passerelle seule (port 8787), pour Claude Code lancé à la main ou depuis VS Code
   -h, --help  -v, --version`);
   process.exit(0);
