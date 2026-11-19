@@ -474,7 +474,8 @@ for (const p of ['src/index.js', 'README.md', '.env.example', 'id_rsa.pub', 'C:\
     let ok = true;
     try { judgeCommand(txt.slice(0, 20000), { cwd: CWD }); } catch (e) { ok = false; failures.push(`patho ${name}: ${e.message}`); fail++; }
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    check(`patho ${name} < 250ms`, ok && ms < 250, `${ms.toFixed(1)}ms`);
+    const PATHO_MAX = process.env.CI ? 1000 : 250;                     // CI (Mac Intel) lente : 315 ms vus le 20/11 ; un vrai emballement prend des secondes
+    check(`patho ${name} < ${PATHO_MAX}ms`, ok && ms < PATHO_MAX, `${ms.toFixed(1)}ms`);
   }
   const code = 'import os\n' + 'x = os.path.join("a", "b")\nprint(f"{x}")\n'.repeat(900);
   const t0 = process.hrtime.bigint(); judgeCode(code, 'python'); judgeCode(code.replace(/os\.path\.join/g, 'path.join'), 'node');
