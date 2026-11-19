@@ -37,7 +37,7 @@ import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
 import { FALLBACK_AGENTS } from './src/agents-table.js';
 import { stripEditorContext } from './src/editor-context.js';
-import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow } from './src/extra-commands.js';
+import { extraCommand, maybeAutoCompact, notifyWebhook, deleteProjectFlow, EFFORT_LEVELS, EFFORT_DESC } from './src/extra-commands.js';
 import { runTeam } from './src/team.js';
 import { WHATS_NEW, latestNews } from './src/whatsnew.js';
 const PALETTE_KEY = process.platform === 'darwin' ? 'Cmd+Maj+P' : 'Ctrl+Maj+P';   // palette de commandes de l'éditeur (VS Code, Cursor…)
@@ -396,6 +396,14 @@ function suggest(buf, cur) {
   if ((m = /^(\/cd |\/read |\/project |\/tree )(.*)$/.exec(upto))) {
     return { start: m[1].length, items: pathCandidates(m[2], m[1] !== '/read ').map(p => ({ label: p, insert: p, desc: '', keepOpen: p.endsWith('/') })) };
   }
+  // valeurs d'une commande après l'espace (comme Claude Code) : on n'a plus à les connaître par cœur
+  if ((m = /^(\/effort|\/mode|\/theme) (\S*)$/.exec(upto)) && cur === buf.length) {
+    const q = m[2].toLowerCase();
+    const values = m[1] === '/effort' ? EFFORT_LEVELS.map(l => ({ label: l, insert: l, desc: EFFORT_DESC[l] }))
+      : m[1] === '/mode' ? [...MODES, 'tout'].map(x => ({ label: x, insert: x, desc: MODE_DESC[x] || 'tout autoriser (cette session seulement)' }))
+      : Object.keys(THEMES).map(t => ({ label: t, insert: t, desc: t === cfg.theme ? 'actuel' : '' }));
+    return { start: m[1].length + 1, items: values.filter(v => v.label.startsWith(q)) };
+  }
   if ((m = /^\/(?:model|duel|workers) (.*)$/.exec(upto))) {
     const q = m[1].toLowerCase();
     return { start: upto.length - m[1].length, items: Object.entries(AGENTS).filter(([, n]) => n.toLowerCase().includes(q)).map(([id, n]) => ({ label: n, insert: n, desc: id })) };
@@ -435,6 +443,7 @@ function banner() {
     ? ['Dossier très large : travaille plutôt dans un projet (/cd)', '/resume pour reprendre une conversation ou un projet']
     : ['/resume pour reprendre une conversation ou un projet', '/help pour l\'aide · @fichier pour joindre un fichier'];
   const news = latestNews(3);
+  const plainNews = t => String(t).replace(/`/g, '');                 // accents graves du markdown : affichés tels quels dans le terminal
   if (ui.cols() >= 100) {
     const left = [
       { text: '' }, { text: 'Bienvenue dans FS-CLI !', style: c.bold, center: true }, { text: '' },
@@ -444,10 +453,10 @@ function banner() {
     ];
     const right = [
       { text: 'Pour commencer', style: s => c.accent(c.bold(s)) },
-      ...tips.map(t => ({ text: t })),
+      ...tips.map(t => ({ text: t, wrap: 2 })),
       { rule: true },
       { text: 'Quoi de neuf', style: s => c.accent(c.bold(s)) },
-      ...news.map(n => ({ text: n.text })),
+      ...news.map(n => ({ text: plainNews(n.text), wrap: 3 })),     // retour à la ligne comme Claude Code (avant : coupé avec « … »)
       { text: '/nouveautes pour tout voir', style: c.dim },
     ];
     ui.splitBox(left, right, { title: `FS-CLI v${VERSION}` });
@@ -459,7 +468,7 @@ function banner() {
       `  ${c.dim('dossier :')} ${ui.shortPath(S.cwd, 48)}`,
       '',
       c.accent('  Quoi de neuf'),
-      ...news.map(n => c.dim('  · ') + n.text),
+      ...news.flatMap(n => ui.wrapLines(plainNews(n.text), 56, 3).map((l, i) => (i ? '    ' : c.dim('  · ')) + l)),
       c.dim('  /nouveautes pour tout voir · /help pour l\'aide'),
     ], { width: 64 });
   }
@@ -833,6 +842,12 @@ async function command(line) {
       return println();
     }
     case '/model': {
+      if (!arg && interactive && input.select) {                      // comme Claude Code : menu à flèches, modèle actuel présélectionné
+        const list = Object.entries(AGENTS);
+        const idx = await input.select({ title: 'Modèle', detail: 'Ta conversation est conservée.', options: list.map(([id, n]) => n + (String(id) === String(S.agentId) ? '  (actuel)' : '')), defaultIndex: Math.max(0, list.findIndex(([id]) => String(id) === String(S.agentId))) });
+        if (!Number.isInteger(idx) || !list[idx]) return println(c.dim('  modèle inchangé'));
+        arg = list[idx][0];
+      }
       if (!arg) { println(c.dim(`  modèle actuel: ${modelName()} — /models pour la liste`)); return; }
       const id = resolveModel(arg);
       if (id === null) return println(c.red(`  modèle inconnu: ${arg}`) + c.dim('  (/models)'));
@@ -841,6 +856,12 @@ async function command(line) {
       return println(c.dim(`  → ${modelName()}`) + (S.chatId ? c.dim(' · conversation conservée') : ''));
     }
     case '/mode': {
+      if (!arg && interactive && input.select) {                      // menu à flèches (sans menu : bascule auto ↔ confirmer, comme avant)
+        const all = [...MODES, 'tout'];
+        const idx = await input.select({ title: 'Mode', detail: 'Maj+Tab change aussi de mode à tout moment.', options: all.map(m => `${MODE_NAME[m] || 'tout autoriser'}${m === cfg.mode ? '  (actuel)' : ''} — ${String(MODE_DESC[m] || 'tout s\'exécute sans demander (cette session seulement)').replace(/^mode [^:]+ : /, '')}`), defaultIndex: Math.max(0, all.indexOf(cfg.mode)) });
+        if (!Number.isInteger(idx) || !all[idx]) return println(c.dim('  mode inchangé'));
+        arg = all[idx];
+      }
       const m = arg || (cfg.mode === 'auto' ? 'ask' : 'auto');
       if (/^(tout|bypass|yolo|tout-autoriser)$/i.test(m)) { await enableBypass(); return; }
       if (!MODES.includes(m)) return println(c.red('  usage: /mode auto|edits|ask|plan|tout'));
@@ -855,6 +876,12 @@ async function command(line) {
       cfg.maxSteps = n; saveCfg(); return println(c.dim(`  → ${n} étapes max`));
     }
     case '/theme': {
+      if (!arg && interactive && input.select) {
+        const names = Object.keys(THEMES);
+        const idx = await input.select({ title: 'Thème', options: names.map(t => t + (t === cfg.theme ? '  (actuel)' : '')), defaultIndex: Math.max(0, names.indexOf(cfg.theme)) });
+        if (!Number.isInteger(idx) || !names[idx]) return println(c.dim('  thème inchangé'));
+        arg = names[idx];
+      }
       if (!THEMES[arg]) return println(c.red('  thèmes: ') + Object.keys(THEMES).join(' · '));
       cfg.theme = arg; ui.theme.name = arg; saveCfg(); refreshPrompt();
       input.clearScreen(); banner();                                   // le texte déjà affiché ne peut pas changer de couleur : on réaffiche avec le nouveau thème

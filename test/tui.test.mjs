@@ -289,3 +289,26 @@ test('menu plus haut que la fenêtre : options dans une fenêtre autour de la s�
   assert.equal(await p, 20);
   tui.stop();
 });
+
+test('réglette (comme /effort de Claude Code) : ← → déplacent le repère, bloquée aux bouts, Entrée enregistre, Échap annule', async () => {
+  const { sim, type, tick, tui } = make();
+  const LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  let p = tui.select({ title: 'Effort de raisonnement (modèles GPT)', detail: 'Actuel : medium.', options: LEVELS, defaultIndex: 3, slider: { left: 'Plus rapide', right: 'Plus réfléchi' } });
+  await tick();
+  const scr = sim.screen();
+  assert.match(scr, /Plus rapide\s+Plus réfléchi/);
+  assert.match(scr, /none\s+minimal\s+low\s+medium\s+high\s+xhigh/, 'niveaux à l\'horizontale');
+  assert.match(scr, /▲/);
+  assert.match(scr, /← → régler · Entrée enregistrer · Échap annuler/);
+  const col = s => { const rows = s.split('\n'); const r = rows.find(l => l.includes('▲')); const lv = rows.find(l => /none\s+minimal/.test(l)); return [r.indexOf('▲'), lv]; };
+  const [c0, lv] = col(scr);
+  assert.ok(c0 >= lv.indexOf('medium') && c0 < lv.indexOf('medium') + 6, 'repère sous « medium »');
+  type(`${ESC}[C`); await tick();
+  const [c1, lv1] = col(sim.screen());
+  assert.ok(c1 >= lv1.indexOf('high') && c1 < lv1.indexOf('high') + 4, '→ : repère sous « high »');
+  type(`${ESC}[C`); type(`${ESC}[C`); type(`${ESC}[C`);                 // bloqué sur xhigh
+  type('\r'); assert.equal(await p, 5);
+  p = tui.select({ title: 't', options: LEVELS, defaultIndex: 0, slider: { left: 'a', right: 'b' } });
+  type(`${ESC}[D`); type(ESC); assert.equal(await p, null, '← au bout puis Échap : annulé');
+  tui.stop();
+});

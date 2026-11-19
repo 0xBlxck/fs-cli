@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.54.3', items: [
+    '`/effort` : réglette ← → comme dans Claude Code ; `/model`, `/mode` et `/theme` sans valeur ouvrent un menu à flèches ; après l’espace, les valeurs possibles sont proposées',
+    'Réponses du modèle comme dans Claude Code : « ● » en tête, texte passé à la ligne proprement (plus de mots coupés au bord), retrait aligné, listes et tableaux alignés',
+    'Accueil du terminal : les nouveautés passent à la ligne au lieu d’être coupées avec « … » ; plus de doubles lignes vides ni de ligne vide en fin de diff',
+  ] },
   { version: '3.54.2', items: [
     '`fs-cli update` sous Windows : le panneau des éditeurs s’installe (avant : « C:\\Program n’est pas reconnu »)',
   ] },

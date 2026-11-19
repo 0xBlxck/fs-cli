@@ -38,6 +38,47 @@ export function strWidth(s) {
   return w;
 }
 
+/**
+ * Retour à la ligne d'un texte coloré (séquences ANSI), aux espaces, à `width` colonnes visibles (emoji compris) ;
+ * un mot plus long que la ligne est coupé. Les styles ouverts sont refermés en fin de ligne et rouverts sur la suivante.
+ */
+export function wrapAnsi(s, width) {
+  width = Math.max(4, width);
+  const tokens = String(s ?? '').match(/\x1b\[[0-9;]*m|[ \t]+|[^ \t\x1b]+|\x1b/g) || [];
+  const lines = [];
+  let line = '', w = 0, active = [];
+  const closeOf = code => (code === '0' ? 'all' : code === '22' ? /^(1|2)$/ : code === '23' ? /^3$/ : code === '24' ? /^4$/
+    : code === '39' ? /^(3[0-7]|9[0-7]|38;.*)$/ : code === '49' ? /^(4[0-7]|10[0-7]|48;.*)$/ : null);
+  const track = seq => {
+    const code = seq.slice(2, -1);
+    const close = closeOf(code);
+    if (close === 'all') active = [];
+    else if (close) active = active.filter(a => !close.test(a.slice(2, -1)));
+    else active.push(seq);
+  };
+  const flush = () => {
+    lines.push(line.replace(/[ \t]+((?:\x1b\[[0-9;]*m)*)$/, '$1') + (active.length ? '\x1b[0m' : ''));
+    line = active.join(''); w = 0;
+  };
+  for (const t of tokens) {
+    if (t.startsWith('\x1b[')) { line += t; track(t); continue; }
+    if (/^[ \t]+$/.test(t)) { if (w > 0 && w < width) { line += ' '; w += 1; } continue; }
+    let rest = t;
+    let tw = strWidth(rest);
+    if (w > 0 && w + tw > width) flush();
+    while (tw > width) {                                              // mot plus long que la ligne (URL…) : coupé net
+      let part = '', pw = 0;
+      for (const ch of rest) { const cw = strWidth(ch); if (pw + cw > width - w) break; part += ch; pw += cw; }
+      if (!part) { flush(); continue; }
+      line += part; w += pw; rest = rest.slice(part.length); tw = strWidth(rest);
+      flush();
+    }
+    if (rest) { line += rest; w += tw; }
+  }
+  lines.push(line);
+  return lines;
+}
+
 /** coupe une chaîne ANSI à `max` colonnes visibles (séquences d'échappement conservées) */
 export function clipAnsi(s, max) {
   if (strWidth(s) <= max) return s;

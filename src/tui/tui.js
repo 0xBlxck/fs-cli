@@ -125,9 +125,9 @@ export class Tui {
    */
   select(o) {
     if (this.busyUi()) return new Promise(res => { (this.uiQueue ||= []).push(() => this.select(o).then(res)); });
-    const { title, detail = '', options, defaultIndex = 0, tabs = null, tab = 0 } = o;
+    const { title, detail = '', options, defaultIndex = 0, tabs = null, tab = 0, slider = null } = o;   // slider : { left, right } → réglette ← →
     return new Promise(resolve => {
-      this.select_ = { title, detail, options, idx: defaultIndex, tabs, tab, resolve };
+      this.select_ = { title, detail, options, idx: defaultIndex, tabs, tab, slider, resolve };
       this.render();
       this.attention(true);
     });
@@ -209,6 +209,22 @@ export class Tui {
       const s = this.select_;
       lines.length = 0;                                                 // menu ouvert : ni file d'attente ni tâches au-dessus (place pour les options)
       lines.push(this.rule(c.bold(s.title), c.accent, W));
+      if (s.slider) {                                                   // réglette horizontale, comme /effort de Claude Code : ← → pour régler
+        for (const l of String(s.detail || '').split('\n').filter(x => x.trim()).slice(0, 4)) lines.push('  ' + c.dim(l));
+        lines.push('');
+        // largeur d'une case : 4 espaces de marge si la place le permet, sinon 1 (terminal étroit)
+        const longest = Math.max(...s.options.map(o => strWidth(o)));
+        const cellW = Math.max(longest + 1, Math.min(longest + 4, Math.floor((W - 4) / s.options.length))), total = cellW * s.options.length;
+        const center = i => i * cellW + Math.floor(strWidth(s.options[i]) / 2);
+        const L = s.slider.left || '', R = s.slider.right || '';
+        lines.push('  ' + c.dim(L + ' '.repeat(Math.max(1, total - strWidth(L) - strWidth(R))) + R));
+        lines.push('  ' + c.dim('─'.repeat(center(s.idx))) + c.accent('▲') + c.dim('─'.repeat(Math.max(0, total - center(s.idx) - 1))));
+        lines.push('  ' + s.options.map((o, i) => (i === s.idx ? c.accent(c.bold(o)) : c.dim(o)) + ' '.repeat(cellW - strWidth(o))).join(''));
+        lines.push('');
+        lines.push(this.rule('', c.accent, W));
+        lines.push('  ' + c.dim('← → régler · Entrée enregistrer · Échap annuler'));
+        return { lines, caret: { row: lines.length - 1, col: 0 }, hideCursor: true };
+      }
       if (s.tabs?.length) {                                            // onglets, comme la fenêtre de l'horloge de l'IDE
         const bar = s.tabs.map((t, i) => (i === s.tab ? c.accent(c.bold(`▌ ${t} ▐`)) : c.dim(`  ${t}  `))).join('  ');
         lines.push('  ' + bar + c.dim('     ← → changer d\'onglet'));
@@ -378,6 +394,10 @@ export class Tui {
 
   keySelect(k) {
     const s = this.select_;
+    if (s.slider && (k.name === 'left' || k.name === 'right')) {       // réglette : ← moins, → plus (bloquée aux bouts, comme Claude Code)
+      s.idx = Math.max(0, Math.min(s.options.length - 1, s.idx + (k.name === 'right' ? 1 : -1)));
+      return this.render();
+    }
     if (k.name === 'up' || (k.ctrl && k.name === 'p')) { s.idx = (s.idx + s.options.length - 1) % s.options.length; return this.render(); }
     if (k.name === 'down' || k.name === 'tab' || (k.ctrl && k.name === 'n')) { s.idx = (s.idx + 1) % s.options.length; return this.render(); }
     if (s.tabs?.length && (k.name === 'left' || k.name === 'right')) {

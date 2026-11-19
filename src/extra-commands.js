@@ -428,18 +428,34 @@ export async function deleteProjectFlow(p, env) {
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 /** Renvoie true si la commande a été traitée */
+/** niveaux d'effort de raisonnement des modèles GPT (réglage du compte FS) et leur explication (suggestions de /effort) */
+export const EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+export const EFFORT_DESC = { none: 'aucune réflexion, le plus rapide', minimal: 'réflexion minimale', low: 'faible', medium: 'équilibré', high: 'élevé', xhigh: 'maximal, le plus lent et le plus poussé' };
+
 export async function extraCommand(cmd, arg, env) {
   const { S, AGENTS, modelName, resolveModel, withAbort, chatTurn, applySession, refreshPrompt, readAttachment } = env;
   const cwd = S.cwd;
   switch (cmd) {
     case '/effort': {                                                  // effort de raisonnement : réglage du compte France Student (modèles GPT)
-      const LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
-      const want = String(arg || '').trim().toLowerCase().replace(/^max$/, 'xhigh');
+      const LEVELS = EFFORT_LEVELS;
+      let want = String(arg || '').trim().toLowerCase().replace(/^max$/, 'xhigh');
       if (!want) {
         const cur = (await requestJson('GET', '/user/instructions').catch(() => ({}))).data?.gptReasoning;
-        println(c.dim(`  effort de raisonnement (modèles GPT) : ${cur || 'inconnu'} · /effort ${LEVELS.join('|')}`));
-        println(c.dim('  c\'est un réglage de ton compte France Student : il s\'applique aussi sur le site. Les modèles Claude n\'ont pas ce réglage.'));
-        return true;
+        // terminal ou panneau : réglette ← → comme /effort de Claude Code (au lieu de devoir connaître les niveaux par cœur)
+        if (env.select && env.S?.interactive !== false) {
+          const idx = await env.select({
+            title: 'Effort de raisonnement (modèles GPT)', options: LEVELS, defaultIndex: Math.max(0, LEVELS.indexOf(cur || 'medium')),
+            detail: `Actuel : ${cur || 'inconnu'}. Réglage de ton compte France Student : il s'applique aussi sur le site. Les modèles Claude n'ont pas ce réglage.`,
+            slider: { left: 'Plus rapide', right: 'Plus réfléchi' },
+          });
+          if (!Number.isInteger(idx) || !LEVELS[idx]) { println(c.dim('  effort inchangé')); return true; }
+          want = LEVELS[idx];
+          if (want === cur) { println(c.dim(`  effort inchangé : ${cur}`)); return true; }
+        } else {
+          println(c.dim(`  effort de raisonnement (modèles GPT) : ${cur || 'inconnu'} · /effort ${LEVELS.join('|')}`));
+          println(c.dim('  c\'est un réglage de ton compte France Student : il s\'applique aussi sur le site. Les modèles Claude n\'ont pas ce réglage.'));
+          return true;
+        }
       }
       if (!LEVELS.includes(want)) { println(c.red(`  niveau inconnu : ${arg}`) + c.dim(`  (${LEVELS.join(', ')})`)); return true; }
       const r = await requestJson('PATCH', '/user/instructions', { gptReasoning: want }).catch(() => ({ status: 0 }));

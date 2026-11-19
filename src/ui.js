@@ -2,6 +2,7 @@ import fs from 'node:fs';
 // UI : couleurs, spinner, rendu markdown en streaming, blocs d'outils
 import process from 'node:process';
 import { parseFenceInfo } from './fence.js';
+import { wrapAnsi, strWidth as visWidth } from './tui/layout.js';
 
 export const THEMES = {
   cyan: [86, 212, 221], green: [120, 220, 140], magenta: [210, 130, 230], yellow: [240, 200, 90],
@@ -215,14 +216,30 @@ export class MdStream {
     if (this.collapse) {
       if (this.codeLines > 0) {
         this.blank();
+        this.flushBlank();
         println(`  ${c.dim('▸')} ${c.accent(this.lang || 'code')}${this.codeName ? ' ' + c.bold(this.codeName) : ''} ${c.dim(`· ${this.codeLines} ligne${this.codeLines > 1 ? 's' : ''}`)}`);
         this.printed = true; this.lastBlank = false;
       }
     } else if (this.opened) { println(c.dim('  ╰─')); this.lastBlank = false; }
     this.inCode = false; this.opened = false; this.codeLines = 0;
   }
-  emit(s) { println(s); this.printed = true; this.lastBlank = false; }
-  blank() { if (!this.lastBlank && this.printed) { println(); this.lastBlank = true; } }
+  emit(s) {
+    if (!this.printed && !this.noLead) println();                     // 1er texte : séparé de l'action ou de la demande au-dessus
+    this.flushBlank();
+    println(s); this.printed = true; this.lastBlank = false;
+  }
+  /**
+   * Texte passé à la ligne à la largeur du terminal, comme Claude Code : first = préfixe de la 1re ligne, rest = des suivantes
+   * (même largeur visible). Le 1er paragraphe d'une réponse commence par « ● ».
+   */
+  emitWrapped(first, rest, text, { bullet = false } = {}) {
+    if (bullet && !this.printed) first = '● ' + first.slice(2);
+    const lines = wrapAnsi(text, Math.max(20, cols() - 1 - visWidth(first)));
+    lines.forEach((l, i) => this.emit((i ? rest : first) + l));
+  }
+  /** ligne vide DIFFÉRÉE : écrite seulement si du texte suit (une ligne vide en fin de réponse doublait celle de l'action suivante) */
+  blank() { if (!this.lastBlank && this.printed) { this.pendingBlank = true; this.lastBlank = true; } }
+  flushBlank() { if (this.pendingBlank) { println(); this.pendingBlank = false; } }
   line(line) {
     if (this.inCode) {
       const close = line.match(/^\s*(`{3,}|~{3,})\s*$/);
@@ -236,6 +253,7 @@ export class MdStream {
       if (!this.opened) {
         if (line.trim() === '') return;
         this.blank();
+        this.flushBlank();
         println(c.dim('  ╭─ ') + c.accent(this.lang || 'code'));
         this.opened = true; this.printed = true;
       }
@@ -263,10 +281,10 @@ export class MdStream {
     if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
       this.blank();
       const t = inline(m[2]);
-      this.emit(m[1].length === 1 ? c.bold(c.accent(t)) : m[1].length === 2 ? c.bold(c.white(t)) : c.bold(c.yellow(t)));
+      this.emitWrapped('  ', '  ', m[1].length === 1 ? c.bold(c.accent(t)) : m[1].length === 2 ? c.bold(c.white(t)) : c.bold(c.yellow(t)), { bullet: true });
       return;
     }
-    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { this.emit(c.dim('─'.repeat(Math.min(48, cols() - 4)))); return; }
+    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { this.emit('  ' + c.dim('─'.repeat(Math.min(48, cols() - 6)))); return; }
     if ((m = line.match(/^(\s*)[-*+]\s+\[( |x|X|~|>|-)\]\s+(.*)$/))) {   // liste de tâches du modèle : ☐ à faire · ◐ en cours · ☑ fait
       const st = m[2] === ' ' ? 'todo' : /[xX]/.test(m[2]) ? 'done' : 'doing';
       if (!this.inTasks) { this.inTasks = true; this.taskList = []; tasks.blocks++; }
@@ -277,10 +295,16 @@ export class MdStream {
       return;
     }
     this.inTasks = false;
-    if ((m = line.match(/^(\s*)[-*+]\s+(.*)$/))) { this.emit(`${m[1]}${c.accent('•')} ${inline(m[2])}`); return; }
-    if ((m = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/))) { this.emit(`${m[1]}${c.accent(m[2] + '.')} ${inline(m[3])}`); return; }
-    if ((m = line.match(/^\s*>\s?(.*)$/))) { this.emit(`${c.dim('▎')} ${c.italic(inline(m[1]))}`); return; }
-    this.emit(inline(line));
+    if ((m = line.match(/^(\s*)[-*+]\s+(.*)$/))) {                 // suite d'un élément alignée sous son texte
+      const pad = '  ' + m[1];
+      this.emitWrapped(`${pad}${c.accent('•')} `, `${pad}  `, inline(m[2])); return;
+    }
+    if ((m = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/))) {
+      const pad = '  ' + m[1], num = m[2] + '.';
+      this.emitWrapped(`${pad}${c.accent(num)} `, pad + ' '.repeat(num.length + 1), inline(m[3])); return;
+    }
+    if ((m = line.match(/^\s*>\s?(.*)$/))) { this.emitWrapped(`  ${c.dim('▎')} `, `  ${c.dim('▎')} `, c.italic(inline(m[1]))); return; }
+    this.emitWrapped('  ', '  ', inline(line), { bullet: true });
   }
 
   /** Tableau Markdown regroupé puis affiché avec colonnes alignées et cadre (en-tête en gras). */
@@ -291,7 +315,7 @@ export class MdStream {
     const cells = rows.map(r => r.cells.map(x => inline(x.trim())));
     const n = Math.max(...cells.map(r => r.length));
     let w = Array.from({ length: n }, (_, i) => Math.max(1, ...cells.map(r => vis(r[i] || ''))));
-    const max = Math.max(20, cols() - 4 - (n * 3 + 1));
+    const max = Math.max(20, cols() - 6 - (n * 3 + 1));
     while (w.reduce((a, b) => a + b, 0) > max) { const i = w.indexOf(Math.max(...w)); if (w[i] <= 6) break; w[i]--; }   // trop large : on réduit la plus large
     const fit = (s, width) => {
       const plain = s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -300,14 +324,14 @@ export class MdStream {
     };
     const line = (l, m, r) => c.dim(l + w.map(x => '─'.repeat(x + 2)).join(m) + r);
     this.blank();
-    this.emit(line('┌', '┬', '┐'));
+    this.emit('  ' + line('┌', '┬', '┐'));
     cells.forEach((r, k) => {
       const head = k === 0 && rows[0].header;
       const HB = s => `${bg([44, 47, 58])}${s}\x1b[49m`;                // en-tête sur fond grisé
-      this.emit(c.dim('│') + w.map((x, i) => head ? HB(' ' + c.bold(fit(r[i] || '', x)) + ' ') : ' ' + fit(r[i] || '', x) + ' ').join(c.dim('│')) + c.dim('│'));
-      if (head && cells.length > 1) this.emit(line('├', '┼', '┤'));
+      this.emit('  ' + c.dim('│') + w.map((x, i) => head ? HB(' ' + c.bold(fit(r[i] || '', x)) + ' ') : ' ' + fit(r[i] || '', x) + ' ').join(c.dim('│')) + c.dim('│'));
+      if (head && cells.length > 1) this.emit('  ' + line('├', '┼', '┤'));
     });
-    this.emit(line('└', '┴', '┘'));
+    this.emit('  ' + line('└', '┴', '┘'));
   }
 }
 
@@ -545,6 +569,7 @@ export function lineDiff(oldStr, newStr) {
 /** Diff coloré façon Claude Code : résumé, numéros de ligne, ajouts sur fond vert, retraits sur fond rouge, 2 lignes de contexte. */
 export function diffView(oldStr, newStr, { max = 30, context = 2 } = {}) {
   const ops = lineDiff(oldStr, newStr);
+  while (ops.length && ops[ops.length - 1].t === ' ' && ops[ops.length - 1].line === '') ops.pop();   // fin de fichier : pas une ligne
   if (sink?.event) return diffEvent(ops, context);
   const added = ops.filter(x => x.t === '+').length, removed = ops.filter(x => x.t === '-').length;
   const parts = [added && `${added} ajout${added > 1 ? 's' : ''}`, removed && `${removed} suppression${removed > 1 ? 's' : ''}`].filter(Boolean);
@@ -603,13 +628,25 @@ export function box(rows, { title = '', width } = {}) {
   println(c.accent(`╰${'─'.repeat(W - 2)}╯`));
 }
 
+/** wrapText (retour à la ligne aux espaces, comme Claude Code) avec maxLines lignes au plus : la dernière finit alors par « … ». */
+export function wrapLines(text, width, maxLines = Infinity) {
+  const lines = wrapText(String(text ?? '').replace(/\s+/g, ' ').trim(), width);
+  if (lines.length <= maxLines) return lines;
+  const kept = lines.slice(0, maxLines);
+  kept[maxLines - 1] = clip(`${kept[maxLines - 1]} …`, width).replace(/ ?…$/, '…');
+  return kept;
+}
+
 /**
  * Cadre d'accueil en deux colonnes, comme Claude Code : titre dans la bordure, colonne gauche centrée, séparateur, colonne droite.
- * Lignes = { text, style?, center? } : le texte est coupé AVANT d'être coloré (pas de couleur cassée).
+ * Lignes = { text, style?, center?, wrap? } : le texte est coupé AVANT d'être coloré (pas de couleur cassée) ;
+ * wrap: n → passe à la ligne (n lignes au plus) au lieu de couper avec « … ».
  */
 export function splitBox(left, right, { title = '', width, leftWidth = 32 } = {}) {
   const W = Math.min(width || cols() - 2, 118);
   const lw = leftWidth, rw = W - lw - 7;
+  // lignes de suite décalées de 2 espaces : on voit où commence chaque élément
+  right = right.flatMap(r => (r && r.wrap && !r.rule ? wrapLines(r.text, rw - 2, r.wrap).map((t, i) => ({ ...r, text: i ? `  ${t}` : t })) : [r]));
   const cell = (r, w) => {
     if (!r) return ' '.repeat(w);
     const t = clip(String(r.text ?? ''), w), vis = t.length;
