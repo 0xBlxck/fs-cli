@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.54.1', items: [
+    'Menu de `/fs:conversations` et de `--fs-conversations` plus lisible : titres sans étiquette technique, 2e ligne = modèle et date',
+  ] },
   { version: '3.54.0', items: [
     '`fs-cli claude` utilise tes serveurs MCP (Roblox Studio, Blender, leboncoin…) : nomme le serveur dans ta demande, le modèle appelle ses outils via fs-mcp',
     'Serveurs MCP gardés par défaut dans `fs-cli claude` (`--fs-mcp=off` pour les couper) ; GPT Astra refuse les MCP, prends un modèle Claude',

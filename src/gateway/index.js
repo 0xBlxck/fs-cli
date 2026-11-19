@@ -19,7 +19,7 @@ import { answerLocally, compactFsInBackground, SUBAGENT_REFUSAL } from './backgr
 import { recapOf, quotaState, limitMessage, MESSAGES } from './recover.js';
 import { runFsTurn, reconcile, applyReconcile, resultsText } from './fsturn.js';
 import { decodeId } from './ids.js';
-import { fsCommand, pickChats, chatLine, isChatId, pickLabel, pickAnswer } from './fschats.js';
+import { fsCommand, pickChats, chatLine, isChatId, pickLabel, pickAnswer, chatDetails, displayTitle } from './fschats.js';
 import { synthId } from './ids.js';
 import { textCleaner } from '../native.js';
 
@@ -294,7 +294,7 @@ export function createGateway(deps, opts = {}) {
     if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${where}${word ? ` dont le titre contient « ${word} »` : ''}.`);
     const text = `Conversations France Student${where}${word ? ` (titre contenant « ${word} »)` : ''} :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}`;
     if (!avail.has('AskUserQuestion') || cands.length < 2) return localTurn(conv, reply, `${text}\n\nPour continuer l'une d'elles ici : /fs:reprendre <numéro>`);
-    const items = cands.map((c, i) => ({ label: pickLabel(c, i), description: chatLine(c, i).trim().replace(/^\d+\.\s*[^·]*·?\s*/, ''), value: { id: c.id, title: c.title || '' } }));
+    const items = cands.map((c, i) => ({ label: pickLabel(c, i), description: chatDetails(c), value: { id: c.id, title: displayTitle(c) } }));
     return askPage(conv, reply, { stage: 'chat', page: 0, items, question: 'Quelle conversation continuer ici ? (« Other » : un numéro ou un mot du titre)', header: 'Conversation' },
       `${text}\n\nChoisis avec les flèches, ou plus tard : /fs:reprendre <numéro>`);
   }

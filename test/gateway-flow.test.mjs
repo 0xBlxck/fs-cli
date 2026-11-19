@@ -1024,3 +1024,18 @@ test('(o4) /fs:conversations : d\'abord les projets du site, puis leurs conversa
   assert.equal(asked.at(-1), null, 'toutes les conversations');
   assert.match(r7.sse.text, /titre contenant « autre »/);
 });
+
+test('(o5) menu : titre sans étiquette technique (« [mcpv2·cc] »), 2e ligne = modèle et date seulement (le « · » du titre ne coupe plus rien)', async t => {
+  const fake = fakeFs({});
+  fake.deps.listChats = async () => [
+    { id: 'a', title: '[mcpv2·cc] Contexte : dossier', lastMessageAt: '2026-11-19T21:21:00Z', agent: { name: 'GPT-6 Astra' } },
+    { id: 'b', title: 'Genrere moi un CV...', lastMessageAt: '2026-11-19T14:24:00Z', agent: { name: 'GPT-6.2 Astra' } },
+  ];
+  const { gw } = await setup(t, {}, {}, { fake });
+  const body = { tools: [...BASE.body.tools, { name: 'AskUserQuestion', description: 'q', input_schema: { type: 'object' } }] };
+  const r = await call(gw, ccReq([user('FSCLI-COMMANDE conversations')], { body }));
+  const opts = r.sse.toolUses[0].input.questions[0].options;
+  assert.deepEqual(opts.map(o => o.label), ['1. Contexte : dossier', '2. Genrere moi un CV...']);
+  assert.match(opts[0].description, /^GPT-6 Astra · 19\/11 \d\d:\d\d$/);
+  assert.doesNotMatch(r.sse.text, /mcpv2/);
+});

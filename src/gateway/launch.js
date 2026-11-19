@@ -10,7 +10,7 @@ import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
 import { HOME_DIR, cfg, saveCfgKeys } from '../config.js';
 import { createModels } from './models.js';
 import { quotaState } from './recover.js';
-import { chatLine, pickChats, isChatId, pluginFiles } from './fschats.js';
+import { chatLine, pickChats, isChatId, pluginFiles, chatDetails, displayTitle } from './fschats.js';
 
 const GW_DIR = () => path.join(HOME_DIR, 'gateway');
 export const logFile = () => path.join(GW_DIR(), 'gateway.log');
@@ -231,7 +231,7 @@ async function pickMenu(h, projectId = null) {
     try { list = pid ? await h.projectChats(pid) : await h.recentChats(50); } catch {}
     if (!Array.isArray(list)) return fail;
     const cands = pickChats(list, '', 1000);
-    const items = [{ label: '＋ Nouvelle conversation' }, ...cands.map((c, i) => ({ label: String(c.title || '(sans titre)').replace(/\s+/g, ' '), description: chatLine(c, i).replace(/^\s*\d+\.\s*[^·]*·?\s*/, '') }))];
+    const items = [{ label: '＋ Nouvelle conversation' }, ...cands.map(c => ({ label: displayTitle(c), description: chatDetails(c) }))];
     const back = !projectId && projects.length;
     const j = await h.pick({ title: pname ? `Conversations du projet « ${pname} » (${cands.length})` : `Conversations récentes (${cands.length})`, items,
       hint: `↑↓ défiler · Entrée choisir · Échap ${back ? 'retour aux projets' : 'nouvelle conversation'}` });

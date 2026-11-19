@@ -2,9 +2,14 @@
 
 const whenFr = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
 
+/** titre affiché : sans l'étiquette technique de FS-CLI au début (« [8ef0] », « [7eee·cc] », « [abcd·w0] ») */
+export const displayTitle = c => String(c?.title || '').replace(/^\s*\[[0-9a-z]{2,8}(?:·[0-9a-z]{1,4})?\]\s*/i, '').replace(/\s+/g, ' ').trim() || '(sans titre)';
+/** détails d'une conversation : « GPT-6 Astra · 19/11 15:24 » */
+export const chatDetails = c => [c?.agent?.name, whenFr(c?.lastMessageAt || c?.createdAt)].filter(Boolean).join(' · ');
+
 /** ligne d'une conversation : « 3. Titre · modèle · 19/11 15:24 » (withId : l'id à la fin, pour --fs-conversation) */
 export function chatLine(c, i, { withId = false } = {}) {
-  const parts = [String(c?.title || '(sans titre)').replace(/\s+/g, ' ').slice(0, 60), c?.agent?.name, whenFr(c?.lastMessageAt || c?.createdAt)].filter(Boolean);
+  const parts = [displayTitle(c).slice(0, 60), chatDetails(c)].filter(Boolean);
   return `${String(i + 1).padStart(3)}. ${parts.join(' · ')}${withId ? `  (${c.id})` : ''}`;
 }
 
@@ -18,7 +23,7 @@ export function pickChats(list, word = '', max = 30) {
 }
 
 /** libellé d'un choix du menu à flèches : « 2. Titre » (court, sans guillemets : il revient tel quel dans la réponse) */
-export const pickLabel = (c, i) => `${i + 1}. ${String(c?.title || '(sans titre)').replace(/["“”]/g, '\'').replace(/\s+/g, ' ').trim().slice(0, 40)}`;
+export const pickLabel = (c, i) => `${i + 1}. ${displayTitle(c).replace(/["“”]/g, '\'').slice(0, 40)}`;
 
 /** réponse de l'utilisateur au menu (résultat d'AskUserQuestion : « …"question"="réponse"… ») ; '' si illisible */
 export function pickAnswer(result) {
