@@ -12,6 +12,8 @@ import { cfg, saveCfg, saveCfgKeys } from './config.js';
 import { newSid, tag, lastReset } from './chats.js';
 import { execCall, baseDir, forgetRead } from './agent.js';
 import { clipMiddle } from './tools.js';
+import { shares } from './output.js';
+import { todoView } from './todos.js';
 import * as ui from './ui.js';
 import { c } from './ui.js';
 
@@ -190,6 +192,7 @@ export async function runNative(S, userText, opts) {
     if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     const md = new ui.MdStream({ collapse: false });
     const clean = textCleaner();                                       // citations du web retirées, listes de tâches remises à la ligne
+    const todo = todoView(S);                                          // le modèle n'écrit que les étapes qui changent : la liste complète à jour est affichée
     const activity = activityTracker();                                // « Recherche sur le web… », « Le modèle écrit un document · 12 400 caractères »…
     let thinkBuf = '';
     ui.spinner.start(results ? 'réflexion…' : 'réflexion…');
@@ -198,7 +201,7 @@ export async function runNative(S, userText, opts) {
         agentId: S.agentId, chatId: S.chatId, signal, webSearch: web, register: { sid: S.sid, role: 'main' },
         clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results, files: resultFiles } : { content, files: S.pendingFileIds }),   // images : avec le message, ou avec les résultats (captures d'outils)
         onChat: id => { if (!S.chatId) S.chatId = id; },
-        onText: d => { const t = clean.push(d); if (t) md.push(t); },
+        onText: d => { const t = todo.push(clean.push(d)); if (t) md.push(t); },
         onEvent: (type, d) => activity(type, d),
         onReasoning: d => {
           ui.rememberThinking(d);                                       // gardée pour Ctrl+O
@@ -243,7 +246,7 @@ export async function runNative(S, userText, opts) {
         try { res = await sendPastFirewall(false); } catch (e2) { throw e2?.name === 'AbortError' ? e2 : e; }
       }
     } finally { ui.spinner.stop(); }
-    { const t = clean.flush(); if (t) md.push(t); }
+    { const t = todo.push(clean.flush()) + todo.flush(); if (t) md.push(t); }
     md.finish(); nReq++;
     const u = res.usage;
     let reqIn = 0;
@@ -292,10 +295,19 @@ export async function runNative(S, userText, opts) {
       nTools++;
       let r = await execNative(S, call, { signal, ask, root });
       { const a = parseArgs(call.arguments); done.push(`${call.name}${a.path ? ' ' + a.path : a.command ? ' « ' + String(a.command).slice(0, 80) + ' »' : ''} (${r.isError ? 'échec' : 'ok'})`); }
-      if (total + r.output.length > MAX_TOTAL) { forgetRead(S, r.cacheKey); r = { ...r, output: r.output.slice(0, Math.max(500, MAX_TOTAL - total)) + '\n[… coupé : lis une plage plus étroite]' }; }
-      delete r.cacheKey;                                                 // FS n'attend que callId, output, isError
       total += r.output.length; results.push(r);
     }
+    // limite FS par envoi : parts équitables (les petits résultats intacts, les gros se partagent le reste) au lieu de premier servi
+    if (total > MAX_TOTAL) {
+      const share = shares(results.map(r => r.output.length), MAX_TOTAL - 64 * results.length);
+      results = results.map((r, i) => {
+        if (r.output.length <= share[i]) return r;
+        forgetRead(S, r.cacheKey);                                       // lecture coupée : jamais notée « déjà reçue »
+        return { ...r, output: r.output.slice(0, Math.max(0, share[i] - 48)) + '\n[… coupé : lis une plage plus étroite]' };
+      });
+      total = results.reduce((s, r) => s + r.output.length, 0);
+    }
+    results = results.map(({ cacheKey, ...r }) => r);                   // FS n'attend que callId, output, isError
     // conversation très chargée (≥ 1,5 × le seuil du résumé) : une seule fois, demande au modèle de finir l'étape en cours puis de s'arrêter
     if (midCompact && !heavyAt && reqIn && results.length && cfg.autoCompact && S.chatId && (cfg.dailyLimitHitAt || 0) < lastReset()) {
       const { compactLimit } = await import('./extra-commands.js');

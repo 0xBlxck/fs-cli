@@ -1,6 +1,12 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.55.0', items: [
+    'Consommation réduite : environ un tiers de contexte en moins par session (mesuré en vrai, même résultat)',
+    'Sorties de commandes trop longues : lignes répétées regroupées, erreurs et avertissements toujours gardés (un build bavard passe de 12 000 à 1 300 caractères) ; sorties de tests condensées',
+    'Liste de tâches : le modèle n’écrit plus que les étapes qui changent, FS-CLI affiche toujours la liste complète à jour',
+    'Le modèle sait que tes commandes passent par PowerShell (fini les « && » qui échouent sous Windows PowerShell 5.1)',
+  ] },
   { version: '3.54.4', items: [
     '/resume : toutes tes conversations dans chaque onglet (avant : 14 au plus), la liste défile aux flèches',
   ] },

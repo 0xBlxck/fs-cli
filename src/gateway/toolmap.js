@@ -9,7 +9,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fsId, synthId, retryId, decodeId } from './ids.js';
 import { documentFileName, htmlDocumentName, cleanText } from '../native.js';
-import { clipMiddle } from '../tools.js';
+import { clipMiddle, commandOutput, condenseTestOutput, shares } from '../output.js';
+
+export { condenseTestOutput };
 
 /** Limites de France Student (client-tools.md) : 40 000 caractères par résultat, 120 000 par envoi (marge gardée), 32 appels. */
 export const MAX_CALLS = 32;
@@ -577,7 +579,6 @@ export function planRetry(retry, ctx) {
 
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>\s*/g;
 const TOOL_ERROR = /<tool_use_error>([\s\S]*?)<\/tool_use_error>/;
-const TEST_CMD = /node\s+--test|\bjest\b|\bvitest\b|\bpytest\b|npm\s+(?:run\s+)?test\b/;
 // noms de paramètres de Claude Code → noms du catalogue FS (seulement dans les messages d'erreur)
 const RENAMES = [['file_path', 'path'], ['old_string', 'old_text'], ['new_string', 'new_text'], ['offset', 'start_line'], ['pattern', 'query'], ['timeout', 'timeout_seconds']];
 
@@ -666,30 +667,10 @@ export function translateResult(block, p = {}, ctx = {}) {
     if (p.path) markRead(ctx, p.path);
   }
   if (!isError && (p.ccName === 'Edit' || p.ccName === 'Write') && p.path) markRead(ctx, p.path);   // Claude Code connaît la version écrite
-  if ((p.ccName === 'Bash' || p.ccName === 'PowerShell') && text.length > 4000) text = condenseTestOutput(p.command ?? p.input?.command ?? '', text);
+  // tests condensés ; au-delà de 20 000 car. (Claude Code coupe lui-même à 30 000) : répétitions regroupées, erreurs/avertissements gardés
+  if ((p.ccName === 'Bash' || p.ccName === 'PowerShell') && text.length > 4000) text = commandOutput(p.command ?? p.input?.command ?? '', text, 20000);
   if (p.note) text = text ? `${text}\n${p.note}` : p.note;
   return { output: text || '(aucune sortie)', isError, images, needsRead };
-}
-
-/**
- * Sortie de tests trop longue (node --test, jest, vitest, pytest, npm test, plus de 4 000 caractères) : seulement les blocs
- * d'échec (lignes not ok, ✖, FAIL, FAILED, AssertionError + 15 lignes) et le bilan final (20 dernières lignes).
- */
-export function condenseTestOutput(command, output) {
-  const out = String(output ?? '');
-  if (out.length <= 4000 || !TEST_CMD.test(String(command || ''))) return out;
-  const lines = out.split('\n');
-  const keep = new Uint8Array(lines.length);
-  const FAIL = /\bnot ok\b|✖|\bFAIL(?:ED)?\b|AssertionError/;
-  lines.forEach((l, i) => { if (FAIL.test(l)) for (let j = i; j <= Math.min(lines.length - 1, i + 15); j++) keep[j] = 1; });
-  for (let j = Math.max(0, lines.length - 20); j < lines.length; j++) keep[j] = 1;
-  const kept = [];
-  let gap = false;
-  lines.forEach((l, i) => {
-    if (keep[i]) { if (gap) kept.push('…'); kept.push(l); gap = false; } else gap = true;
-  });
-  const n = keep.reduce((s, k) => s + k, 0);
-  return `[Sortie de test condensée : ${n} lignes sur ${lines.length} (échecs et bilan)]\n${kept.join('\n')}`;
 }
 
 // ── Budget de taille ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -711,21 +692,6 @@ function cutTo(r, max, opts) {
   if (r.output.length <= max) return r;
   if (r._read) { forgetRead(opts.readSet, r._read, opts.env); return { ...r, output: cutRead(r.output, max) }; }
   return { ...r, output: r.output.slice(0, Math.max(0, max - CUT_NARROW.length)) + CUT_NARROW };
-}
-
-/** Parts équitables (« water-filling ») : chacun reçoit au moins max(1500, total/n), ce que les petits n'utilisent pas est redistribué. */
-function shares(lengths, total) {
-  const n = lengths.length;
-  const out = new Array(n).fill(0);
-  let left = total, rest = lengths.map((len, i) => ({ len, i })).sort((a, b) => a.len - b.len);
-  while (rest.length) {
-    const fair = Math.floor(left / rest.length);
-    const small = rest.filter(x => x.len <= fair);
-    if (!small.length) { for (const x of rest) out[x.i] = Math.max(1500, fair); break; }
-    for (const x of small) { out[x.i] = x.len; left -= x.len; }
-    rest = rest.filter(x => x.len > fair);
-  }
-  return out;
 }
 
 /**

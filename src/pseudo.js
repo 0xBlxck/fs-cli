@@ -11,6 +11,7 @@ import { getMcp } from './mcp-runtime.js';
 import { discoverSkills, searchSkills, isSelfMcpServer } from './discover.js';
 import { isImportApproved, approveImport } from './approvals.js';
 import { confirm } from './agent.js';
+import { sysEnv } from './tools.js';
 import * as ui from './ui.js';
 
 /** Commande exacte pour lancer fs-mcp (chemin absolu : marche même sans installation globale).
@@ -59,11 +60,27 @@ function describeTools(server, tools) {
  * testé en vrai : GPT-6 Astra refuse alors parfois de travailler (« moteur d'un agent externe »). Les documents du panneau
  * du site sont de toute façon récupérés et écrits par FS-CLI (native.js, takeDocuments).
  */
-export function workPreferences() {
-  const text = 'Préférences de l\'utilisateur : pour une tâche en 3 étapes ou plus, écris d\'abord ta liste de tâches en Markdown, une ligne par étape (« - [ ] étape »), puis réécris-la en entier au fil du travail avec « - [x] » pour ce qui est fait et « - [~] » pour l\'étape en cours. '
+// v4 (20/11/2026, banc contre un autre CLI) : la liste n'est plus recopiée en entier à chaque étape (≈ 1 000 car. de sortie
+// par session, relus ensuite à chaque requête) : le modèle n'écrit que les lignes qui changent, todos.js affiche la liste
+// complète. Actions indépendantes groupées, lecture de la partie utile, pas de relecture après modification. Environnement :
+// sous Windows PowerShell 5.1, « && » est une erreur → commandes ratées puis relancées. Toujours aucun nom d'outil.
+export function workPreferences(env = shellEnv()) {
+  const text = 'Préférences de l\'utilisateur : pour une tâche en 3 étapes ou plus, écris d\'abord ta liste de tâches en Markdown (« - [ ] étape », une ligne par étape) ; '
+    + 'ensuite, n\'écris que les lignes qui changent, avec le même intitulé (« - [~] étape » en cours, « - [x] étape » faite) : je vois la liste complète à jour de mon côté. '
+    + 'Fais d\'un coup les actions indépendantes (plusieurs lectures ou recherches) ; d\'un gros fichier, lis seulement la partie utile ; inutile de relire un fichier après une modification réussie. '
     + 'Pour un serveur local (npx serve, npm run dev, python -m http.server…), lance-le directement : il reste en arrière-plan et son adresse t\'est renvoyée ; n\'ouvre pas de nouvelle fenêtre de console. '
-    + 'N\'affirme jamais avoir vérifié quelque chose sans l\'avoir réellement fait.';
-  return { text, sig: 'prefs-v3' };
+    + 'N\'affirme jamais avoir vérifié quelque chose sans l\'avoir réellement fait.'
+    + (env ? `\n${env}` : '');
+  return { text, sig: 'prefs-v4|' + env };
+}
+
+/** Une ligne sur le PC (système et shell des commandes) : évite les commandes bash ratées sous PowerShell, puis relancées. */
+export function shellEnv(platform = process.platform, shell = sysEnv.shell, shellName = sysEnv.shellName) {
+  if (platform === 'win32') {
+    return shell === 'pwsh' ? `Mon PC : Windows ; les commandes passent par ${shellName || 'PowerShell 7'}.`
+      : `Mon PC : Windows ; les commandes passent par ${shellName || 'Windows PowerShell 5.1'} (« && » n'y existe pas : enchaîne avec « ; » ou « if ($?) { … } »).`;
+  }
+  return `Mon PC : ${platform === 'darwin' ? 'macOS' : 'Linux'} ; les commandes passent par bash.`;
 }
 
 /** (ancien) Bloc annonçant fs-mcp, les MCP et les skills dans le texte : n'est plus envoyé automatiquement (bloqué par le prompt système de France Student). */

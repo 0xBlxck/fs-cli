@@ -8,6 +8,7 @@ import { createLive, c } from './ui.js';
 import { safeFetch, webSearch, formatSearchResults } from './web.js';
 import { SEARCH_KEY, SEARCH_PROVIDER } from './config.js';
 import { sensitivePathReason } from './permissions.js';
+import { clipMiddle, commandOutput, resolveCarriageReturns } from './output.js';
 
 export const IS_WIN = process.platform === 'win32';
 
@@ -88,11 +89,7 @@ const ok = (output, display) => ({ ok: true, output, display });
 const sha1 = buf => createHash('sha1').update(buf).digest('hex');
 const err = (msg) => ({ ok: false, output: msg, display: msg });
 
-export function clipMiddle(text, max = 12000) {
-  if (text.length <= max) return text;
-  const head = Math.floor(max * 0.6), tail = max - head;
-  return `${text.slice(0, head)}\n\n… [${text.length - max} caractères omis] …\n\n${text.slice(-tail)}`;
-}
+export { clipMiddle };
 /** taille max d'une lecture read_file (France Student coupe chaque résultat à 40 000 caractères) */
 export const READ_MAX = 38000;
 const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
@@ -493,7 +490,7 @@ export function runShellDirect(command, ctx) {
 }
 
 function formatProc(r, { timeoutS }) {
-  let o = r.out.replace(/\r\n/g, '\n').trimEnd();
+  let o = resolveCarriageReturns(r.out.replace(/\r\n/g, '\n')).trimEnd();   // barres de progression : seul l'état final, comme dans un terminal
   if (r.timedOut) o += `\n[délai dépassé après ${timeoutS}s — processus tué]`;
   else if (r.aborted) o += '\n[interrompu par l\'utilisateur]';
   else if (r.code !== 0) o += `\n[code de sortie ${r.code | 0}]`;
@@ -685,7 +682,7 @@ export const TOOLS = {
       if (isServerCommand(a.command)) {                               // serveur local : tâche de fond sans fenêtre, adresse rendue au modèle
         const { job, url } = await startServerJob(a.command, cwd, { onData: live.push, signal: ctx.signal });
         live.end();
-        const out = clipMiddle(job.out.trim() || '(pas encore de sortie)', 4000);
+        const out = commandOutput('', job.out.trim() || '(pas encore de sortie)', 4000);
         const hint = flaskHint(a.command);
         if (job.status !== 'running') return job.code === 0 ? { ok: true, output: out, display: 'terminé', silent: true }   // commande finie d'elle-même (pas un serveur)
           : { ok: false, output: `La commande s'est arrêtée tout de suite (code ${job.code}).\n${out}${hint}`, display: `arrêtée (code ${job.code})`, silent: true };
@@ -695,7 +692,7 @@ export const TOOLS = {
       const command = hideConsoleLaunch(a.command);
       const r = await runShell(command, { cwd, timeoutMs: timeoutS * 1000, signal: ctx.signal, onData: live.push });
       live.end();
-      const output = clipMiddle(formatProc(r, { timeoutS })) + (IS_WIN ? '' : promptNote(r.out));
+      const output = commandOutput(a.command, formatProc(r, { timeoutS })) + (IS_WIN ? '' : promptNote(r.out));   // tests condensés ; si coupé : erreurs/avertissements gardés
       return { ok: r.code === 0 && !r.timedOut && !r.aborted, output, display: procDisplay(r), silent: true };
     },
   },
@@ -718,7 +715,7 @@ export const TOOLS = {
       try {
         const r = await runProc({ file: sysEnv.python.file, args: [...sysEnv.python.args, '-X', 'utf8', '-u', tmp], cwd: ctx.cwd, timeoutMs: timeoutS * 1000, signal: ctx.signal, onData: live.push });
         live.end();
-        return { ok: r.code === 0 && !r.timedOut && !r.aborted, output: clipMiddle(formatProc(r, { timeoutS }).split(tmp).join('<script>')), display: procDisplay(r), silent: true };
+        return { ok: r.code === 0 && !r.timedOut && !r.aborted, output: commandOutput('', formatProc(r, { timeoutS }).split(tmp).join('<script>')), display: procDisplay(r), silent: true };
       } finally { dropTmp(tmp); }
     },
   },
