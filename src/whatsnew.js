@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.55.1', items: [
+    'Barre du bas : le budget de chat restant (la limite du site qui bloque les messages) à côté du contexte restant, aussi en fin de réponse ; jaune à 25 %, rouge à 10 %',
+  ] },
   { version: '3.55.0', items: [
     'Consommation réduite : environ un tiers de contexte en moins par session (mesuré en vrai, même résultat)',
     'Sorties de commandes trop longues : lignes répétées regroupées, erreurs et avertissements toujours gardés (un build bavard passe de 12 000 à 1 300 caractères) ; sorties de tests condensées',

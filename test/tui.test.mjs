@@ -312,3 +312,30 @@ test('réglette (comme /effort de Claude Code) : ← → déplacent le repère, 
   type(`${ESC}[D`); type(ESC); assert.equal(await p, null, '← au bout puis Échap : annulé');
   tui.stop();
 });
+
+test('barre d\'état : budget de chat restant puis contexte restant ; version courte si le terminal est étroit', async () => {
+  const { sim, tui, tick } = make({ cols: 110 });
+  tui.setStatus({ ctx: 15, budget: 87.4 }); await tick();
+  assert.match(sim.screen(), /budget restant : 87 % · contexte restant : 85 %/);
+  tui.setStatus({ budget: 0.4 }); await tick();
+  assert.match(sim.screen(), /budget restant : 0,4 %/);
+  tui.stop();
+  const n = make({ cols: 64 });
+  n.tui.setStatus({ ctx: 15, budget: 50 }); await n.tick();
+  assert.match(n.sim.screen(), /budget 50 % · ctx 85 %/);
+  n.tui.setStatus({ budget: null }); await n.tick();
+  assert.match(n.sim.screen(), /contexte restant : 85 %/);
+  assert.doesNotMatch(n.sim.screen(), /budget/);
+  for (const l of n.sim.lines()) assert.ok(strWidth(l) <= 64, `ligne trop large: ${l}`);
+  n.tui.stop();
+});
+
+test('chatBudget : pourcentage restant du compte, ou null (indisponible, lent)', async () => {
+  const { chatBudget, budgetText } = await import('../src/account.js');
+  assert.deepEqual(await chatBudget(1000, async () => ({ chatBudget: { usedPercent: 12.6, remainingPercent: 87.4, resetAt: 'x' } })), { left: 87.4, resetAt: 'x' });
+  assert.deepEqual(await chatBudget(1000, async () => ({ chatBudget: { usedPercent: 30 } })), { left: 70, resetAt: null });
+  assert.equal(await chatBudget(1000, async () => null), null);
+  assert.equal(await chatBudget(1000, async () => { throw new Error('réseau'); }), null);
+  assert.equal(await chatBudget(20, () => new Promise(r => setTimeout(() => r({ chatBudget: { remainingPercent: 5 } }), 200))), null);
+  assert.equal(budgetText(87.4), '87 %'); assert.equal(budgetText(0.4), '0,4 %'); assert.equal(budgetText(0), '0 %');
+});

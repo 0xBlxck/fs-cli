@@ -17,6 +17,22 @@ export async function contextPercent(chatId) {
   return Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : null;
 }
 
+/**
+ * Budget de chat restant du compte (la limite du site qui bloque les messages quand elle est atteinte, ≠ contexte) :
+ * { left: 0-100, resetAt } ou null (indisponible, ou pas de réponse en ms millisecondes).
+ */
+export async function chatBudget(ms = 4000, fetcher = fetchUserUsage) {
+  const dto = await Promise.race([fetcher().catch(() => null), new Promise(r => setTimeout(() => r(null), ms).unref?.())]);
+  const b = dto?.chatBudget;
+  if (!b) return null;
+  let left = Number(b.remainingPercent);
+  if (!Number.isFinite(left)) left = 100 - Number(b.usedPercent);
+  return Number.isFinite(left) ? { left: Math.min(100, Math.max(0, left)), resetAt: b.resetAt || null } : null;
+}
+
+/** « 72 % » arrondi (0,4 % → « 0,4 % » : presque vide, pas « 0 % ») */
+export const budgetText = left => left > 0 && left < 1 ? `${left.toFixed(1).replace('.', ',')} %` : `${Math.round(left)} %`;
+
 export function describeChatUsage(dto) {
   if (!dto) return ['usage de la conversation indisponible'];
   const t = dto.tokenUsage || {};

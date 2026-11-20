@@ -7,7 +7,7 @@ import path from 'node:path';
 import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents } from './api.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
-import { contextPercent } from './account.js';
+import { contextPercent, chatBudget, budgetText } from './account.js';
 import { cfg, saveCfg, saveCfgKeys } from './config.js';
 import { newSid, tag, lastReset } from './chats.js';
 import { execCall, baseDir, forgetRead } from './agent.js';
@@ -172,6 +172,7 @@ export const isOpenAiModel = (S, id = S.agentId) => {
 
 export async function runNative(S, userText, opts) {
   const { signal, ask, stream = streamChat, ctxPct = contextPercent } = opts;
+  const budgetOf = opts.budget !== undefined ? opts.budget : (opts.stream ? null : chatBudget);   // budget de chat du compte (tests : désactivé)
   const firstTurn = !S.chatId;                                         // 1er message d'une conversation (pour la récupération des refus)
   let content = userText;
   if (S.notes.length) { content = `[${S.notes.join(' ')}]\n${content}`; S.notes = []; }
@@ -358,8 +359,11 @@ export async function runNative(S, userText, opts) {
   S.stats ||= { turns: 0, requests: 0, tools: 0 }; S.stats.turns++; S.stats.requests += nReq; S.stats.tools += nTools;   // pour /usage
   let ctxBit = '';
   if (S.chatId) {
-    S.ctxPercent = await ctxPct(S.chatId).catch(() => null);
+    const [pct, budget] = await Promise.all([ctxPct(S.chatId).catch(() => null), budgetOf ? budgetOf().catch(() => null) : null]);
+    S.ctxPercent = pct;
+    if (budget) S.budget = budget;
     if (typeof S.ctxPercent === 'number') { const p = Math.round(S.ctxPercent); ctxBit = ' · ' + (p >= 80 ? c.red : p >= 60 ? c.yellow : c.dim)(`ctx ${p}%`); }
+    if (budget) ctxBit += ' · ' + (budget.left <= 10 ? c.red : budget.left <= 25 ? c.yellow : c.dim)(`budget ${budgetText(budget.left)}`);   // limite du site qui bloque les messages
   }
   ui.println('\n' + c.dim(`  ✻ Terminé en ${bits.join(' · ')}`) + ctxBit);
   if (secs > 15 && process.stdout.isTTY) process.stdout.write('\x07');   // tâche longue finie : alerte (la barre des tâches clignote si la fenêtre n'est pas au premier plan)

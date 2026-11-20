@@ -314,8 +314,16 @@ export class Tui {
     const ml = MODE_LABEL[st.mode] || MODE_LABEL.auto;
     const base = (this.busy ? c.dim('échap : interrompre · ') : '') + c.accent(ml[0]) + c.dim(' (maj+tab)');
     const leftStatus = this.flashText ? c.yellow(this.flashText) : (W > 70 && !this.busy ? base + c.dim(' · ? pour les raccourcis') : base);
+    // à droite : budget de chat du compte (la limite du site qui bloque les messages) puis contexte de la conversation
     const ctxLeft = st.ctx != null ? Math.max(0, 100 - Math.round(st.ctx)) : null;
-    const rightStatus = ctxLeft == null ? '' : (ctxLeft < 25 ? c.yellow : c.dim)(`contexte restant : ${ctxLeft} %`);
+    const bud = typeof st.budget === 'number' ? st.budget : null;
+    const budTxt = bud == null ? '' : bud > 0 && bud < 1 ? `${bud.toFixed(1).replace('.', ',')} %` : `${Math.round(bud)} %`;
+    const budCol = bud == null ? c.dim : bud <= 10 ? c.red : bud <= 25 ? c.yellow : c.dim;
+    const ctxCol = ctxLeft != null && ctxLeft < 25 ? c.yellow : c.dim;
+    const statusRight = (long) => [bud != null ? budCol(long ? `budget restant : ${budTxt}` : `budget ${budTxt}`) : '',
+      ctxLeft != null ? ctxCol(long ? `contexte restant : ${ctxLeft} %` : `ctx ${ctxLeft} %`) : ''].filter(Boolean).join(c.dim(' · '));
+    let rightStatus = statusRight(true);
+    if (W - 2 - strWidth(leftStatus) - strWidth(rightStatus) - 1 <= 1) rightStatus = statusRight(false);   // terminal étroit : version courte
     const sgap = W - 2 - strWidth(leftStatus) - strWidth(rightStatus) - 1;
     lines.push('  ' + leftStatus + (rightStatus && sgap > 1 ? ' '.repeat(sgap) + rightStatus : ''));
 

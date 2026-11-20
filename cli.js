@@ -10,7 +10,7 @@ import os from 'node:os';
 import { execSync, spawnSync, spawn } from 'node:child_process';
 
 import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone, unmarkSessionsGone, encodeHistory, decodeHistory, historyKeeps } from './src/config.js';
-import { fetchChatUsage, contextPercent } from './src/account.js';
+import { fetchChatUsage, contextPercent, chatBudget } from './src/account.js';
 import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride, effectiveProject } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
@@ -426,8 +426,10 @@ const input = opts.stdio ? new StdioInput({ startBusy: true }) : createInput({
 let busy = false, turnAbort = null;
 let holdInput = !!opts.stdio;                                          // démarrage du panneau : la file reste fermée jusqu'à la confiance du dossier
 const ask = query => input.askLine(query);
-const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
+const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, budget: S.budget ? S.budget.left : null, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
+// budget de chat du compte dans la barre d'état dès l'ouverture (sans attendre ; mis à jour après chaque réponse)
+if (!opts.print && agents) chatBudget(8000).then(b => { if (b) { S.budget = b; refreshStatus(); } }).catch(() => {});
 
 function banner() {
   if (opts.stdio) {
