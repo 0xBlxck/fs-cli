@@ -442,16 +442,18 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.55.1 en tête, puis 3.55.0, 3.54.4, 3.54.3, 3.54.2, 3.54.1, 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [, , , , , , m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
-  assert.equal(WHATS_NEW[0].version, '3.55.1');
-  assert.match(WHATS_NEW[0].items[0], /budget de chat restant/);
-  assert.equal(WHATS_NEW[1].version, '3.55.0');
-  assert.match(WHATS_NEW[1].items[0], /Consommation réduite/);
-  assert.equal(WHATS_NEW[2].version, '3.54.4');
-  assert.equal(WHATS_NEW[3].version, '3.54.3');
-  assert.equal(WHATS_NEW[4].version, '3.54.2');
-  assert.equal(WHATS_NEW[5].version, '3.54.1');
+test('nouveautés : entrée 3.55.2 en tête, puis 3.55.1, 3.55.0, 3.54.4, 3.54.3, 3.54.2, 3.54.1, 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [, , , , , , , m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(WHATS_NEW[0].version, '3.55.2');
+  assert.match(WHATS_NEW[0].items[0], /aperçu en direct/);
+  assert.equal(WHATS_NEW[1].version, '3.55.1');
+  assert.match(WHATS_NEW[1].items[0], /budget de chat restant/);
+  assert.equal(WHATS_NEW[2].version, '3.55.0');
+  assert.match(WHATS_NEW[2].items[0], /Consommation réduite/);
+  assert.equal(WHATS_NEW[3].version, '3.54.4');
+  assert.equal(WHATS_NEW[4].version, '3.54.3');
+  assert.equal(WHATS_NEW[5].version, '3.54.2');
+  assert.equal(WHATS_NEW[6].version, '3.54.1');
   assert.equal(m.version, '3.54.0');
   assert.match(m.items[0], /serveurs MCP/);
   assert.equal(z.version, '3.53.0');

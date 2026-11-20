@@ -339,3 +339,38 @@ test('chatBudget : pourcentage restant du compte, ou null (indisponible, lent)',
   assert.equal(await chatBudget(20, () => new Promise(r => setTimeout(() => r({ chatBudget: { remainingPercent: 5 } }), 200))), null);
   assert.equal(budgetText(87.4), '87 %'); assert.equal(budgetText(0.4), '0,4 %'); assert.equal(budgetText(0), '0 %');
 });
+
+test('menu avec aperçu (/theme) : onMove à chaque flèche, puis le menu est redessiné avec le nouveau thème ; Échap → null', async () => {
+  const ui = await import('../src/ui.js');
+  const before = ui.theme.name;
+  const { type, tick, tui, sim } = make();
+  const names = ['cyan', 'red', 'green'];
+  const moves = [];
+  let p = tui.select({ title: 'Thème', options: names, defaultIndex: 0, onMove: i => { moves.push(i); ui.theme.name = names[i]; } });
+  await tick();
+  type(`${ESC}[B`); await tick();
+  assert.deepEqual(moves, [1]);
+  assert.equal(ui.theme.name, 'red');
+  assert.match(sim.screen(), /❯ 2\. red/);
+  type(`${ESC}[A`); type(`${ESC}[A`); await tick();                     // remonte : 0 puis boucle sur 2
+  assert.deepEqual(moves, [1, 0, 2]);
+  type('\r'); assert.equal(await p, 2);
+  assert.deepEqual(moves, [1, 0, 2], 'Entrée ne déclenche pas d\'aperçu de plus');
+  p = tui.select({ title: 'Thème', options: names, defaultIndex: 0, onMove: i => moves.push(i) });
+  type(ESC); assert.equal(await p, null);
+  tui.stop();
+  ui.theme.name = before;
+});
+
+test('menu avec zone d\'aperçu : lignes recalculées à chaque déplacement, dans la largeur', async () => {
+  const { sim, type, tick, tui } = make({ cols: 50, rows: 24 });
+  const names = ['cyan', 'red', 'green'];
+  const p = tui.select({ title: 'Thème', options: names, defaultIndex: 0, preview: i => [`aperçu du thème ${names[i]} ` + 'x'.repeat(80)] });
+  await tick();
+  assert.match(sim.screen(), /aperçu du thème cyan/);
+  type(`${ESC}[B`); await tick();
+  assert.match(sim.screen(), /aperçu du thème red/);
+  for (const l of sim.lines()) assert.ok(strWidth(l) <= 50, `ligne trop large: ${l}`);
+  type('\r'); assert.equal(await p, 1);
+  tui.stop();
+});

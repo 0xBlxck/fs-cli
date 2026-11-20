@@ -330,7 +330,7 @@ function copyToClipboard(text) {
 }
 
 // ── Complétion ────────────────────────────────────────────────────────────────
-const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/models', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
+const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
   '/continue', '/navigateur ', '/doctor', '/vscode', '/projet ', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
   '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/nouveautes', '/conversations', '/quit'];
 
@@ -478,7 +478,7 @@ function banner() {
 }
 
 const HELP_ROWS = [
-    ['/new', 'nouvelle conversation'], ['/model [nom|id|n°]', 'changer de modèle (conversation conservée)'], ['/models', 'lister les modèles'],
+    ['/new', 'nouvelle conversation'], ['/model', 'choisir le modèle (menu à flèches, conversation conservée)'],
     ['/mode [auto|edits|ask|plan]', 'auto : tout s\'exécute sauf actions dangereuses · edits : fichiers sans demander, commandes confirmées · ask : confirme chaque action · plan : rien n\'est exécuté (Maj+Tab pour changer)'],
     ['/cd <dossier>', 'changer de dossier de travail'], ['/target [dossier|clear]', 'dossier où écrire les fichiers à nom relatif (détecté si ta demande cite un chemin)'], ['/read <fichier>', 'joindre un fichier au prochain message (ou @fichier)'],
     ['/run [n|all]', 'exécuter les blocs de code de la dernière réponse (écrit aussi les fichiers nommés)'],
@@ -838,21 +838,20 @@ async function command(line) {
       S.turnMarks = []; S.lastEditorCtx = null; S.fetchedUrls = null; S.briefSent = null; S.allow = {}; S.undo = []; S.title = ''; S.pendingFiles = []; S.pendingContext = []; S.images = []; S.imageTags = {}; S.sid = newSid(); S.slots = {};
       if (opts.stdio) { stdioSend('clear'); refreshPrompt(); return; }   // panneau : page vierge (accueil), pas une ligne à la suite
       return println(c.dim('  → nouvelle conversation') + (createdToday() >= DAILY_LIMIT - 8 ? c.yellow(`  (⚠ ${createdToday()}/${DAILY_LIMIT} nouvelles conversations créées aujourd'hui)`) : ''));
-    case '/models': {
-      println(); sortedModelIds(AGENTS).map(id => [id, AGENTS[id]]).forEach(([id, n], i) =>
-        println(`  ${c.dim(String(i + 1).padStart(2))}  ${c.dim(id.padStart(6))}  ${n}${id === String(S.agentId) ? c.accent('  ◀') : ''}${cfg.toolRefusals?.[id] ? c.dim('  · a refusé les outils une fois') : ''}`));
-      return println();
-    }
+    case '/models':                                                    // ancien nom : même chose que /model (une seule commande)
     case '/model': {
       if (!arg && interactive && input.select) {                      // comme Claude Code : menu à flèches, modèle actuel présélectionné
-        const list = Object.entries(AGENTS);
+        const list = sortedModelIds(AGENTS).map(id => [id, AGENTS[id]]);   // du plus puissant au moins puissant (mêmes n° que « /model 2 »)
         const idx = await input.select({ title: 'Modèle', detail: 'Ta conversation est conservée.', options: list.map(([id, n]) => n + (String(id) === String(S.agentId) ? '  (actuel)' : '')), defaultIndex: Math.max(0, list.findIndex(([id]) => String(id) === String(S.agentId))) });
         if (!Number.isInteger(idx) || !list[idx]) return println(c.dim('  modèle inchangé'));
         arg = list[idx][0];
       }
-      if (!arg) { println(c.dim(`  modèle actuel: ${modelName()} — /models pour la liste`)); return; }
+      if (!arg) {                                                      // sans menu (terminal simple) : la liste numérotée
+        println(); sortedModelIds(AGENTS).forEach((id, i) => println(`  ${c.dim(String(i + 1).padStart(2))}  ${c.dim(id.padStart(6))}  ${AGENTS[id]}${id === String(S.agentId) ? c.accent('  ◀') : ''}${cfg.toolRefusals?.[id] ? c.dim('  · a refusé les outils une fois') : ''}`));
+        println(); return println(c.dim('  /model <nom ou n°> pour changer'));
+      }
       const id = resolveModel(arg);
-      if (id === null) return println(c.red(`  modèle inconnu: ${arg}`) + c.dim('  (/models)'));
+      if (id === null) return println(c.red(`  modèle inconnu: ${arg}`) + c.dim('  (/model pour la liste)'));
       S.agentId = id; cfg.agentId = id; saveCfg(); saveSession();
       if (cfg.toolRefusals?.[String(id)]) println(c.dim('  ℹ ce modèle a déjà refusé une fois d\'utiliser les outils (souvent à cause de la demande elle-même) : s\'il recommence, reformule ou change de modèle'));
       return println(c.dim(`  → ${modelName()}`) + (S.chatId ? c.dim(' · conversation conservée') : ''));
@@ -880,8 +879,13 @@ async function command(line) {
     case '/theme': {
       if (!arg && interactive && input.select) {
         const names = Object.keys(THEMES);
-        const idx = await input.select({ title: 'Thème', options: names.map(t => t + (t === cfg.theme ? '  (actuel)' : '')), defaultIndex: Math.max(0, names.indexOf(cfg.theme)) });
-        if (!Number.isInteger(idx) || !names[idx]) return println(c.dim('  thème inchangé'));
+        // aperçu en direct : chaque flèche applique le thème au menu et à la barre ; Échap revient au thème d'avant
+        const idx = await input.select({ title: 'Thème', detail: 'Aperçu en direct · Échap revient au thème actuel',
+          options: names.map(t => `${t}${t === cfg.theme ? '  (actuel)' : ''}  ${ui.sgr(38, THEMES[t])}●●●\x1b[39m`),
+          defaultIndex: Math.max(0, names.indexOf(cfg.theme)), onMove: i => { if (names[i]) ui.theme.name = names[i]; },
+          // aperçu : à quoi ressemblent la réponse, le cadre et la barre du bas avec le thème survolé
+          preview: () => [c.accent('●') + ' Voici une réponse du modèle avec ce thème.', c.accent('╭────────────────────────────╮') + c.dim('   ') + c.accent('⏵⏵ auto') + c.dim(' (maj+tab)'), c.accent('│') + ' > ta demande ici           ' + c.accent('│'), c.accent('╰────────────────────────────╯')] });
+        if (!Number.isInteger(idx) || !names[idx]) { ui.theme.name = cfg.theme; refreshPrompt(); return println(c.dim('  thème inchangé')); }
         arg = names[idx];
       }
       if (!THEMES[arg]) return println(c.red('  thèmes: ') + Object.keys(THEMES).join(' · '));

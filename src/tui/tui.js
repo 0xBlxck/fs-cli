@@ -125,9 +125,10 @@ export class Tui {
    */
   select(o) {
     if (this.busyUi()) return new Promise(res => { (this.uiQueue ||= []).push(() => this.select(o).then(res)); });
-    const { title, detail = '', options, defaultIndex = 0, tabs = null, tab = 0, slider = null } = o;   // slider : { left, right } → réglette ← →
+    // slider : { left, right } → réglette ← → ; onMove(idx) : appelé à chaque déplacement (aperçu en direct, ex. /theme)
+    const { title, detail = '', options, defaultIndex = 0, tabs = null, tab = 0, slider = null, onMove = null, preview = null } = o;
     return new Promise(resolve => {
-      this.select_ = { title, detail, options, idx: defaultIndex, tabs, tab, slider, resolve };
+      this.select_ = { title, detail, options, idx: defaultIndex, tabs, tab, slider, onMove, preview, resolve };
       this.render();
       this.attention(true);
     });
@@ -229,10 +230,13 @@ export class Tui {
         const bar = s.tabs.map((t, i) => (i === s.tab ? c.accent(c.bold(`▌ ${t} ▐`)) : c.dim(`  ${t}  `))).join('  ');
         lines.push('  ' + bar + c.dim('     ← → changer d\'onglet'));
       }
-      const fixed = lines.length + 4;                                   // titre/onglets + vide + règle + aide
+      // aperçu (ex. /theme) : lignes en couleur, recalculées à chaque déplacement
+      let pv = []; if (typeof s.preview === 'function') { try { pv = (s.preview(s.idx) || []).slice(0, 4); } catch {} }
+      const fixed = lines.length + 4 + (pv.length ? pv.length + 1 : 0);   // titre/onglets + vide + règle + aide (+ aperçu)
       const optRoom = Math.max(3, maxRows - 1 - fixed);
       const detailMax = Math.max(0, Math.min(8, maxRows - 1 - fixed - Math.min(s.options.length, optRoom)));
       for (const l of String(s.detail || '').split('\n').filter(x => x.trim()).slice(0, detailMax)) lines.push('  ' + c.dim(l));
+      if (pv.length) { lines.push(''); for (const l of pv) lines.push('  ' + clipAnsi(l, W - 3)); }
       lines.push('');
       // fenêtre d'options autour de la sélection quand tout ne tient pas (la dernière, souvent « Annuler », reste atteignable)
       const room = Math.max(3, maxRows - 1 - lines.length - 2);
@@ -401,6 +405,11 @@ export class Tui {
   }
 
   keySelect(k) {
+    const s = this.select_, before = s?.idx;
+    this.keySelectMove(k);
+    if (s && this.select_ === s && s.idx !== before && s.onMove) { try { s.onMove(s.idx); } catch {} this.render(); }
+  }
+  keySelectMove(k) {
     const s = this.select_;
     if (s.slider && (k.name === 'left' || k.name === 'right')) {       // réglette : ← moins, → plus (bloquée aux bouts, comme Claude Code)
       s.idx = Math.max(0, Math.min(s.options.length - 1, s.idx + (k.name === 'right' ? 1 : -1)));

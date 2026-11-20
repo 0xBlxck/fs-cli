@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.55.2', items: [
+    '`/theme` : aperçu en direct, le thème change pendant que tu bouges avec les flèches (réponse, cadre et barre du bas montrés), Échap revient à l’ancien',
+    '`/model` : une seule commande, avec le menu à flèches classé du plus puissant au moins puissant (`/models` fait la même chose)',
+  ] },
   { version: '3.55.1', items: [
     'Barre du bas : le budget de chat restant (la limite du site qui bloque les messages) à côté du contexte restant, aussi en fin de réponse ; jaune à 25 %, rouge à 10 %',
   ] },

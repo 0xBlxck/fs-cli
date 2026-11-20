@@ -755,7 +755,7 @@ export async function extraCommand(cmd, arg, env) {
       if (!arg) { println(c.dim(`  modèle des agents : ${cfg.workerModel != null ? modelName(cfg.workerModel) : 'le modèle courant'} — /workers <modèle> · /workers auto`)); return true; }
       if (/^(auto|défaut|default)$/i.test(arg)) { cfg.workerModel = null; saveCfg(); println(c.dim('  → agents : modèle courant')); return true; }
       const id = resolveModel(arg);
-      if (id === null) { println(c.red('  modèle inconnu') + c.dim(' (/models)')); return true; }
+      if (id === null) { println(c.red('  modèle inconnu') + c.dim(' (/model pour la liste)')); return true; }
       cfg.workerModel = id; saveCfg(); println(c.dim(`  → agents de /team : ${modelName(id)}`)); return true;
     }
     case '/sound': cfg.sound = arg ? /^(on|1|oui|true)$/i.test(arg) : !cfg.sound; saveCfg(); println(c.dim(`  → bip de fin ${cfg.sound ? 'ON' : 'OFF'}`)); if (cfg.sound) process.stdout.write('\x07'); return true;
