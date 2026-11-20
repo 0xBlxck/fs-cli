@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.55.3', items: [
+    '`/theme ` + espace : aperçu en direct aussi dans la petite liste (pastille de couleur, le thème change au survol), un seul Entrée pour valider ; pareil pour `/mode` et `/effort`',
+  ] },
   { version: '3.55.2', items: [
     '`/theme` : aperçu en direct, le thème change pendant que tu bouges avec les flèches (réponse, cadre et barre du bas montrés), Échap revient à l’ancien',
     '`/model` : une seule commande, avec le menu à flèches classé du plus puissant au moins puissant (`/models` fait la même chose)',

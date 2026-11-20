@@ -374,3 +374,21 @@ test('menu avec zone d\'aperçu : lignes recalculées à chaque déplacement, da
   type('\r'); assert.equal(await p, 1);
   tui.stop();
 });
+
+test('suggestions avec aperçu (/theme <valeur>) : survol aux flèches → onFocus ; liste fermée sans choix → onLeave', async () => {
+  let current = 'cyan'; const log = [];
+  const suggester = buf => {
+    const m = /^\/theme (\S*)$/.exec(buf); if (!m) return null;
+    return { start: 7, onLeave: () => { log.push('leave'); current = 'cyan'; }, items: ['cyan', 'red', 'green'].filter(t => t.startsWith(m[1])).map(t => ({ label: t, insert: t, desc: '', submit: true, onFocus: () => { log.push(t); current = t; } })) };
+  };
+  const { type, tick, tui, submits } = make({ suggester });
+  type('/theme '); await tick();
+  type(`${ESC}[B`); type(`${ESC}[B`);
+  assert.deepEqual(log, ['cyan', 'red']); assert.equal(current, 'red');
+  type('g');                                                             // filtre : la liste reste une liste de thèmes, pas de retour
+  assert.equal(current, 'red');
+  type(ESC); assert.equal(current, 'cyan'); assert.deepEqual(log.at(-1), 'leave');
+  type('\x15'); type('/theme '); type(`${ESC}[B`); type(`${ESC}[B`); type('\r');   // Entrée sur « red » : la commande part (elle appliquera le thème)
+  assert.deepEqual(submits, ['/theme red']);
+  tui.stop();
+});

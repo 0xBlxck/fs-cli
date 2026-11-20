@@ -401,8 +401,9 @@ function suggest(buf, cur) {
     const q = m[2].toLowerCase();
     const values = m[1] === '/effort' ? EFFORT_LEVELS.map(l => ({ label: l, insert: l, desc: EFFORT_DESC[l] }))
       : m[1] === '/mode' ? [...MODES, 'tout'].map(x => ({ label: x, insert: x, desc: MODE_DESC[x] || 'tout autoriser (cette session seulement)' }))
-      : Object.keys(THEMES).map(t => ({ label: t, insert: t, desc: t === cfg.theme ? 'actuel' : '' }));
-    return { start: m[1].length + 1, items: values.filter(v => v.label.startsWith(q)) };
+      // thèmes : aperçu en direct quand on survole aux flèches (cadre, barre…), retour au thème actuel si la liste se ferme sans choix
+      : Object.keys(THEMES).map(t => ({ label: t, insert: t, desc: `${ui.sgr(38, THEMES[t])}●●●\x1b[39m${t === cfg.theme ? '  actuel' : ''}`, onFocus: () => { ui.theme.name = t; } }));
+    return { start: m[1].length + 1, items: values.filter(v => v.label.startsWith(q)).map(v => ({ ...v, submit: true })), ...(m[1] === '/theme' ? { onLeave: () => { ui.theme.name = THEMES[cfg.theme] ? cfg.theme : 'cyan'; } } : {}) };
   }
   if ((m = /^\/(?:model|duel|workers) (.*)$/.exec(upto))) {
     const q = m[1].toLowerCase();

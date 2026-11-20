@@ -25,7 +25,7 @@ export class Tui {
     this.queue = []; this.busy = false; this.spinnerText = null; this.tasks = []; this.tipIdx = Math.floor(Math.random() * 8); this.lastEsc = 0;
     this.status = { model: '', mode: 'auto', cwd: '', ctx: null };
     this.flashText = ''; this.flashTimer = null; this.lastCtrlC = 0;
-    this.sug = { items: [], idx: -1, start: 0 }; this.sugOff = null;
+    this.setSug({ items: [], idx: -1, start: 0 }); this.sugOff = null;
     this.search = null; this.ask = null; this.askSaved = null; this.select_ = null;
     this.handlers = { submit: [], interrupt: [], quit: [], cycleMode: [], pasteImage: [], rewind: [], expand: [] };
     this.started = false;
@@ -107,7 +107,7 @@ export class Tui {
     if (this.busyUi()) return new Promise(res => { (this.uiQueue ||= []).push(() => this.askLine(label).then(res)); });
     return new Promise(resolve => {
       this.askSaved = { buf: this.buf, cur: this.cur };
-      this.buf = ''; this.cur = 0; this.sug = { items: [], idx: -1, start: 0 };
+      this.buf = ''; this.cur = 0; this.setSug({ items: [], idx: -1, start: 0 });
       this.ask = { label: stripAnsi(label).trim(), resolve };
       this.render();
     });
@@ -348,7 +348,7 @@ export class Tui {
     this.cur += text.length; this.histIdx = -1; this.edited();
   }
   edited() { this.updateSuggestions(); this.render(); }
-  clearInput() { this.buf = ''; this.cur = 0; this.histIdx = -1; this.sug = { items: [], idx: -1, start: 0 }; this.render(); }
+  clearInput() { this.buf = ''; this.cur = 0; this.histIdx = -1; this.setSug({ items: [], idx: -1, start: 0 }); this.render(); }
   /** largeur du texte dans le cadre de saisie : la même pour l'affichage (compose) et pour ↑ ↓ (layout) */
   textWidth() { return Math.max(10, this.screen.getCols() - 7); }
   layout() { return layoutInput(this.buf, this.cur, this.textWidth()); }
@@ -361,11 +361,21 @@ export class Tui {
   }
 
   // ── suggestions ─────────────────────────────────────────────────────────────
+  /** remplace la liste de suggestions ; un aperçu en cours (ex. /theme survolé) est annulé quand la liste se ferme ou change de nature */
+  setSug(s) {
+    this.sug = s;
+    if (this.sugLeave && !s.items.some(i => i.onFocus)) { const leave = this.sugLeave; this.sugLeave = null; try { leave(); } catch {} }
+  }
+  /** suggestion survolée aux flèches : aperçu en direct si elle en a un */
+  focusSug() {
+    const it = this.sug.items[this.sug.idx];
+    if (it?.onFocus) { try { it.onFocus(); } catch {} this.sugLeave = this.sug.onLeave || this.sugLeave; }
+  }
   updateSuggestions() {
-    if (this.ask || this.search || !this.suggester || this.sugOff === this.buf) { this.sug = { items: [], idx: -1, start: 0 }; return; }
+    if (this.ask || this.search || !this.suggester || this.sugOff === this.buf) { this.setSug({ items: [], idx: -1, start: 0 }); return; }
     let r = null;
     try { r = this.suggester(this.buf, this.cur); } catch {}
-    this.sug = r && r.items?.length ? { items: r.items.slice(0, 60), idx: -1, start: r.start } : { items: [], idx: -1, start: 0 };
+    this.setSug(r && r.items?.length ? { items: r.items.slice(0, 60), idx: -1, start: r.start, onLeave: r.onLeave || null } : { items: [], idx: -1, start: 0 });
   }
   acceptSuggestion() {
     const it = this.sug.items[this.sug.idx >= 0 ? this.sug.idx : 0];
@@ -500,11 +510,11 @@ export class Tui {
   }
 
   up() {
-    if (this.sug.items.length) { this.sug.idx = this.sug.idx <= 0 ? this.sug.items.length - 1 : this.sug.idx - 1; return this.render(); }
+    if (this.sug.items.length) { this.sug.idx = this.sug.idx <= 0 ? this.sug.items.length - 1 : this.sug.idx - 1; this.focusSug(); return this.render(); }
     if (!this.moveVert(-1) && !this.ask) this.histPrev();
   }
   down() {
-    if (this.sug.items.length) { this.sug.idx = this.sug.idx >= this.sug.items.length - 1 ? 0 : this.sug.idx + 1; return this.render(); }
+    if (this.sug.items.length) { this.sug.idx = this.sug.idx >= this.sug.items.length - 1 ? 0 : this.sug.idx + 1; this.focusSug(); return this.render(); }
     if (!this.moveVert(1) && !this.ask) this.histNext();
   }
   tab() {
@@ -516,7 +526,7 @@ export class Tui {
     const now = Date.now();
     if (!this.busy && !this.ask && !this.buf && !this.sug.items.length && now - this.lastEsc < 600) { this.lastEsc = 0; return this.emit('rewind'); }
     this.lastEsc = now;
-    if (this.sug.items.length) { this.sugOff = this.buf; this.sug = { items: [], idx: -1, start: 0 }; return this.render(); }
+    if (this.sug.items.length) { this.sugOff = this.buf; this.setSug({ items: [], idx: -1, start: 0 }); return this.render(); }
     if (this.ask) return this.finishAsk(null);
     if (this.busy) { this.lastEsc = 0; return this.emit('interrupt'); }   // Échap ×2 pour arrêter le modèle n'ouvre plus /rewind
     if (this.buf) {
@@ -544,7 +554,7 @@ export class Tui {
   enter() {
     if (this.sug.items.length && this.sug.idx >= 0) {
       const it = this.acceptSuggestion();
-      if (it && /^\/\S*$/.test(this.buf.trim()) && !it.keepOpen && !/\s$/.test(it.insert)) this.submit();
+      if (it && (/^\/\S*$/.test(this.buf.trim()) || it.submit) && !it.keepOpen && !/\s$/.test(it.insert)) this.submit();   // it.submit : valeur d'une commande (/theme red) → exécutée tout de suite
       return;
     }
     if (this.ask) { const v = this.buf; return this.finishAsk(v); }
@@ -556,7 +566,7 @@ export class Tui {
     const text = this.buf.trim();
     if (!text) return;
     this.pushHistory(text);
-    this.buf = ''; this.cur = 0; this.histIdx = -1; this.sug = { items: [], idx: -1, start: 0 }; this.sugOff = null;
+    this.buf = ''; this.cur = 0; this.histIdx = -1; this.setSug({ items: [], idx: -1, start: 0 }); this.sugOff = null;
     if (this.busy) { this.queue.push(text); this.flash('message mis en file d\'attente'); return; }
     this.echo(text);
     this.tipIdx++;
