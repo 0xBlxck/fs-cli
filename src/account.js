@@ -10,6 +10,20 @@ export const fetchChatUsage = chatId => (chatId ? getJson(`/chats/${encodeURICom
 /** { rateLimits[], chatBudget, rateLimitPowerUpActive }, ou null */
 export const fetchUserUsage = () => getJson('/user/usage', 8000);
 
+/**
+ * Contexte MESURÉ par France Student (GET /chats/{id}/context, celui qu'appelle le site) : { usedTokens, contextWindow,
+ * usagePercent, categories[] } ou null. usedTokens = ce que le modèle relit à la prochaine requête (consignes du site,
+ * outils, règles, conversation) — le vrai chiffre d'entrée : avec Claude, tokenUsage.promptTokenCount ne compte que
+ * la petite partie hors cache (≈ 4 par requête).
+ */
+export async function fetchChatContext(chatId, ms = 4000) {
+  if (!chatId) return null;
+  const dto = await getJson(`/chats/${encodeURIComponent(chatId)}/context`, ms).catch(() => null);
+  const d = dto?.data ?? dto;
+  const used = Number(d?.usedTokens);
+  return Number.isFinite(used) && used > 0 ? { usedTokens: used, contextWindow: Number(d.contextWindow) || null, usagePercent: Number(d.usagePercent), categories: Array.isArray(d.categories) ? d.categories : [] } : null;
+}
+
 /** Pourcentage de contexte utilisé (0-100) ou null */
 export async function contextPercent(chatId) {
   const dto = await fetchChatUsage(chatId);

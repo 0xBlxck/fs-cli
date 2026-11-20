@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.55.4', items: [
+    'Fin de réponse : le vrai nombre de tokens relus par le modèle (mesuré par France Student, cache compris) au lieu du « 4↑ » qui ne comptait que le hors-cache',
+    'Pendant l’attente, comme Claude Code : durée depuis le début de ta demande et tokens reçus en direct (« 12 s · ↓ 340 tokens »)',
+  ] },
   { version: '3.55.3', items: [
     '`/theme ` + espace : aperçu en direct aussi dans la petite liste (pastille de couleur, le thème change au survol), un seul Entrée pour valider ; pareil pour `/mode` et `/effort`',
   ] },

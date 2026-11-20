@@ -1331,7 +1331,7 @@ async function chatTurn(text, { keepLast = false, retry = false } = {}) {
     if (!S.title) S.title = own.replace(/\s+/g, ' ').trim().slice(0, 60) || 'Conversation';   // provisoire (sans le contexte de l'éditeur) : remplacé par le titre de France Student dès qu'il est connu
     try {
       const agentBefore = S.agentId, turnT0 = Date.now();
-      try { await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text, choose: interactive && input.select ? o => input.select(o) : null }); } finally { attachSentToChat(); }   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
+      try { await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text, choose: interactive && input.select ? o => input.select(o) : null }); } finally { ui.liveTokens.end(); attachSentToChat(); }   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
       if (cfg.webhook) {                                               // fin de demande → webhook (CI, notifications) : jamais de jeton ni de contenu de fichier
         const mark = (S.turnMarks || []).at(-1);
         const files = mark && S.undo.length > mark.at ? summarizeChanges(S.undo, mark.at).map(f => ({ file: path.relative(S.cwd, f.path), added: f.added, removed: f.removed, created: !!f.created, deleted: !!f.deleted })) : [];

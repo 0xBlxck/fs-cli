@@ -390,3 +390,31 @@ test('GPT Astra (-1004, -1006) qui refuse plus tard dans la conversation : pas d
     assert.deepEqual([r.switchedFrom, r.switchedTo, S.agentId], [id, -2003, -2003]);
   }
 });
+
+test('tokens relus : vrai chiffre mesuré (/context − tokens écrits) au lieu du « 4↑ » hors cache de Claude ; sans mesure, pas de ↑ trompeur', async () => {
+  const ui = await import('../src/ui.js');
+  const scenario = () => {
+    const st = { i: 0, order: [] };
+    const stream = async (o) => {
+      st.order.push('req'); if (!o.chatId) o.onChat?.('chat-ctx');
+      const t = st.i++ === 0 ? { calls: [{ callId: 'r1', name: 'list_directory', arguments: { path: '.' } }] } : { text: 'fini' };
+      if (t.text) o.onText?.(t.text);
+      return { text: t.text || '', usage: { promptTokenCount: 4, candidatesTokenCount: 50, totalTokenCount: 54, reasoningTokenCount: 0 }, toolCalls: t.calls || [], documents: [] };
+    };
+    return { st, stream };
+  };
+  const lines = [];
+  ui.attachSink({ print: s => lines.push(ui.stripAnsi(String(s))), spinner() {} });
+  try {
+    const { S } = mk(); const f = scenario(); const sizes = [10000, 10600];
+    await runNative(S, 'liste', { ...io(), stream: f.stream, budget: null, ctxOf: async () => { f.st.order.push('mesure'); return { usedTokens: sizes.shift() }; } });
+    assert.deepEqual(f.st.order, ['req', 'mesure', 'req', 'mesure'], 'chaque mesure avant la requête suivante');
+    assert.ok(lines.some(l => /Terminé .*2 requêtes · 20\.5k↑ 100↓ tok/.test(l)), lines.join('|'));
+    assert.equal(S.tokens.in, 20500);
+    lines.length = 0;
+    const b = mk(); const g = scenario();
+    await runNative(b.S, 'liste', { ...io(), stream: g.stream, budget: null, ctxOf: async () => null });
+    const done = lines.find(l => /Terminé/.test(l)) || '';
+    assert.match(done, /· 100↓ tok/); assert.doesNotMatch(done, /↑/);
+  } finally { ui.attachSink(null); }
+});

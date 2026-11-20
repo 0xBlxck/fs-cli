@@ -127,3 +127,24 @@ test('préférences v4 : liste allégée, actions groupées, environnement ; tou
   assert.doesNotMatch(shellEnv('win32', 'pwsh', 'PowerShell 7.5.0'), /&&/);
   assert.match(shellEnv('darwin'), /macOS ; les commandes passent par bash/);
 });
+
+test('indicateur d\'attente : « ↓ N tokens » en direct pendant la demande, durée depuis le début de la demande, rien hors demande', async () => {
+  const ui = await import('../src/ui.js');
+  const frames = [];
+  ui.attachSink({ print() {}, spinner: t => { if (t) frames.push(ui.stripAnsi(t)); } });
+  try {
+    ui.liveTokens.add('x'.repeat(700));                                  // hors demande : ignoré
+    ui.spinner.start('réflexion…'); ui.spinner.stop();
+    assert.doesNotMatch(frames.at(-1), /tokens/);
+    ui.liveTokens.reset();
+    ui.liveTokens.add('x'.repeat(350));
+    ui.spinner.start('réflexion…');
+    assert.match(frames.at(-1), /\(0 s · ↓ 100 tokens · échap pour interrompre\)/);
+    ui.liveTokens.add('y'.repeat(3500));
+    await new Promise(r => setTimeout(r, 120));
+    assert.match(frames.at(-1), /↓ 1,1k tokens/);
+    ui.spinner.stop(); ui.liveTokens.end();
+    ui.spinner.start('réflexion…'); ui.spinner.stop();
+    assert.doesNotMatch(frames.at(-1), /tokens/);
+  } finally { ui.spinner.stop(); ui.liveTokens.end(); ui.attachSink(null); }
+});

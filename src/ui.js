@@ -122,12 +122,23 @@ export function println(s = '') { out(s + '\n'); }
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
 const VERBS = ['Réflexion', 'Cogitation', 'Élaboration', 'Gamberge', 'Peaufinage', 'Fignolage', 'Mijotage', 'Bricolage', 'Conception', 'Méditation', 'Ruminage', 'Déduction', 'Orchestration', 'Tricotage', 'Distillation'];
 let sp = null;
+// tokens reçus en direct pendant la demande en cours (comme « ↓ 77 tokens » de Claude Code) : estimés d'après le texte reçu
+// (réponse, réflexion, arguments des outils) ; le compte exact de France Student s'affiche à la fin (« ✻ Terminé … ↓ tok »).
+let liveChars = 0, liveT0 = 0;                                       // liveT0 : début de la demande (la durée ne repart pas à 0 à chaque requête)
+export const liveTokens = {
+  reset() { liveChars = 0; liveT0 = Date.now(); },
+  end() { liveChars = 0; liveT0 = 0; },
+  add(text) { if (liveT0) liveChars += String(text || '').length; },
+  get count() { return Math.round(liveChars / 3.5); },
+};
+const fmtTok = n => (n >= 1000 ? `${(n / 1000).toFixed(1).replace('.', ',')}k` : String(n));
 function draw() {
   if (!sp) return;
-  const s = Math.floor((Date.now() - sp.t0) / 1000);
+  const s = Math.floor((Date.now() - (liveT0 || sp.t0)) / 1000);
   const dur = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
   const frame = FRAMES[Math.floor(sp.i++ / 1.5) % FRAMES.length];
-  const text = `${c.accent(frame)} ${c.accent(sp.label)} ${c.dim(`(${dur} · échap pour interrompre)`)}`;
+  const tok = liveTokens.count;
+  const text = `${c.accent(frame)} ${c.accent(sp.label)} ${c.dim(`(${dur}${tok ? ` · ↓ ${fmtTok(tok)} tokens` : ''} · échap pour interrompre)`)}`;
   if (sink) sink.spinner(text);
   else rawOut(`\r\x1b[K  ${text}`);
 }

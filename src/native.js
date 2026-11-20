@@ -7,7 +7,7 @@ import path from 'node:path';
 import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents } from './api.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
-import { contextPercent, chatBudget, budgetText } from './account.js';
+import { contextPercent, chatBudget, budgetText, fetchChatContext } from './account.js';
 import { cfg, saveCfg, saveCfgKeys } from './config.js';
 import { newSid, tag, lastReset } from './chats.js';
 import { execCall, baseDir, forgetRead } from './agent.js';
@@ -154,7 +154,7 @@ function activityTracker() {
     }
     if (type === 'response.output_item.added' && it.type === 'function_call') { fn = it.name || 'outil'; chars = 0; last = 0; return ui.spinner.show(WRITING[fn] || `le modèle prépare ${fn}`); }
     if (type === 'response.function_call_arguments.delta' && fn) {
-      chars += String(d.delta || '').length;
+      chars += String(d.delta || '').length; ui.liveTokens.add(d.delta);
       const now = Date.now(); if (now - last < 250) return; last = now;   // pas plus de 4 mises à jour par seconde
       return ui.spinner.show(`${WRITING[fn] || `le modèle prépare ${fn}`} · ${fmt(chars)} caractères`);
     }
@@ -172,7 +172,10 @@ export const isOpenAiModel = (S, id = S.agentId) => {
 
 export async function runNative(S, userText, opts) {
   const { signal, ask, stream = streamChat, ctxPct = contextPercent } = opts;
+  const ctxOf = opts.ctxOf !== undefined ? opts.ctxOf : (opts.stream ? null : fetchChatContext);   // contexte mesuré par FS (vrai chiffre d'entrée)
+  const measures = [];                                                 // une mesure par requête : tokens relus = contexte après − tokens écrits
   const budgetOf = opts.budget !== undefined ? opts.budget : (opts.stream ? null : chatBudget);   // budget de chat du compte (tests : désactivé)
+  ui.liveTokens.reset();                                              // ↓ tokens en direct dans l'indicateur d'attente (comme Claude Code)
   const firstTurn = !S.chatId;                                         // 1er message d'une conversation (pour la récupération des refus)
   let content = userText;
   if (S.notes.length) { content = `[${S.notes.join(' ')}]\n${content}`; S.notes = []; }
@@ -190,6 +193,7 @@ export async function runNative(S, userText, opts) {
   const midCompact = opts.midCompact ?? (S.interactive === true && 'bare' in opts && !S.tagRole);
   let heavyAt = 0, noWeb = false;                                      // noWeb : recherche web coupée pour le reste de la demande après une erreur d'OpenAI
   for (; steps < maxSteps; steps++) {
+    if (measures.length) await measures[measures.length - 1];          // mesure de la requête précédente faite AVANT d'envoyer la suivante (sinon elle compterait ses résultats)
     if (signal.aborted) throw Object.assign(new Error('annulé'), { name: 'AbortError' });
     const md = new ui.MdStream({ collapse: false });
     const clean = textCleaner();                                       // citations du web retirées, listes de tâches remises à la ligne
@@ -202,10 +206,10 @@ export async function runNative(S, userText, opts) {
         agentId: S.agentId, chatId: S.chatId, signal, webSearch: web, register: { sid: S.sid, role: 'main' },
         clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results, files: resultFiles } : { content, files: S.pendingFileIds }),   // images : avec le message, ou avec les résultats (captures d'outils)
         onChat: id => { if (!S.chatId) S.chatId = id; },
-        onText: d => { const t = todo.push(clean.push(d)); if (t) md.push(t); },
+        onText: d => { ui.liveTokens.add(d); const t = todo.push(clean.push(d)); if (t) md.push(t); },
         onEvent: (type, d) => activity(type, d),
         onReasoning: d => {
-          ui.rememberThinking(d);                                       // gardée pour Ctrl+O
+          ui.liveTokens.add(d); ui.rememberThinking(d);                                       // gardée pour Ctrl+O
           if (!cfg.showThinking) return;
           thinkBuf += d; let i;
           while ((i = thinkBuf.indexOf('\n')) >= 0) { ui.println(c.dim(c.italic('  ✻ ' + thinkBuf.slice(0, i)))); thinkBuf = thinkBuf.slice(i + 1); }
@@ -250,11 +254,13 @@ export async function runNative(S, userText, opts) {
     { const t = todo.push(clean.flush()) + todo.flush(); if (t) md.push(t); }
     md.finish(); nReq++;
     const u = res.usage;
-    let reqIn = 0;
+    let reqIn = 0, reqOut = 0;
     if (u && typeof u === 'object') for (const [k, v] of Object.entries(u)) {
       if (typeof v !== 'number' || /total|reasoning|cached/i.test(k)) continue;
-      if (/prompt|input/i.test(k)) { tokensIn += v; reqIn += v; } else if (/candidate|compl|output/i.test(k)) tokensOut += v;
+      if (/prompt|input/i.test(k)) { tokensIn += v; reqIn += v; } else if (/candidate|compl|output/i.test(k)) { tokensOut += v; reqOut += v; }
     }
+    // vrai chiffre d'entrée de cette requête (Claude : promptTokenCount ne compte que la partie hors cache) ; lu pendant que les outils tournent
+    if (ctxOf && S.chatId) measures.push(Promise.resolve(ctxOf(S.chatId)).then(m => (m ? Math.max(0, m.usedTokens - reqOut) : null)).catch(() => null));
     if (reqIn) S.lastPromptTokens = reqIn;                              // taille du contexte envoyé à cette requête (résumé auto au-delà du seuil)
     visible = cleanText(res.text)?.trim() || visible;
     if (res.sawImage && S.chatId) {                                     // image générée par France Student : enregistrée sur le PC et montrée
@@ -350,12 +356,18 @@ export async function runNative(S, userText, opts) {
       c.accent('/new') + c.dim(', ou essaie ') + c.accent(other));
   }
 
+  ui.liveTokens.end();
   const secs = (Date.now() - t0) / 1000;
   const bits = [ui.duration(secs)];
   if (nTools) bits.push(`${nTools} outil${nTools > 1 ? 's' : ''}`);
   bits.push(`${nReq} requête${nReq > 1 ? 's' : ''}`);
-  if (tokensIn > 0 && tokensOut > 0) bits.push(`${tokensIn >= 1000 ? (tokensIn / 1000).toFixed(1) + 'k' : tokensIn}↑ ${tokensOut >= 1000 ? (tokensOut / 1000).toFixed(1) + 'k' : tokensOut}↓ tok`);
-  S.tokens.in += tokensIn; S.tokens.out += tokensOut;
+  // entrée : tokens réellement relus (mesurés) ; sinon le compte de FS, seulement pour GPT (avec Claude il ne compte que le hors-cache)
+  const measured = measures.length && measures.length === nReq ? await Promise.all(measures) : [];
+  const realIn = measured.length && measured.every(x => x != null) ? measured.reduce((s, x) => s + x, 0) : null;
+  const kTok = n => (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
+  const shownIn = realIn != null ? realIn : (isOpenAiModel(S) ? tokensIn : 0);
+  if (tokensOut > 0) bits.push(shownIn > 0 ? `${kTok(shownIn)}↑ ${kTok(tokensOut)}↓ tok` : `${kTok(tokensOut)}↓ tok`);
+  S.tokens.in += realIn != null ? realIn : tokensIn; S.tokens.out += tokensOut;
   S.stats ||= { turns: 0, requests: 0, tools: 0 }; S.stats.turns++; S.stats.requests += nReq; S.stats.tools += nTools;   // pour /usage
   let ctxBit = '';
   if (S.chatId) {
