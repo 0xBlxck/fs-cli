@@ -148,3 +148,33 @@ test('indicateur d\'attente : « ↓ N tokens » en direct pendant la demande, d
     assert.doesNotMatch(frames.at(-1), /tokens/);
   } finally { ui.spinner.stop(); ui.liveTokens.end(); ui.attachSink(null); }
 });
+
+test('/plus-tard : « 5h », « 5h30 », « 05:00 » → prochaine occurrence ; le reste n\'est pas une heure', async () => {
+  const { parseHour } = await import('../src/schedule.js');
+  const now = new Date(2026, 10, 21, 22, 15);                            // 21/11 22:15
+  const t = d => d && `${d.getDate()}/${d.getMonth() + 1} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  assert.equal(t(parseHour('5h', now)), '22/11 5:00');                    // déjà passée aujourd'hui → demain
+  assert.equal(t(parseHour('5h30', now)), '22/11 5:30');
+  assert.equal(t(parseHour('05:00', now)), '22/11 5:00');
+  assert.equal(t(parseHour('23h', now)), '21/11 23:00');                  // encore à venir aujourd'hui
+  for (const s of ['5', 'demain', '25h', '5h75', 'fais', '']) assert.equal(parseHour(s, now), null, s);
+});
+
+test('/plus-tard : échéancier sur l\'heure RÉELLE (veille, changement d\'heure), jamais pendant une réponse, un envoi à la fois, annulation', async () => {
+  const { createScheduler } = await import('../src/schedule.js');
+  let t = 1_000_000, busy = false, changes = 0;
+  const sent = [];
+  const s = createScheduler({ run: async x => { sent.push(x); }, isBusy: () => busy, onChange: () => changes++, now: () => t, tickMs: 3_600_000 });
+  const a = s.add(t + 60_000, 'A'), b = s.add(t + 120_000, 'B'), c = s.add(t + 30_000, 'C');
+  assert.equal(s.next().text, 'C');
+  assert.deepEqual(s.cancel(c.id).map(x => x.text), ['C']);
+  await s.tick(); assert.deepEqual(sent, [], 'pas encore l\'heure');
+  t += 10 * 3_600_000;                                                     // PC sorti de veille 10 h plus tard : l'heure réelle fait foi
+  busy = true; await s.tick(); assert.deepEqual(sent, [], 'réponse en cours : on attend');
+  busy = false; await s.tick(); assert.deepEqual(sent, ['A'], 'un seul envoi par passage, le plus ancien d\'abord');
+  await s.tick(); assert.deepEqual(sent, ['A', 'B']);
+  assert.equal(s.list().length, 0);
+  assert.ok(changes >= 5);
+  assert.equal(a.id + 1, b.id);
+  s.stop();
+});

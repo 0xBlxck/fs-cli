@@ -144,6 +144,11 @@ export function createSseReader(h = {}, { chatId = null } = {}) {
         const e = new ApiError(`Erreur du serveur: ${streamError.message}`);
         for (const k of ['code', 'retryable', 'chatFlagged', 'accountDisabled']) if (streamError[k] !== undefined) e[k] = streamError[k];
         e.serverError = true;                                           // rendue par le serveur (pas une coupure réseau)
+        // Vu en vrai : FS répond 200 puis rejette dans le flux (« 409 CONFLICT … », « 400 BAD_REQUEST "toolResults must answer every
+        // pending call…" », code STREAM_FAILED), sans rien enregistrer (aucun message utilisateur créé). On rend le vrai statut et on
+        // marque la requête REFUSÉE : les deux moteurs la traitent comme un 400/409 (recalage), pas comme un message accepté.
+        const m = /^\s*(4\d\d)\s+[A-Z_]{3,}/.exec(String(streamError.message || ''));
+        if (m && !text && userMessageId == null) { e.status = Number(m[1]); e.rejected = true; }
         throw e;
       }
       if (!sawCompleted && !text) {
@@ -231,7 +236,7 @@ function sseRequest({ urlPath, method, payload = null, chatId = null, h, native 
     }, { chatId });
     const fail = e => {
       if (e && typeof e === 'object') {
-        e.accepted = accepted;
+        e.accepted = accepted && !e.rejected;                          // refusée dans le flux : rien d'enregistré, comme une erreur HTTP
         if (accepted && reader.chatId && e.chatId == null) e.chatId = reader.chatId;
         if (accepted && reader.lastEventId && e.lastEventId == null) e.lastEventId = reader.lastEventId;
       }

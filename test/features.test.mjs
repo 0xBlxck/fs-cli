@@ -142,7 +142,8 @@ test('actions façon Claude Code : lectures résumées en une ligne, commande é
   ui.toolHeader('shell', 'npm run build');
   assert.ok(tui.active.some(l => /◦/.test(l) && /npm run build/.test(l)), 'commande en cours dans la zone du bas');
   ui.toolDone(false);
-  await new Promise(r => setTimeout(r, 30));
+  // rendu différé : on attend qu'il soit à l'écran (jusqu'à 2 s sous charge) au lieu d'une pause fixe de 30 ms
+  for (const t0 = Date.now(); Date.now() - t0 < 2000 && !/● Lu 2 fichiers[\s\S]*npm run build/.test(f.sim.lines().join('\n')); ) await new Promise(r => setTimeout(r, 15));
   const all = f.sim.lines().join('\n');
   assert.match(all, /● Lu 2 fichiers, cherché 1 motif \(ctrl\+o pour voir\)/);
   assert.match(all, /● (PowerShell|Bash)\(npm run build\)/);

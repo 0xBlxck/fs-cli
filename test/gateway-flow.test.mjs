@@ -552,7 +552,9 @@ test('(r) --fs-flux 1 : la 2e conversation attend son tour et reçoit des pings'
   const pa = call(gw, ccReq([user('tâche A')], { session: 'sess-a' }));
   await until(() => fake.sent.length === 1);
   const pb = call(gw, ccReq([user('tâche B')], { session: 'sess-b' }));
-  await tick(150);
+  // B vraiment en attente (pas une pause fixe : sous charge, B peut arriver après 150 ms), puis le temps de plusieurs pings (30 ms)
+  await until(() => gw.store.flowState().waiting === 1, 5000);       // lève « condition jamais atteinte » sinon
+  await tick(300);
   assert.equal(fake.sent.length, 1);                                    // B attend le flux
   hold.open();
   const [ra, rb] = await Promise.all([pa, pb]);
@@ -1038,4 +1040,70 @@ test('(o5) menu : titre sans étiquette technique (« [mcpv2·cc] »), 2e ligne 
   assert.deepEqual(opts.map(o => o.label), ['1. Contexte : dossier', '2. Genrere moi un CV...']);
   assert.match(opts[0].description, /^GPT-6 Astra · 19\/11 \d\d:\d\d$/);
   assert.doesNotMatch(r.sse.text, /mcpv2/);
+});
+
+test('(pare-feu) 403 Cloudflare sur des résultats d\'outils → nouvel essai, puis note « contenu non transmis » ; la demande continue', async t => {
+  const { FIREWALL_NOTE } = await import('../src/native.js');
+  const fw = { status: 403, code: 'FIREWALL', message: '403 — le pare-feu de France Student (Cloudflare) a bloqué la requête.' };
+  const { fake, gw } = await setup(t, {
+    files: { [HELLO]: 'contenu bloqué par le pare-feu\n' },
+    turns: [{ text: 'Je lis. ', toolCalls: [readCall('call_1')] }, { fail: fw }, { fail: fw }, 'Réponse finale.'],
+  });
+  fake.deps.firewallDelayMs = 0;
+  const m1 = user('lis hello');
+  const r1 = await call(gw, ccReq([m1]));
+  const r2 = await call(gw, ccReq([m1, asst(r1), results([r1.sse.toolUses[0].id, '1\tcontenu bloqué par le pare-feu'])]));
+  assert.equal(r2.status, 200);
+  assert.equal(fake.sent.length, 4);
+  assert.match(fake.sent[1].toolResults[0].output, /contenu bloqué/);
+  assert.deepEqual(fake.sent[2].toolResults, fake.sent[1].toolResults, 'nouvel essai identique');
+  assert.deepEqual(fake.sent[3].toolResults, [{ callId: 'call_1', output: FIREWALL_NOTE, isError: true }]);
+  assert.ok(r2.sse.text.startsWith(MESSAGES.firewall));
+  assert.ok(r2.sse.text.endsWith('Réponse finale.'));
+});
+
+test('(pare-feu) 403 Cloudflare passager sur un message : un seul nouvel essai suffit', async t => {
+  const fw = { status: 403, code: 'FIREWALL', message: '403 — le pare-feu de France Student (Cloudflare) a bloqué la requête.' };
+  const { fake, gw } = await setup(t, { turns: [{ fail: fw }, 'Bonjour.'] });
+  fake.deps.firewallDelayMs = 0;
+  const r = await call(gw, ccReq([user('bonjour')]));
+  assert.equal(r.status, 200);
+  assert.equal(fake.sent.length, 2);
+  assert.equal(r.sse.text, 'Bonjour.');
+});
+
+test('(vu en vrai) 200 puis « 409 CONFLICT » dans le flux sur des toolResults → traité comme un 409 (reconcile), pas comme une réponse perdue', async t => {
+  const { fake, gw } = await setup(t, {
+    files: { [HELLO]: 'x\n' },
+    turns: [{ text: 'Je lis. ', toolCalls: [readCall('call_1')] },
+      { sseError: { code: 'STREAM_FAILED', status: 409, message: '409 CONFLICT "No client tool call is waiting for a result in this chat."' }, persisted: 'none' },
+      'Réponse finale.'],
+    chats: { 'chat-1': { id: 'chat-1', chatMessages: [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'déjà répondu' }] } },
+  });
+  const m1 = user('lis hello');
+  const r1 = await call(gw, ccReq([m1]));
+  const r2 = await call(gw, ccReq([m1, asst(r1), results([r1.sse.toolUses[0].id, '1\tcontenu de test'])]));
+  assert.equal(r2.sse.text, 'Réponse finale.');
+  assert.equal(fake.sent.length, 3);
+  assert.equal(fake.sent[2].toolResults, undefined, 'résultats repassés en texte après le recalage');
+  assert.match(fake.sent[2].content, /Résultats des actions précédentes/);
+});
+
+test('(vu en vrai) plus de 32 appels FS dans un tour → résultats renvoyés en message normal (FS refuse > 32 toolResults), jamais d\'erreur', async t => {
+  const calls = Array.from({ length: 34 }, (_, i) => readCall('call_' + i));
+  const { fake, gw } = await setup(t, {
+    files: { [HELLO]: 'contenu\n' },
+    turns: [{ text: 'Je lis tout. ', toolCalls: calls }, 'Réponse finale.'],
+  });
+  const m1 = user('lis tout');
+  const r1 = await call(gw, ccReq([m1]));
+  const uses = r1.sse.toolUses;
+  assert.ok(uses.length <= 32, 'Claude Code reçoit au plus 32 actions');
+  const r2 = await call(gw, ccReq([m1, asst(r1), results(...uses.map(u => [u.id, '1\tcontenu']))]));
+  assert.equal(r2.status, 200);
+  assert.equal(r2.sse.text, 'Réponse finale.');
+  const last = fake.sent.at(-1);
+  assert.equal(last.toolResults, undefined, 'pas de toolResults au-delà de 32');
+  assert.match(last.content, /Message de FS-CLI[\s\S]*34 appels/);
+  assert.equal((last.content.match(/^### \d+/gm) || []).length, 34);
 });

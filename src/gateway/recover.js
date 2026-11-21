@@ -19,6 +19,7 @@ export const MESSAGES = Object.freeze({
   nativeOff: '(Ce modèle ne peut pas agir sur tes fichiers avec France Student : réponse en texte seul. Choisis un modèle Claude ou GPT avec /model.)',
   chatGone: '(La conversation France Student n\'est plus disponible : reprise dans une nouvelle conversation.)',
   contentPolicy: '(France Student a bloqué cette demande : filtre de contenu.)',
+  firewall: '(Le pare-feu de France Student a refusé le contenu renvoyé au modèle, souvent à cause de ce que contient un fichier lu (ex. un SKILL.md) : le modèle reçoit une note « contenu non transmis » à la place et continue sans.)',
   accountDisabled: 'Compte France Student désactivé : la passerelle ne peut plus rien envoyer. Vérifie ton compte sur le site de France Student.',
   giveUp: '(Le modèle a refusé d\'utiliser les outils : il n\'a rien lu ni modifié. Choisis un autre modèle avec /model, par exemple sonnet, puis renvoie ta demande. Ou reformule.)',
   continueCut: 'Continue : ta réponse précédente a été coupée par une coupure réseau.',
@@ -171,6 +172,7 @@ export function errorKind(e) {
   const status = Number(e.status) || 0, code = String(e.code || ''), msg = String(e.message || '');
   if (code === 'DAILY_CHAT_LIMIT' || (status === 429 && /daily new chat limit|limite de 50/i.test(msg))) return 'daily';
   if (status === 401 || /^401\b/.test(msg)) return 'auth';
+  if (code === 'FIREWALL') return 'firewall';                         // 403 du pare-feu (page Cloudflare) : passager, ou contenu renvoyé refusé
   if (code === 'NATIVE_UNSUPPORTED' || /client tools are not supported/i.test(msg)) return 'native';
   if (e.accountDisabled || /account_disabled|ACCOUNT_DISABLED/.test(code + ' ' + msg)) return 'disabled';
   if (code === 'CONTENT_POLICY_VIOLATION') return 'policy';

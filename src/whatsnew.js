@@ -1,6 +1,15 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.0', items: [
+    'Plus fiable : si la connexion coupe en pleine réponse (Wi-Fi, veille, longue réflexion), FS-CLI se rattache à la réponse au lieu de s’arrêter, sans rien renvoyer ni refaire deux fois (CLI et `fs claude`)',
+    'Les refus « 400 / 409 » que France Student envoie au milieu d’une réponse sont reconnus et réparés tout seuls ; conversation occupée (résumé en cours) : FS-CLI attend et réessaie',
+    'Plus de 32 actions dans un même tour : plus d’erreur, leurs résultats passent quand même',
+    '`/plus-tard [heure] <demande>` : envoie ta demande à la remise à zéro du budget ou à l’heure choisie (FS-CLI ouvert, PC allumé)',
+    '`/bug` : un rapport prêt à coller sur Discord (version, système, modèle, dernières erreurs), copié dans le presse-papiers, sans aucune clé ni conversation',
+    'Pare-feu de France Student qui bloque un fichier lu (ex. un SKILL.md) dans `fs claude` : la demande continue avec une note au lieu de s’arrêter',
+    '« tu vois mes mcp ? » : le modèle reçoit la liste de tes serveurs MCP ; `fs claude` prévient au lancement que les GPT refusent souvent le mode agent',
+  ] },
   { version: '3.55.4', items: [
     'Fin de réponse : le vrai nombre de tokens relus par le modèle (mesuré par France Student, cache compris) au lieu du « 4↑ » qui ne comptait que le hors-cache',
     'Pendant l’attente, comme Claude Code : durée depuis le début de ta demande et tokens reçus en direct (« 12 s · ↓ 340 tokens »)',

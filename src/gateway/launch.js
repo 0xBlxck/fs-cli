@@ -39,6 +39,10 @@ const FS_FLAGS = {
   '--fs-conversations': { key: 'pickChat', type: 'bool' },
 };
 
+/** Lancement avec un GPT : vu en vrai (Discord), ils refusent souvent de travailler comme agent dans Claude Code. */
+export const GPT_WARNING = name => `⚠ ${name || 'Ce modèle GPT'} refuse souvent de travailler comme agent dans Claude Code (fichiers non créés, « je ne peux pas »). `
+  + 'Pour un agent fiable : fs claude --model sonnet (ou opus, haiku), ou /model dans Claude Code.\n';
+
 /** Valeurs par défaut des options de la passerelle (opts de createGateway / startGateway). */
 export const FS_DEFAULTS = Object.freeze({
   project: null, web: false, claudeMd: false, rewind: 'auto', subagents: 3, flows: 3,
@@ -641,6 +645,7 @@ export async function runClaude(argv, io = {}) {
   const ccId = o.claudeModel ? null : await models.ccId(cfg.agentId);
   const q = typeof deps.quota === 'function' ? deps.quota() : quotaState(deps);
   h.err(`FS-CLI → Claude Code · passerelle ${url.replace(/^https?:\/\//, '')} · ${shown?.name || o.claudeModel || 'modèle par défaut'} · ${quotaText(q)} · journal : ${shortHome(logFile(), h.home)}\n`);
+  if (shown?.provider === 'openai') h.err(GPT_WARNING(shown.name));
 
   const env = childEnv(h.env, { url, token, model: ccId, opts: o });
   // Serveurs MCP gardés par défaut : le modèle FS s'en sert avec « claude-tool mcp__… » (toolmap.js). --fs-mcp=off les coupe

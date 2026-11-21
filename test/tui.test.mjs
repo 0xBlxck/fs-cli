@@ -392,3 +392,12 @@ test('suggestions avec aperçu (/theme <valeur>) : survol aux flèches → onFoc
   assert.deepEqual(submits, ['/theme red']);
   tui.stop();
 });
+
+test('barre d\'état : demande programmée (/plus-tard) rappelée par « ⏰ heure »', async () => {
+  const { sim, tui, tick } = make({ cols: 110 });
+  tui.setStatus({ ctx: 10, budget: 3, scheduled: '05:01' }); await tick();
+  assert.match(sim.screen(), /⏰ 05:01 · budget restant : 3 % · contexte restant : 90 %/);
+  tui.setStatus({ scheduled: null }); await tick();
+  assert.doesNotMatch(sim.screen(), /⏰/);
+  tui.stop();
+});

@@ -4,7 +4,8 @@
 // Documentation FS : « Outils client (mode avancé) », flag 2026_11_client_tools.
 import fs from 'node:fs';
 import path from 'node:path';
-import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents } from './api.js';
+import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents, resumeStream, fetchChat, documentsOf, imagesOf, cancelStream } from './api.js';
+import { recoverSend } from './resilient.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent, chatBudget, budgetText, fetchChatContext } from './account.js';
@@ -31,6 +32,21 @@ export const isUpstreamError =e => !!e && e.name !== 'AbortError' && e.code !== 
   && ((e.serverError && /openai_v2|BAD_GATEWAY|\b50[0234]\b|error occurred while processing your request|overloaded|internal server error/i.test(e.message || '')) || e.status >= 500);   // list_directory, read_file, search_files : seuls outils proposés en mode plan
 const MAX_RESULT = 40000;     // limite FS par résultat (au-delà FS coupe et prévient le modèle)
 const MAX_TOTAL = 120000;      // limite FS par envoi
+const MAX_RESULTS = 32;        // limite FS de toolResults par envoi (« Too many toolResults (at most 32) », vu en vrai)
+
+/** Plus de 32 appels dans un tour : leurs résultats en texte, pour un message normal (voir runNative). */
+export function overflowText(calls, results) {
+  const parts = results.map((r, i) => {
+    const call = calls.find(c => String(c.callId || c.call_id || c.id) === String(r.callId)) || calls[i] || {};
+    const a = parseArgs(call.arguments);
+    const what = `${call.name || 'outil'}${a.path ? ' ' + a.path : a.command ? ' « ' + String(a.command).slice(0, 120) + ' »' : ''}`;
+    return `### ${i + 1}. ${what}${r.isError ? ' (échec)' : ''}\n${r.output}`;
+  });
+  return `[Message de FS-CLI, pas de l'utilisateur. Tes ${results.length} appels d'outils de ce tour ONT TOUS été exécutés sur le PC de l'utilisateur. `
+    + `France Student n'accepte que ${MAX_RESULTS} résultats d'outils par envoi : leurs résultats réels sont donc transmis ci-dessous en texte, `
+    + `et la plateforme te les signale « non exécutés » pour cette seule raison. Utilise ces résultats comme ceux de tes outils, sans les refaire, `
+    + `et continue la tâche. Au prochain tour, fais au plus ${MAX_RESULTS} appels.]\n\n${parts.join('\n\n')}`;
+}
 // conversation trop chargée en pleine demande : le modèle finit l'étape en cours puis s'arrête (le résumé est fait avant le message suivant)
 export const HEAVY_NOTE = '(Note : cette conversation est devenue très longue. Termine l\'étape en cours, puis arrête-toi avec un court point d\'étape : ce qui est fait, ce qui reste à faire. La suite reprendra juste après, à partir d\'un résumé.)';
 
@@ -174,7 +190,9 @@ export async function runNative(S, userText, opts) {
   const { signal, ask, stream = streamChat, ctxPct = contextPercent } = opts;
   const ctxOf = opts.ctxOf !== undefined ? opts.ctxOf : (opts.stream ? null : fetchChatContext);   // contexte mesuré par FS (vrai chiffre d'entrée)
   const measures = [];                                                 // une mesure par requête : tokens relus = contexte après − tokens écrits
-  const budgetOf = opts.budget !== undefined ? opts.budget : (opts.stream ? null : chatBudget);   // budget de chat du compte (tests : désactivé)
+  const budgetOf = opts.budget !== undefined ? opts.budget : (opts.stream ? null : chatBudget);
+  const resumeFn = opts.resume !== undefined ? opts.resume : (opts.stream ? null : resumeStream);      // rattachement après coupure (tests : injecté)
+  const fetchChatFn = opts.fetchChat !== undefined ? opts.fetchChat : (opts.stream ? null : fetchChat);   // budget de chat du compte (tests : désactivé)
   ui.liveTokens.reset();                                              // ↓ tokens en direct dans l'indicateur d'attente (comme Claude Code)
   const firstTurn = !S.chatId;                                         // 1er message d'une conversation (pour la récupération des refus)
   let content = userText;
@@ -183,7 +201,7 @@ export async function runNative(S, userText, opts) {
   if (!S.chatId && cfg.tagChats !== false) content = tag(S.sid, S.tagRole || '') + content;   // agents de /team : « [abcd·w0] »
   const root = baseDir(S);
   const t0 = Date.now();
-  let results = null, resultFiles = [], nTools = 0, nReq = 0, tokensIn = 0, tokensOut = 0, steps = 0, hitLimit = false, visible = '';
+  let results = null, resultFiles = [], msgFiles = null, nTools = 0, nReq = 0, tokensIn = 0, tokensOut = 0, steps = 0, hitLimit = false, visible = '';
 
   const maxSteps = S.maxSteps || cfg.maxSteps || 40;                  // --max-turns : pour cette exécution seulement
   // résumé automatique pendant une longue demande : sur demande seulement (opts.midCompact), ou conversation principale d'une session
@@ -201,19 +219,23 @@ export async function runNative(S, userText, opts) {
     const activity = activityTracker();                                // « Recherche sur le web… », « Le modèle écrit un document · 12 400 caractères »…
     let thinkBuf = '';
     ui.spinner.start(results ? 'réflexion…' : 'réflexion…');
-    let res;
+    let res, received = '', userMsgId = null;
+    const handlers = {
+      onChat: id => { if (!S.chatId) S.chatId = id; },
+      onText: d => { received += d; ui.liveTokens.add(d); const t = todo.push(clean.push(d)); if (t) md.push(t); },
+      onEvent: (type, d) => activity(type, d),
+      onUserMessageId: id => { userMsgId = id ?? null; },
+      onReasoning: d => {
+        ui.liveTokens.add(d); ui.rememberThinking(d);                                       // gardée pour Ctrl+O
+        if (!cfg.showThinking) return;
+        thinkBuf += d; let i;
+        while ((i = thinkBuf.indexOf('\n')) >= 0) { ui.println(c.dim(c.italic('  ✻ ' + thinkBuf.slice(0, i)))); thinkBuf = thinkBuf.slice(i + 1); }
+      },
+    };
     const send = web => stream({
         agentId: S.agentId, chatId: S.chatId, signal, webSearch: web, register: { sid: S.sid, role: 'main' },
-        clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results, files: resultFiles } : { content, files: S.pendingFileIds }),   // images : avec le message, ou avec les résultats (captures d'outils)
-        onChat: id => { if (!S.chatId) S.chatId = id; },
-        onText: d => { ui.liveTokens.add(d); const t = todo.push(clean.push(d)); if (t) md.push(t); },
-        onEvent: (type, d) => activity(type, d),
-        onReasoning: d => {
-          ui.liveTokens.add(d); ui.rememberThinking(d);                                       // gardée pour Ctrl+O
-          if (!cfg.showThinking) return;
-          thinkBuf += d; let i;
-          while ((i = thinkBuf.indexOf('\n')) >= 0) { ui.println(c.dim(c.italic('  ✻ ' + thinkBuf.slice(0, i)))); thinkBuf = thinkBuf.slice(i + 1); }
-        },
+        clientTools: cfg.mode === 'plan' ? READ_TOOLS : CLIENT_TOOLS,...(results ? { toolResults: results, files: resultFiles } : { content, files: msgFiles ?? S.pendingFileIds }),   // images : avec le message, ou avec les résultats (captures d'outils)
+        ...handlers,
       });
     // Pare-feu de France Student (Cloudflare, 403 en page HTML) : un nouvel essai 3 s plus tard (blocage passager).
     // S'il bloque encore l'envoi de résultats d'outils, c'est leur CONTENU qui est refusé : on ne le déguise pas,
@@ -238,9 +260,29 @@ export async function runNative(S, userText, opts) {
         }
       }
     };
+    // coupure après acceptation, 409, 400 « missing » : récupération d'après client-tools.md (src/resilient.js), jamais de message renvoyé
+    const sendSafe = web => sendPastFirewall(web).catch(e => {
+      if (!resumeFn || !fetchChatFn || signal.aborted) throw e;
+      return recoverSend(e, {
+        chatId: () => S.chatId, results, signal, fetchChat: fetchChatFn,
+        resend: patch => { if (patch.toolResults) results = patch.toolResults; return sendPastFirewall(web); },
+        resume: (id, last) => resumeFn(id, last, { ...handlers, signal, ...(last == null ? { onText: skipSeen(), onReasoning: () => {} } : {}) }),
+        received: () => received, userMessageId: () => userMsgId, onText: handlers.onText,
+        cancel: id => (opts.cancel ?? (opts.stream ? null : cancelStream))?.(id),
+        note: m => { ui.spinner.stop(); ui.println(c.yellow('  ⚠ ' + m)); ui.spinner.start('réflexion…'); },
+        delays: opts.reattachDelays, busyDelays: opts.busyDelays, parts: { documentsOf, imagesOf },
+      }).then(r => ({ ...r, text: received || r.text || '' }));          // texte COMPLET (début reçu avant la coupure + suite)
+    });
+    // rattachement sans Last-Event-ID : FS rejoue tout depuis le début → ce qui est déjà affiché n'est pas réaffiché
+    const skipSeen = () => { let pos = 0; return d => {
+      const s = String(d ?? '');
+      let i = 0;
+      while (i < s.length && pos < received.length && s[i] === received[pos]) { i++; pos++; }
+      if (i < s.length) { pos = Infinity; handlers.onText(s.slice(i)); }
+    }; };
     try {
       const web = !!cfg.webSearch && !noWeb;
-      try { res = await sendPastFirewall(web); }
+      try { res = await sendSafe(web); }
       catch (e) {
         // recherche web active et erreur d'OpenAI : la même demande repart une fois sans recherche web (affiché, rien de caché)
         if (!web || signal.aborted || !isUpstreamError(e)) throw e;
@@ -248,7 +290,7 @@ export async function runNative(S, userText, opts) {
         ui.spinner.stop();
         ui.println(c.yellow('  ⚠ le serveur d\'OpenAI a échoué après la recherche web : nouvel essai sans recherche web pour cette demande'));
         ui.spinner.start('réflexion…');
-        try { res = await sendPastFirewall(false); } catch (e2) { throw e2?.name === 'AbortError' ? e2 : e; }
+        try { res = await sendSafe(false); } catch (e2) { throw e2?.name === 'AbortError' ? e2 : e; }
       }
     } finally { ui.spinner.stop(); }
     { const t = todo.push(clean.flush()) + todo.flush(); if (t) md.push(t); }
@@ -294,7 +336,7 @@ export async function runNative(S, userText, opts) {
     results = [];
     let total = 0;
     const done = [];                                                    // actions vraiment faites de ce lot (pour Ctrl+C)
-    for (const call of calls.slice(0, 32)) {
+    for (const call of calls) {
       if (signal.aborted) {
         if (done.length) S.notes.push(`Avant l'interruption par l'utilisateur, ces actions ont VRAIMENT été exécutées (ne les refais pas) : ${done.join(' ; ')}.`);
         throw Object.assign(new Error('annulé'), { name: 'AbortError' });
@@ -333,6 +375,14 @@ export async function runNative(S, userText, opts) {
       try { resultFiles.push(await uploadFile(fs.readFileSync(img.file), path.basename(img.file), img.mime)); } catch {}
     }
     if (resultFiles.length) ui.toolNote(`📷 ${resultFiles.length} capture${resultFiles.length > 1 ? 's' : ''} transmise${resultFiles.length > 1 ? 's' : ''} au modèle`);
+    // Vu en vrai : FS laisse le modèle demander plus de 32 actions, mais refuse plus de 32 toolResults (« Too many toolResults »)
+    // ET exige une réponse à chacune (« missing ») : impossible par toolResults. Sortie prévue par client-tools.md : un message
+    // normal (les appels sont rejoués au modèle « non exécutés »), qui porte les résultats en texte et dit qu'ils ONT été exécutés.
+    if (results.length > MAX_RESULTS) {
+      content = overflowText(calls, results);
+      msgFiles = resultFiles; results = null;
+      ui.toolNote(`${calls.length} actions dans un tour (France Student en accepte 32 par envoi) : résultats transmis en texte`);
+    } else msgFiles = null;
   }
   if (visible) S.lastResponse = visible;
   if (nTools && cfg.toolRefusals?.[String(S.agentId)]) { const r = { ...cfg.toolRefusals }; delete r[String(S.agentId)]; saveCfgKeys({ toolRefusals: r }); }

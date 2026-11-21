@@ -4,7 +4,7 @@
 // n'est jamais renvoyé), vérification de l'état du chat (reconcile), boucle interne pour les appels traités localement,
 // documents du site écrits par des Write synthétiques, puis émission des tool_use APRÈS la sauvegarde de l'état (I4).
 // Ce module n'écrit rien sur le disque lui-même : tout passe par ctx.store, et le réseau par ctx.deps (injectables).
-import { textCleaner } from '../native.js';
+import { textCleaner, FIREWALL_NOTE } from '../native.js';
 import { documentsOf } from '../api.js';
 import { tag } from '../chats.js';
 import { CONTINUE_FR } from './context.js';
@@ -93,6 +93,23 @@ function contentOnly(send) {
   const s = { ...send };
   delete s.toolResults;
   s.content = [send.content, resultsText(send.toolResults)].filter(Boolean).join('\n\n') || CONTINUE_FR;
+  return s;
+}
+
+const MAX_FS_RESULTS = 32;                              // « Too many toolResults (at most 32) » (vu en vrai)
+const OVERFLOW_MAX = 110000;                            // sous la limite FS de 120 000 caractères par envoi
+
+/** Plus de 32 résultats : même envoi en message normal, résultats en texte (parts équitables, rien d'inventé). */
+export function overflowSend(send) {
+  const rs = send.toolResults || [];
+  const per = Math.max(500, Math.floor((OVERFLOW_MAX - 600) / Math.max(1, rs.length)) - 40);
+  const body = rs.map((r, i) => `### ${i + 1}${r.isError ? ' (échec)' : ''}\n${one(typeof r.output === 'string' ? r.output : JSON.stringify(r.output), per)}`).join('\n\n');
+  const head = `[Message de FS-CLI, pas de l'utilisateur. Les ${rs.length} appels d'outils du tour précédent ont reçu leurs résultats ci-dessous, dans l'ordre. `
+    + `France Student n'accepte que ${MAX_FS_RESULTS} résultats d'outils par envoi : ils sont donc transmis en texte, et la plateforme te les signale `
+    + `« non exécutés » pour cette seule raison. Utilise-les sans refaire les appels réussis, et fais au plus ${MAX_FS_RESULTS} appels par tour.]`;
+  const s = { ...send };
+  delete s.toolResults;
+  s.content = [send.content, head + '\n\n' + body].filter(Boolean).join('\n\n');
   return s;
 }
 
@@ -206,6 +223,16 @@ async function beforeAccept(conv, e, send, reply, ctx) {
       if (s) return s;
       break;
     }
+    case 'firewall': {
+      // pare-feu de France Student (comme le moteur du CLI) : un nouvel essai 3 s plus tard (blocage passager) ; s'il bloque encore
+      // des résultats d'outils, c'est leur CONTENU qui est refusé : on ne le déguise pas, le modèle reçoit une note à la place
+      if (!ctx.fwRetried) { ctx.fwRetried = true; await new Promise(r => setTimeout(r, ctx.deps?.firewallDelayMs ?? 3000)); return send; }
+      if (send.toolResults?.length && !ctx.fwNoted) {
+        ctx.fwNoted = true; ctx.prefix.push(MESSAGES.firewall);
+        return { ...send, toolResults: send.toolResults.map(r => ({ callId: r.callId, output: FIREWALL_NOTE, isError: true })) };
+      }
+      break;
+    }
     case 'disabled': ctx.onDisabled?.(); break;
     default: break;
   }
@@ -287,17 +314,23 @@ async function afterAccept(conv, e, h, st, send, ctx) {
  * Si un POST de ce tour a déjà été accepté (ctx.acceptedOnce), un échec se termine en { r: lostResult() } : fin propre.
  */
 async function post(conv, send, reply, ctx) {
+  // Vu en vrai : plus de 32 appels en attente → FS refuse > 32 toolResults ET exige une réponse à chacun. Seule sortie
+  // (client-tools.md) : un message normal, qui porte les résultats en texte ; les appels sont rejoués « non exécutés ».
+  if (send.toolResults?.length > MAX_FS_RESULTS) { applyReconcile(conv, { state: 'idle' }); send = overflowSend(send); }
   for (let attempt = 0; attempt < 6; attempt++) {
     const st = newStream(conv, ctx);
     const h = handlersFor(conv, reply, ctx, st);
     const leaks = assertClean(send, { pending: send.toolResults ? conv.fs.pending : null });
     if (leaks.length) ctx.log?.({ event: 'fuite', leaks });
     ctx.debug?.('fs-envoi', send);
+    const onceBefore = !!ctx.acceptedOnce;
     try {
       const r = await ctx.deps.stream({ ...send, signal: conv._abort?.signal, ...h });
       return { r: r || {}, st };
     } catch (e) {
-      if (st.accepted || e?.accepted) {
+      // 200 puis refus dans le flux (409 / 400 « pending… », vu en vrai) : rien d'enregistré → traité comme avant acceptation
+      if (e?.rejected) { st.accepted = false; ctx.acceptedOnce = onceBefore; }
+      else if (st.accepted || e?.accepted) {
         let r;
         try { r = await afterAccept(conv, e, h, st, send, ctx); }
         catch (e2) {

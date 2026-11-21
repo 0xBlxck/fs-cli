@@ -48,6 +48,8 @@ Au premier lancement, un **assistant** connecte ton compte France Student : il o
 | Reprendre la dernière session du dossier | `fs-cli -c` |
 | Une seule demande, puis quitter | `fs-cli -p "résume ce dossier"` |
 | Vérifier que tout marche | `fs-cli` puis `/doctor` |
+| Signaler un bug (rapport à coller sur Discord, sans clé ni conversation) | `/bug` |
+| Envoyer une demande quand le budget revient (ou à 5h, 17h30…) | `/plus-tard ta demande` · `/plus-tard 5h ta demande` |
 | Désinstaller | `npm uninstall -g fs-cli` (tes réglages restent dans `~/.fs-cli`) |
 
 ## Installation sur Mac (Apple Silicon et Intel) et Linux
@@ -347,7 +349,7 @@ Le moteur **natif** fonctionne avec les modèles Claude et GPT (pas Gemini). Si 
 | Thème | Commandes |
 |---|---|
 | Éditeur | `/vscode` (panneau de chat dans VS Code, Cursor, Windsurf, Antigravity) |
-| Conversation | `/usage` · `/changes` · `/messages` · `/plan <demande>` · `/rewind` · `/doctor` · `/new` · `/resume` · `/rename <titre>` · `/export [fichier.md\|.html]` · `/btw <question>` · `/model` · `/effort <niveau>` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
+| Conversation | `/usage` · `/plus-tard [heure] <demande>` · `/bug` · `/changes` · `/messages` · `/plan <demande>` · `/rewind` · `/doctor` · `/new` · `/resume` · `/rename <titre>` · `/export [fichier.md\|.html]` · `/btw <question>` · `/model` · `/effort <niveau>` · `/compact` · `/context` · `/quota` · `/chats` · `/clean` · `/undo` |
 | Automatisation | `fs-cli -p "<demande>" --max-turns N` · `/webhook <url>` (POST JSON à la fin de chaque demande) |
 | Agents | `/team [-n N] [--pool] [--review] <tâche>` · `/teammode same\|pool` · `/parallel N` · `/workers <modèle>` · `/compare <question>` |
 | Projet | `/init` · `/cd` · `/target` · `/tree` · `/index` · `/project` · `/fr-project` |

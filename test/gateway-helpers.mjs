@@ -429,7 +429,10 @@ export function fakeFs(script = {}) {
     if (broken?.kind === 'cut') throw fsError('network', { accepted: true });
     if (broken) {
       const s = t.sseError;
-      throw fsError({ code: s.code, retryable: s.retryable ?? false, message: `Erreur du serveur: ${s.message || s.code}` }, { accepted: true });
+      const e = fsError({ code: s.code, retryable: s.retryable ?? false, message: `Erreur du serveur: ${s.message || s.code}` }, { accepted: true });
+      // vu en vrai : 200 puis « 409 CONFLICT » / « 400 BAD_REQUEST … pending » dans le flux ; src/api.js rend le statut, requête refusée
+      if (s.status) Object.assign(e, { status: s.status, rejected: true, accepted: false, serverError: true });
+      throw e;
     }
     if (signal?.aborted) throw abortError(true);
     opts.onEventId?.(doneId);

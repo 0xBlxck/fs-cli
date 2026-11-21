@@ -442,22 +442,26 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.55.4 en tête, puis 3.55.3, 3.55.2, 3.55.1, 3.55.0, 3.54.4, 3.54.3, 3.54.2, 3.54.1, 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [, , , , , , , , , m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
-  assert.equal(WHATS_NEW[0].version, '3.55.4');
-  assert.match(WHATS_NEW[0].items[0], /vrai nombre de tokens relus/);
-  assert.equal(WHATS_NEW[1].version, '3.55.3');
-  assert.match(WHATS_NEW[1].items[0], /petite liste/);
-  assert.equal(WHATS_NEW[2].version, '3.55.2');
-  assert.match(WHATS_NEW[2].items[0], /aperçu en direct/);
-  assert.equal(WHATS_NEW[3].version, '3.55.1');
-  assert.match(WHATS_NEW[3].items[0], /budget de chat restant/);
-  assert.equal(WHATS_NEW[4].version, '3.55.0');
-  assert.match(WHATS_NEW[4].items[0], /Consommation réduite/);
-  assert.equal(WHATS_NEW[5].version, '3.54.4');
-  assert.equal(WHATS_NEW[6].version, '3.54.3');
-  assert.equal(WHATS_NEW[7].version, '3.54.2');
-  assert.equal(WHATS_NEW[8].version, '3.54.1');
+test('nouveautés : entrée 3.56.0 en tête, puis 3.55.4, 3.55.3, 3.55.2, 3.55.1, 3.55.0, 3.54.4, 3.54.3, 3.54.2, 3.54.1, 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [, , , , , , , , , , m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(WHATS_NEW[0].version, '3.56.0');
+  assert.match(WHATS_NEW[0].items[0], /se rattache à la réponse/);
+  assert.match(WHATS_NEW[0].items[3], /\/plus-tard/);
+  assert.match(WHATS_NEW[0].items[4], /\/bug/);
+  assert.equal(WHATS_NEW[1].version, '3.55.4');
+  assert.match(WHATS_NEW[1].items[0], /vrai nombre de tokens relus/);
+  assert.equal(WHATS_NEW[2].version, '3.55.3');
+  assert.match(WHATS_NEW[2].items[0], /petite liste/);
+  assert.equal(WHATS_NEW[3].version, '3.55.2');
+  assert.match(WHATS_NEW[3].items[0], /aperçu en direct/);
+  assert.equal(WHATS_NEW[4].version, '3.55.1');
+  assert.match(WHATS_NEW[4].items[0], /budget de chat restant/);
+  assert.equal(WHATS_NEW[5].version, '3.55.0');
+  assert.match(WHATS_NEW[5].items[0], /Consommation réduite/);
+  assert.equal(WHATS_NEW[6].version, '3.54.4');
+  assert.equal(WHATS_NEW[7].version, '3.54.3');
+  assert.equal(WHATS_NEW[8].version, '3.54.2');
+  assert.equal(WHATS_NEW[9].version, '3.54.1');
   assert.equal(m.version, '3.54.0');
   assert.match(m.items[0], /serveurs MCP/);
   assert.equal(z.version, '3.53.0');
@@ -696,4 +700,15 @@ test('runClaude --fs-mcp=off : serveurs MCP coupés (--strict-mcp-config)', asyn
   await h.spawned.promise;
   assert.ok(h.rec.spawns[0].args.includes('--strict-mcp-config'));
   h.child.emit('exit', 0, null); await run;
+});
+
+test('runClaude avec un GPT : avertissement au lancement (ils refusent souvent le mode agent, vu sur Discord) ; avec Claude : rien', async () => {
+  for (const [model, warned] of [['gpt-6-astra', true], ['claude-fs/gpt-6-astra', true], ['sonnet', false]]) {
+    const { rec, io, spawned, child } = harness();
+    const run = L.runClaude(['--model', model, '-p', 'x'], io);
+    await spawned.promise;
+    assert.equal(/refuse souvent de travailler comme agent/.test(rec.err), warned, model);
+    if (warned) assert.match(rec.err, /GPT-6 Astra refuse souvent[\s\S]*fs claude --model sonnet/);
+    child.emit('exit', 0, null); await run;
+  }
 });

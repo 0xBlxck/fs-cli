@@ -117,6 +117,24 @@ export function mentionedServers(cwd, text) {
   return found.slice(0, 3);
 }
 
+/**
+ * « tu vois mes mcp ? », « utilise un mcp » : MCP évoqué SANS nommer de serveur → une ligne avec les serveurs configurés
+ * (aucun n'est démarré), pour que le modèle sache qu'ils existent et comment en obtenir les outils. null sinon.
+ */
+export function mcpListNote(cwd, text) {
+  const t = String(text || '').toLowerCase();
+  if (!/\bmcps?\b/.test(t) || mentionedServers(cwd, text).length) return null;
+  const names = Object.entries(loadMcpConfig(cwd).mcpServers || {}).filter(([n, s]) => !s.disabled && !isSelfMcpServer(n, s)).map(([n]) => n);
+  if (!names.length) return { count: 0, text: '[Serveurs MCP configurés dans FS-CLI sur ce PC : aucun. L\'utilisateur peut en ajouter avec /mcp.]' };
+  const shown = names.slice(0, 40);
+  return {
+    count: names.length,
+    text: `[Serveurs MCP configurés dans FS-CLI sur ce PC (${names.length}) : ${shown.join(', ')}${names.length > shown.length ? '…' : ''}. `
+      + 'Leurs outils ne te sont donnés que pour un serveur nommé dans la demande (ex. « avec le mcp ' + shown[0] + ' ») : '
+      + 'dis à l\'utilisateur lequel nommer si l\'un d\'eux sert sa demande.]',
+  };
+}
+
 export const BROWSER_SERVERS = /^(playwright|navigateur|browser|chrome|chrome-devtools|puppeteer)$/i;
 /** La demande parle-t-elle de piloter un navigateur ? */
 export function wantsBrowser(text) {

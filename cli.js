@@ -11,6 +11,8 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 
 import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone, unmarkSessionsGone, encodeHistory, decodeHistory, historyKeeps } from './src/config.js';
 import { fetchChatUsage, contextPercent, chatBudget } from './src/account.js';
+import { parseHour, createScheduler } from './src/schedule.js';
+import { recordError } from './src/bugreport.js';
 import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride, effectiveProject } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
 import { runAgent, runBlock, setSelectHandler, baseDir } from './src/agent.js';
@@ -31,7 +33,7 @@ import { chromeExtensionInstalled, playwrightServer } from './src/browser.js';
 import { checkUpdate, INSTALL_CMD, npmPermissionHelp, globalDirWritable, isNpmPermissionError } from './src/update.js';
 import { grabClipboardImage, readClipboardText, extractImagePaths, IMAGE_RE, isImagePath, prepareImage, MAX_IMAGES, MAX_IMAGE_BYTES, mimeOf } from './src/images.js';
 import { uploadFile } from './src/api.js';
-import { workPreferences, mentionedServers, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
+import { workPreferences, mentionedServers, mcpListNote, serverBrief, wantsBrowser, BROWSER_SERVERS } from './src/pseudo.js';
 import { discoverMcpServers, discoverSkills, autoSkills, skillIndex } from './src/discover.js';
 import { newSid, createdToday, DAILY_LIMIT } from './src/chats.js';
 import { sortedModelIds } from './src/models-order.js';
@@ -332,7 +334,7 @@ function copyToClipboard(text) {
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
   '/continue', '/navigateur ', '/doctor', '/vscode', '/projet ', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
-  '/sound', '/eco', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/nouveautes', '/conversations', '/quit'];
+  '/sound', '/eco', '/plus-tard ', '/bug', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/nouveautes', '/conversations', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
   const idx = Math.max(frag.lastIndexOf('/'), frag.lastIndexOf('\\'));
@@ -425,9 +427,16 @@ const input = opts.stdio ? new StdioInput({ startBusy: true }) : createInput({
 });
 
 let busy = false, turnAbort = null;
+// /plus-tard : demandes programmées (barre du bas : ⏰ heure). Envoi quand aucune réponse n'est en cours, comme si on l'avait tapée.
+const SCHEDULED = createScheduler({
+  run: text => runInput(text),
+  isBusy: () => busy || holdInput,
+  onChange: () => refreshStatus(),
+  onFire: it => println(c.accent(`\n  ⏰ envoi programmé (${hhmm(new Date())}) : `) + c.dim('« ' + it.text.replace(/\s+/g, ' ').slice(0, 80) + ' »')),
+});
 let holdInput = !!opts.stdio;                                          // démarrage du panneau : la file reste fermée jusqu'à la confiance du dossier
 const ask = query => input.askLine(query);
-const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, budget: S.budget ? S.budget.left : null, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
+const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, budget: S.budget ? S.budget.left : null, scheduled: SCHEDULED.next() ? SCHEDULED.next().at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + (SCHEDULED.list().length > 1 ? ` +${SCHEDULED.list().length - 1}` : '') : null, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
 // budget de chat du compte dans la barre d'état dès l'ouverture (sans attendre ; mis à jour après chaque réponse)
 if (!opts.print && agents) chatBudget(8000).then(b => { if (b) { S.budget = b; refreshStatus(); } }).catch(() => {});
@@ -484,6 +493,8 @@ const HELP_ROWS = [
     ['/cd <dossier>', 'changer de dossier de travail'], ['/target [dossier|clear]', 'dossier où écrire les fichiers à nom relatif (détecté si ta demande cite un chemin)'], ['/read <fichier>', 'joindre un fichier au prochain message (ou @fichier)'],
     ['/run [n|all]', 'exécuter les blocs de code de la dernière réponse (écrit aussi les fichiers nommés)'],
     ['/context · /quota', 'contexte utilisé de la conversation · quota du compte'],
+    ['/bug', 'rapport à coller sur Discord (version, système, modèle, dernières erreurs ; aucune clé ni conversation), copié dans le presse-papiers'],
+    ['/plus-tard [heure] <demande>', 'envoie ta demande plus tard : à la remise à zéro du budget (par défaut) ou à l\'heure donnée (5h, 17h30) ; FS-CLI ouvert et PC allumé'],
     ['/compact [consigne]', 'résume la conversation et repart d\'une nouvelle (auto à 80 % : /autocompact, /threshold)'],
     ['/retry [consigne] · /compare', 'relancer la dernière demande · même question à 2 modèles (/duel <modèle>)'],
     ['/remember · /memory · /forget', 'notes persistantes par dossier'],
@@ -876,6 +887,18 @@ async function command(line) {
       const n = parseInt(arg);
       if (!n || n < 1 || n > 500) return println(c.red('  usage: /steps <1-500>'));
       cfg.maxSteps = n; saveCfg(); return println(c.dim(`  → ${n} étapes max`));
+    }
+    case '/plus-tard': case '/programmer': return schedule(arg);
+    case '/bug': {                                                    // rapport à coller sur Discord (rien n'est envoyé nulle part)
+      const { bugReport, copyText, REPORT_FILE } = await import('./src/bugreport.js');
+      const shell = process.env.PSModulePath && IS_WIN ? 'PowerShell' : (process.env.SHELL || process.env.ComSpec || '').split(/[\\/]/).pop();
+      const text = bugReport({ version: VERSION, model: `${modelName()} (${S.agentId})`, mode: cfg.mode, engine: cfg.engine, web: !!cfg.webSearch, shell,
+        ui: opts.stdio ? 'panneau de l\'éditeur' : (input.kind === 'tui' ? 'plein écran' : 'classique'),
+        extra: [['Conversations', `${createdToday()}/${DAILY_LIMIT} aujourd'hui`]] });
+      try { fs.writeFileSync(REPORT_FILE(), text); } catch {}
+      const copied = await copyText(text);
+      println('\n' + text.split('\n').map(l => '  ' + l).join('\n'));
+      return println(c.accent(`\n  ${copied ? '✓ copié dans le presse-papiers' : 'rapport prêt'}`) + c.dim(` · enregistré dans ${REPORT_FILE()} · colle-le sur Discord et dis ce que tu faisais (aucune clé ni conversation dedans)`));
     }
     case '/theme': {
       if (!arg && interactive && input.select) {
@@ -1299,6 +1322,8 @@ async function chatTurn(text, { keepLast = false, retry = false } = {}) {
         const brief = await serverBrief(S, name, { signal: turnAbort.signal, ask });
         if (brief && !alreadySent('mcp', name + '|' + hashOf(brief))) { message = `${brief}\n\n${message}`; println(c.dim(`  ＋ outils MCP joints : ${name}`)); }   // avant la demande : plus visible
       }
+      { const note = mcpListNote(S.cwd, own);                         // « tu vois mes mcp ? » sans nom de serveur : la liste (rien n'est démarré)
+        if (note && !alreadySent('mcplist', hashOf(note.text))) { message += '\n\n' + note.text; println(c.dim(`  ＋ liste des serveurs MCP jointe (${note.count})`)); } }
       if (wantsBrowser(own)) {
         const pw = loadMcpConfig(S.cwd).mcpServers || {};
         if (!Object.keys(pw).some(n => BROWSER_SERVERS.test(n))) println(c.yellow('  💡 Pour que je pilote le navigateur, active-le une fois avec /navigateur'));
@@ -1487,6 +1512,7 @@ async function handleInput(text) {
   } catch (e) {
     ui.spinner.stop();
     println(c.red(`\n  Erreur: ${e.message}`));
+    if (e?.name !== 'AbortError') { recordError(e, { model: modelName() }); println(c.dim('  /bug prépare un rapport à coller sur Discord si ça se reproduit')); }
     if (/401|expiré/.test(e.message) && !/--login/.test(e.message)) println(c.dim('  → ta clé de session a expiré : quitte puis lance « fs-cli --login »'));
   } finally {
     busy = false; if (!holdInput) input.setBusy(false);              // démarrage du panneau : la file reste fermée jusqu'à la confiance
@@ -1496,6 +1522,36 @@ async function handleInput(text) {
 }
 
 /** traite une saisie puis les messages mis en file d'attente pendant le travail */
+// ── /plus-tard : demande envoyée plus tard (remise à zéro du budget, ou heure choisie) ──────────────────────────────
+// Sur ce PC seulement : FS-CLI doit rester ouvert et le PC allumé (rien ne tourne chez France Student). Pas en -p.
+const hhmm = d => d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+async function schedule(arg) {
+  const a = String(arg || '').trim();
+  if (!a || /^(liste|list)$/i.test(a)) {
+    if (!SCHEDULED.list().length) return println(c.dim('  aucune demande programmée · /plus-tard <demande> (à la remise à zéro du budget) ou /plus-tard 5h <demande>'));
+    println(); SCHEDULED.list().forEach(x => println(`  ${c.accent('⏰ ' + x.id)}  ${hhmm(x.at)}  ${c.dim('« ' + x.text.replace(/\s+/g, ' ').slice(0, 70) + ' »')}`));
+    return println(c.dim('\n  /plus-tard annuler [n°] pour en retirer'));
+  }
+  const cancel = /^annuler(?:\s+(\d+))?$/i.exec(a);
+  if (cancel) {
+    const gone = SCHEDULED.cancel(cancel[1] ? +cancel[1] : null);
+    return println(c.dim(gone.length ? `  → ${gone.length} demande${gone.length > 1 ? 's' : ''} programmée${gone.length > 1 ? 's' : ''} annulée${gone.length > 1 ? 's' : ''}` : '  rien à annuler'));
+  }
+  if (opts.print) return println(c.yellow('  /plus-tard marche dans une session ouverte (FS-CLI doit rester lancé jusqu\'à l\'heure prévue).'));
+  const [first, ...rest] = a.split(/\s+/);
+  let at = parseHour(first), text = at ? rest.join(' ') : a, why = '';
+  if (!at && /^(reset|remise)$/i.test(first)) text = rest.join(' ');
+  if (!text.trim()) return println(c.red('  usage : /plus-tard <demande>  ·  /plus-tard 5h <demande>'));
+  if (!at) {                                                         // par défaut : remise à zéro du budget de chat (+ 1 min de marge)
+    const b = await chatBudget(8000);
+    if (!b?.resetAt || !(Date.parse(b.resetAt) > Date.now())) return println(c.red('  heure de remise à zéro du budget inconnue : précise une heure, ex. /plus-tard 5h ' + text.slice(0, 30)));
+    at = new Date(Date.parse(b.resetAt) + 60_000); why = ' (remise à zéro du budget)';
+  }
+  SCHEDULED.add(at, text);
+  println(c.accent(`  ⏰ programmé pour ${hhmm(at)}${why}`) + c.dim(` · « ${text.replace(/\s+/g, ' ').slice(0, 60)} »`));
+  println(c.dim('    Laisse FS-CLI ouvert et le PC allumé (pas en veille) jusque-là · /plus-tard pour la liste · /plus-tard annuler'));
+}
+
 async function runInput(text) {
   await handleInput(text);
   for (;;) {
@@ -1679,7 +1735,7 @@ process.on('exit', () => { try { input.stop(); } catch {} });
 // fermeture de l'onglet du Terminal (SIGHUP) ou arrêt par le panneau de l'éditeur (SIGTERM) : même sortie propre que /quit
 // (serveurs lancés par l'agent et serveurs MCP arrêtés, session enregistrée) — sinon ils restent orphelins (Mac, Linux)
 for (const [sig, code] of [['SIGHUP', 129], ['SIGTERM', 143]]) { try { process.on(sig, () => { shutdown(code, { quiet: true }); }); } catch {} }
-process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); });
+process.on('unhandledRejection', e => { ui.spinner.stop(); println(c.red(`\n  Erreur: ${e?.message || e}`)); recordError(e, { where: 'unhandledRejection' }); });
 
 /** Fabrique le .vsix depuis le dossier vscode/ du CLI et l'installe dans les éditeurs choisis. Renvoie true si au moins une installation a réussi. */
 function installVscode({ editors = null, all = false, log }) {
