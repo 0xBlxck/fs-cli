@@ -9,10 +9,13 @@ import util from 'node:util';
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
 import { HOME_DIR, cfg, saveCfgKeys } from '../config.js';
 import { createModels } from './models.js';
+import { prepareClaudeHome } from './claudehome.js';
 import { quotaState } from './recover.js';
 import { chatLine, pickChats, isChatId, pluginFiles, chatDetails, displayTitle } from './fschats.js';
 
 const GW_DIR = () => path.join(HOME_DIR, 'gateway');
+/** Dossier Claude Code de fs claude (CLAUDE_CONFIG_DIR) : ses sessions à part de celles du vrai Claude Code. */
+export const CLAUDE_HOME = () => path.join(HOME_DIR, 'claude-home');
 export const logFile = () => path.join(GW_DIR(), 'gateway.log');
 const DEFAULT_GATEWAY_PORT = 8787;
 
@@ -37,6 +40,7 @@ const FS_FLAGS = {
   '--fs-mcp': { key: 'mcp', type: 'bool' },
   '--fs-conversation': { key: 'chat', type: 'string' },
   '--fs-conversations': { key: 'pickChat', type: 'bool' },
+  '--fs-historique': { key: 'history', type: 'enum', values: ['separe', 'commun'] },
 };
 
 /** Lancement avec un GPT : vu en vrai (Discord), ils refusent souvent de travailler comme agent dans Claude Code. */
@@ -46,7 +50,7 @@ export const GPT_WARNING = name => `⚠ ${name || 'Ce modèle GPT'} refuse souve
 /** Valeurs par défaut des options de la passerelle (opts de createGateway / startGateway). */
 export const FS_DEFAULTS = Object.freeze({
   project: null, web: false, claudeMd: false, rewind: 'auto', subagents: 3, flows: 3,
-  ask: false, port: null, newToken: false, journal: false, debug: false, mcp: true, chat: null, pickChat: false,
+  ask: false, port: null, newToken: false, journal: false, debug: false, mcp: true, chat: null, pickChat: false, history: 'separe',
 });
 
 function readValue(spec, flag, raw) {
@@ -574,6 +578,7 @@ function makeHost(io) {
     pick: async o => (await import('./picker.js')).pickInTerminal(o),
     projects: async () => (await import('../api.js')).listFsProjects(),
     writePlugin,
+    claudeHome: (env, home) => prepareClaudeHome({ target: CLAUDE_HOME(), env, home }),
     checkUpdate: async () => (await import('../update.js')).checkUpdate(),
     openLog,
     silence,
@@ -648,6 +653,13 @@ export async function runClaude(argv, io = {}) {
   if (shown?.provider === 'openai') h.err(GPT_WARNING(shown.name));
 
   const env = childEnv(h.env, { url, token, model: ccId, opts: o });
+  // sessions de fs claude à part de celles du vrai Claude Code (réglages, skills, MCP… partagés) ; --fs-historique commun : comme avant
+  if (o.history !== 'commun') {
+    const ch = h.claudeHome(h.env, h.home);
+    log.line({ event: 'claude-home', dir: ch?.dir || null, linked: ch?.linked, copied: ch?.copied, errors: ch?.errors });
+    if (ch?.dir) env.CLAUDE_CONFIG_DIR = ch.dir;
+    else h.err(`Historique à part impossible (${(ch?.errors || []).join(' ; ') || 'erreur inconnue'}) : les sessions vont dans ton Claude Code habituel.\n`);
+  }
   // Serveurs MCP gardés par défaut : le modèle FS s'en sert avec « claude-tool mcp__… » (toolmap.js). --fs-mcp=off les coupe
   // (démarrage plus rapide) ; jamais si l'utilisateur passe lui-même --mcp-config / --strict-mcp-config.
   const noMcp = !o.mcp && claudeOption(rest, '--mcp-config') === null && !rest.includes('--strict-mcp-config');

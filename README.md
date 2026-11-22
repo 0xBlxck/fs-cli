@@ -216,6 +216,7 @@ Ces commandes sont traitées par FS-CLI : elles ne coûtent ni requête au modè
 | `--fs-demander` | Claude Code demande ta confirmation avant chaque commande |
 | `--fs-journal` | affiche le chemin du journal |
 | `--fs-mcp=off` | coupe tes serveurs MCP (gardés par défaut : le modèle FS s'en sert avec claude-tool) |
+| `--fs-historique commun` | sessions dans ton Claude Code habituel. Par défaut, elles sont à part (`~/.fs-cli/claude-home`) et ne se mélangent pas aux tiennes ; tes réglages, skills, commandes, plugins et serveurs MCP restent partagés |
 | `--fs-debug` | garde les échanges (masqués) dans `~/.fs-cli/gateway/debug/` |
 
 **Passerelle seule** (Claude Code lancé à la main, ou l'extension VS Code de Claude Code) :

@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.1', items: [
+    '`fs claude` : ses sessions ne se mélangent plus à celles de ton vrai Claude Code (liste de VS Code, `/resume`) ; tes réglages, skills, commandes, plugins et serveurs MCP restent partagés ; `fs claude --resume` retrouve les siennes ; `--fs-historique commun` pour l’ancien fonctionnement',
+  ] },
   { version: '3.56.0', items: [
     'Plus fiable : si la connexion coupe en pleine réponse (Wi-Fi, veille, longue réflexion), FS-CLI se rattache à la réponse au lieu de s’arrêter, sans rien renvoyer ni refaire deux fois (CLI et `fs claude`)',
     'Les refus « 400 / 409 » que France Student envoie au milieu d’une réponse sont reconnus et réparés tout seuls ; conversation occupée (résumé en cours) : FS-CLI attend et réessaie',

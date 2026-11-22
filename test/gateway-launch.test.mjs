@@ -442,26 +442,28 @@ test('cli.js : aide (2 lignes), /claude dans l\'aide du terminal mais pas dans l
   assert.match(CLI, /case '\/claude':[^\n]*\n\s*return println\([^\n]*fs-cli claude/);
 });
 
-test('nouveautés : entrée 3.56.0 en tête, puis 3.55.4, 3.55.3, 3.55.2, 3.55.1, 3.55.0, 3.54.4, 3.54.3, 3.54.2, 3.54.1, 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
-  const [, , , , , , , , , , m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
-  assert.equal(WHATS_NEW[0].version, '3.56.0');
-  assert.match(WHATS_NEW[0].items[0], /se rattache à la réponse/);
-  assert.match(WHATS_NEW[0].items[3], /\/plus-tard/);
-  assert.match(WHATS_NEW[0].items[4], /\/bug/);
-  assert.equal(WHATS_NEW[1].version, '3.55.4');
-  assert.match(WHATS_NEW[1].items[0], /vrai nombre de tokens relus/);
-  assert.equal(WHATS_NEW[2].version, '3.55.3');
-  assert.match(WHATS_NEW[2].items[0], /petite liste/);
-  assert.equal(WHATS_NEW[3].version, '3.55.2');
-  assert.match(WHATS_NEW[3].items[0], /aperçu en direct/);
-  assert.equal(WHATS_NEW[4].version, '3.55.1');
-  assert.match(WHATS_NEW[4].items[0], /budget de chat restant/);
-  assert.equal(WHATS_NEW[5].version, '3.55.0');
-  assert.match(WHATS_NEW[5].items[0], /Consommation réduite/);
-  assert.equal(WHATS_NEW[6].version, '3.54.4');
-  assert.equal(WHATS_NEW[7].version, '3.54.3');
-  assert.equal(WHATS_NEW[8].version, '3.54.2');
-  assert.equal(WHATS_NEW[9].version, '3.54.1');
+test('nouveautés : entrée 3.56.1 en tête, puis 3.56.0, 3.55.4, 3.55.3, 3.55.2, 3.55.1, 3.55.0, 3.54.4, 3.54.3, 3.54.2, 3.54.1, 3.54.0, 3.53.0, 3.52.2, 3.52.1, 3.52.0, 3.51.0, 3.50.0, 3.49.2, 3.49.1, 3.49.0, 3.48.2, 3.48.1 et 3.48.0', () => {
+  const [, , , , , , , , , , , m, z, y, x, u, s, r, p, e, g, w, n, v] = WHATS_NEW;
+  assert.equal(WHATS_NEW[0].version, '3.56.1');
+  assert.match(WHATS_NEW[0].items[0], /ne se mélangent plus/);
+  assert.equal(WHATS_NEW[1].version, '3.56.0');
+  assert.match(WHATS_NEW[1].items[0], /se rattache à la réponse/);
+  assert.match(WHATS_NEW[1].items[3], /\/plus-tard/);
+  assert.match(WHATS_NEW[1].items[4], /\/bug/);
+  assert.equal(WHATS_NEW[2].version, '3.55.4');
+  assert.match(WHATS_NEW[2].items[0], /vrai nombre de tokens relus/);
+  assert.equal(WHATS_NEW[3].version, '3.55.3');
+  assert.match(WHATS_NEW[3].items[0], /petite liste/);
+  assert.equal(WHATS_NEW[4].version, '3.55.2');
+  assert.match(WHATS_NEW[4].items[0], /aperçu en direct/);
+  assert.equal(WHATS_NEW[5].version, '3.55.1');
+  assert.match(WHATS_NEW[5].items[0], /budget de chat restant/);
+  assert.equal(WHATS_NEW[6].version, '3.55.0');
+  assert.match(WHATS_NEW[6].items[0], /Consommation réduite/);
+  assert.equal(WHATS_NEW[7].version, '3.54.4');
+  assert.equal(WHATS_NEW[8].version, '3.54.3');
+  assert.equal(WHATS_NEW[9].version, '3.54.2');
+  assert.equal(WHATS_NEW[10].version, '3.54.1');
   assert.equal(m.version, '3.54.0');
   assert.match(m.items[0], /serveurs MCP/);
   assert.equal(z.version, '3.53.0');
@@ -700,6 +702,31 @@ test('runClaude --fs-mcp=off : serveurs MCP coupés (--strict-mcp-config)', asyn
   await h.spawned.promise;
   assert.ok(h.rec.spawns[0].args.includes('--strict-mcp-config'));
   h.child.emit('exit', 0, null); await run;
+});
+
+test('runClaude : sessions de fs claude à part (CLAUDE_CONFIG_DIR) ; --fs-historique commun : comme avant ; échec → dossier habituel, signalé', async () => {
+  let h = harness({ claudeHome: () => ({ dir: 'C:\\fs\\claude-home', linked: ['skills'], copied: ['.claude.json'], errors: [] }) });
+  let run = L.runClaude(['-p', 'x'], h.io);
+  await h.spawned.promise;
+  assert.equal(h.rec.spawns[0].opts.env.CLAUDE_CONFIG_DIR, 'C:\\fs\\claude-home');
+  assert.equal(h.rec.logs.find(l => l.event === 'claude-home').dir, 'C:\\fs\\claude-home');
+  h.child.emit('exit', 0, null); await run;
+
+  let called = 0;
+  h = harness({ claudeHome: () => { called++; return { dir: 'X' }; }, env: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: 'C:\\perso' } });
+  run = L.runClaude(['--fs-historique', 'commun', '-p', 'x'], h.io);
+  await h.spawned.promise;
+  assert.equal(called, 0);
+  assert.equal(h.rec.spawns[0].opts.env.CLAUDE_CONFIG_DIR, 'C:\\perso', 'commun : le dossier de l\'utilisateur, inchangé');
+  h.child.emit('exit', 0, null); await run;
+
+  h = harness({ claudeHome: () => ({ dir: null, errors: ['disque plein'] }) });
+  run = L.runClaude(['-p', 'x'], h.io);
+  await h.spawned.promise;
+  assert.ok(!('CLAUDE_CONFIG_DIR' in h.rec.spawns[0].opts.env));
+  assert.match(h.rec.err, /Historique à part impossible \(disque plein\)/);
+  h.child.emit('exit', 0, null); await run;
+  assert.match(L.splitArgs(['--fs-historique', 'nimporte']).fs.errors[0], /separe, commun/);
 });
 
 test('runClaude avec un GPT : avertissement au lancement (ils refusent souvent le mode agent, vu sur Discord) ; avec Claude : rien', async () => {
