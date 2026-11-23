@@ -105,23 +105,30 @@ export async function updateAll(deps = {}) {
   const platform = deps.platform ?? process.platform;
   // shell seulement pour npm.cmd (Windows l'exige pour un .cmd) ; Node est lancé DIRECTEMENT : par le shell, son chemin
   // « C:\Program Files\nodejs\node.exe » était coupé à l'espace (« 'C:\Program' n'est pas reconnu », vu en vrai le 19/11)
-  const run = deps.run ?? ((cmd, args, { shell = false } = {}) => spawnSync(cmd, args, { stdio: 'inherit', shell, env: process.env }));
+  const run = deps.run ?? ((cmd, args, { shell = false, cwd } = {}) => spawnSync(cmd, args, { stdio: 'inherit', shell, cwd, env: process.env }));
   const exists = deps.exists ?? (p => fs.existsSync(p));
-  if (exists(path.join(root, '.git'))) {
-    log('FS-CLI tourne depuis un dossier de développement (git) : mets-le à jour avec « git pull » dans ' + root + '.');
-    return 1;
-  }
+  const git = exists(path.join(root, '.git'));                     // installé depuis un clone git : git pull au lieu de npm
   const u = await (deps.check ?? (() => checkUpdate({ force: true })))().catch(() => ({}));
   log(u?.latest ? (u.newer ? `FS-CLI : v${u.current} → v${u.latest}` : `FS-CLI : déjà en v${u.current}, réinstallation (panneau compris)`) : 'FS-CLI : version en ligne inconnue (GitHub injoignable ?), on essaie quand même');
-  if (platform !== 'win32' && (deps.writable ?? globalDirWritable)(root) === false) {
-    for (const l of npmPermissionHelp('EACCES')) log('  ' + l);
-    return 1;
-  }
-  log('1/2  FS-CLI et fs-cli claude (npm)…');
-  const r1 = run(platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', INSTALL_CMD.split(' ').pop()], { shell: platform === 'win32' });
-  if (r1?.status !== 0) {
-    log('ÉCHEC : la mise à jour de FS-CLI n\'a pas marché. À la main : ' + INSTALL_CMD);
-    return 1;
+  if (git) {
+    log(`1/2  FS-CLI (git pull dans ${root})…`);
+    // git.exe lancé directement (pas de shell) ; cwd plutôt que « -C chemin » : le dossier peut contenir des espaces
+    const r1 = run('git', ['pull', '--ff-only'], { shell: false, cwd: root });
+    if (r1?.status !== 0) {
+      log(`ÉCHEC : git pull n'a pas marché (fichiers modifiés dans ${root} ?). À la main, dans ce dossier : git pull`);
+      return 1;
+    }
+  } else {
+    if (platform !== 'win32' && (deps.writable ?? globalDirWritable)(root) === false) {
+      for (const l of npmPermissionHelp('EACCES')) log('  ' + l);
+      return 1;
+    }
+    log('1/2  FS-CLI et fs-cli claude (npm)…');
+    const r1 = run(platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', INSTALL_CMD.split(' ').pop()], { shell: platform === 'win32' });
+    if (r1?.status !== 0) {
+      log('ÉCHEC : la mise à jour de FS-CLI n\'a pas marché. À la main : ' + INSTALL_CMD);
+      return 1;
+    }
   }
   log('2/2  panneau FS-CLI dans tes éditeurs (VS Code, Cursor, Antigravity…)…');
   const r2 = run(deps.node ?? process.execPath, [path.join(root, 'cli.js'), '--vscode'], { shell: false });

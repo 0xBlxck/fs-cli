@@ -1776,10 +1776,12 @@ async function rewindToMark(id) {
 }
 
 /** /update : met à jour FS-CLI (npm) puis le panneau des éditeurs, après un avertissement clair */
-function runStep(cmd, args, label) {
+// shell seulement pour un .cmd (npm.cmd) : node.exe et git.exe lancés directement, sinon un chemin avec espaces
+// (« C:\Program Files\nodejs\node.exe », « …\FranceStudent CLI\… ») est coupé par l'invite de commandes
+function runStep(cmd, args, label, { cwd } = {}) {
   return new Promise(res => {
     let tail = '';
-    const p = spawn(cmd, args, { shell: process.platform === 'win32', env: process.env, windowsHide: true });
+    const p = spawn(cmd, args, { shell: process.platform === 'win32' && /\.cmd$/i.test(cmd), cwd, env: process.env, windowsHide: true });
     const take = d => { tail = (tail + d).slice(-4000); };
     p.stdout.on('data', take); p.stderr.on('data', take);
     const timer = setTimeout(() => { try { p.kill(); } catch {} }, 5 * 60_000);
@@ -1789,24 +1791,34 @@ function runStep(cmd, args, label) {
   }).finally(() => ui.spinner.stop());
 }
 async function runUpdate() {
-  if (fs.existsSync(path.join(ROOT, '.git'))) return println(c.yellow('  FS-CLI tourne depuis un dossier de développement (git) : mets-le à jour avec git pull, pas avec /update.'));
+  const git = fs.existsSync(path.join(ROOT, '.git'));              // installé depuis un clone git : git pull au lieu de npm
+  const step1 = git ? `git pull (dans ${ROOT})` : INSTALL_CMD;
   ui.spinner.start('recherche de la dernière version…');
   const u = await checkUpdate({ force: true }).catch(() => ({}));
   ui.spinner.stop();
-  if (!u?.latest) return println(c.red('  impossible de joindre GitHub pour vérifier la version : réessaie plus tard ou lance ') + c.accent(INSTALL_CMD));
+  if (!u?.latest) return println(c.red('  impossible de joindre GitHub pour vérifier la version : réessaie plus tard ou lance ') + c.accent(step1));
   const title = u.newer ? `Mettre à jour FS-CLI : v${u.current} → v${u.latest} ?` : `Tu as déjà la dernière version (v${u.current}). Réinstaller quand même ?`;
   const detail = [
     'FS-CLI va lancer sur ton PC :',
-    `  1. ${INSTALL_CMD}`,
+    `  1. ${step1}`,
     '  2. l\'installation du panneau dans tes éditeurs (VS Code, Cursor, Antigravity IDE…)',
     'Ça prend 30 s à 1 min, avec Internet. Une réponse en cours serait interrompue.',
     'Gardés : tes conversations, tes réglages, tes dossiers approuvés et ta connexion à France Student.',
     'Ensuite il faut recharger la fenêtre de l\'éditeur (ou relancer fs-cli dans le terminal).',
     'FS-CLI est un projet communautaire non officiel de France Student. Nouveautés : https://github.com/0xBlxck/fs-cli/releases',
   ].join('\n');
-  if (!(input.select && interactive)) { println(c.yellow('  ' + title)); println(c.dim('    ' + detail.replace(/\n/g, '\n    '))); println(c.dim('  en mode non interactif, lance : ') + c.accent(INSTALL_CMD)); return; }
+  if (!(input.select && interactive)) { println(c.yellow('  ' + title)); println(c.dim('    ' + detail.replace(/\n/g, '\n    '))); println(c.dim('  en mode non interactif, lance : ') + c.accent(step1)); return; }
   const go = await input.select({ title, detail, options: [u.newer ? 'Mettre à jour maintenant' : 'Réinstaller maintenant', 'Annuler'], defaultIndex: u.newer ? 0 : 1 });
   if (go !== 0) return println(c.dim('  mise à jour annulée'));
+  if (git) {                                                       // clone git : avance rapide seulement, jamais de fusion ni d'écrasement
+    const r1 = await runStep('git', ['pull', '--ff-only'], 'mise à jour de FS-CLI (git pull)…', { cwd: ROOT });
+    if (!r1.ok) {
+      println(c.red('  ✗ git pull a échoué :'));
+      for (const l of r1.tail.trim().split('\n').slice(-6)) println(c.dim('    ' + l));
+      if (/local changes|would be overwritten|modifications locales|Not possible to fast-forward|diverg/i.test(r1.tail)) println(c.yellow(`    des fichiers ont été modifiés dans ${ROOT} : enregistre-les (git commit) ou annule-les, puis relance /update`));
+      return println(c.dim('  à la main, dans ce dossier : ') + c.accent('git pull'));
+    }
+  } else {
   const url = INSTALL_CMD.split(' ').pop();
   if (process.platform !== 'win32' && globalDirWritable(ROOT) === false) {   // Mac/Linux : dossier global de npm réservé à root → jamais sudo, on explique la vraie correction
     println(c.yellow("  ✗ npm n'a pas le droit d'écrire dans son dossier global :"));
@@ -1819,6 +1831,7 @@ async function runUpdate() {
     for (const l of r1.tail.trim().split('\n').slice(-6)) println(c.dim('    ' + l));
     if (isNpmPermissionError(r1.tail)) for (const l of npmPermissionHelp(r1.tail)) println(c.yellow('    ' + l));   // jamais « sudo » : il abîme ~/.npm
     return println(c.dim('  à la main : ') + c.accent(INSTALL_CMD));
+  }
   }
   let ver = u.latest;
   try { ver = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch {}
@@ -1968,8 +1981,11 @@ checkUpdate().then(u => {
   if (!u.newer) return;
   if (opts.stdio) stdioSend('updateAvailable', { latest: u.latest, current: u.current });
   println(c.yellow(`  ⬆ FS-CLI v${u.latest} est disponible (tu as la v${u.current}). Pour mettre à jour :`));
-  println(`    ${c.accent(INSTALL_CMD)}`);
-  println(c.dim('    ou tape ') + c.accent('/update') + c.dim(' : FS-CLI le fait pour toi (panneau compris)'));
+  if (fs.existsSync(path.join(ROOT, '.git'))) println(c.dim('    tape ') + c.accent('/update') + c.dim(' (ou clique sur le badge de version) : git pull puis le panneau, tout seul'));
+  else {
+    println(`    ${c.accent(INSTALL_CMD)}`);
+    println(c.dim('    ou tape ') + c.accent('/update') + c.dim(' : FS-CLI le fait pour toi (panneau compris)'));
+  }
   if (!busy) input.prompt();
 }).catch(() => {});
 if (initial) await runInput(initial); else input.prompt();
