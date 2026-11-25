@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fsId, synthId, retryId, decodeId } from './ids.js';
-import { documentFileName, htmlDocumentName, cleanText } from '../native.js';
+import { documentFileName, htmlDocumentName, fallbackDocumentName, cleanText } from '../native.js';
 import { clipMiddle, commandOutput, condenseTestOutput, shares } from '../output.js';
 
 export { condenseTestOutput };
@@ -501,7 +501,13 @@ function documentName(d, ctx) {
     return named;
   }
   const slug = htmlDocumentName(d, null);                                  // null si ce n'est pas du HTML ; sinon un nom tiré du titre
-  if (!slug) return null;
+  if (!slug) {                                                              // ni fichier nommé ni HTML (« Arcade Deck — prototype ») : copie locale, jamais par-dessus un fichier
+    const base = fallbackDocumentName(d, null);
+    if (!base) return null;
+    let name = base;
+    for (let n = 2; n < 100 && ctx.fsExists?.(absPath(name, ctx.env)); n++) name = base.replace(/(\.\w+)$/, `-${n}$1`);
+    return name;
+  }
   const html = cited.filter(c => /\.html?$/i.test(c));
   if (html.length === 1) return html[0];                                   // GPT dit où l'enregistrer (vu en vrai) : on l'y met
   // « dans le dossier C:\x\site dev moi un site » : un seul dossier cité dans la demande → la page y va (vu en vrai)

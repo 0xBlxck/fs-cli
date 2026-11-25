@@ -126,6 +126,8 @@
       const isPath = /^[\w./\\:-]+\.[A-Za-z0-9]{1,8}(:\d+)?$/.test(code) && /[/\\.]/.test(code);
       return stash(isPath ? `<code><a data-path="${esc(code)}">${esc(code)}</a></code>` : `<code>${esc(code)}</code>`);
     });
+    // formules LaTeX (\( … \), $ … $) → texte Unicode (media/latex.js), à l'abri des règles d'italique
+    if (window.FsLatex) s = window.FsLatex.replaceMath(s, (t, block) => stash(`<span class="${block ? 'math math-block' : 'math'}">${esc(t)}</span>`));
     s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => stash(`<a data-url="${esc(u)}" title="${esc(u)}">${esc(t)}</a>`));
     s = s.replace(/https?:\/\/[^\s<>()"']+[^\s<>()"'.,;:!?]/g, u => stash(`<a data-url="${esc(u)}">${esc(u)}</a>`));
     s = esc(s);
@@ -148,6 +150,15 @@
         const closed = i < L.length; i++;
         const name = [fence[2], fence[3]].filter(Boolean).join(' ');
         out += `<div class="code"><div class="bar"><span>${esc(name || 'code')}</span><button data-copy="1">Copier</button></div><pre><code>${esc(body.join('\n'))}${!closed && streaming ? '' : ''}</code></pre></div>`;
+        continue;
+      }
+      const mathEnd = window.FsLatex && window.FsLatex.mathBlockStart(l);
+      if (mathEnd) {                                   // formule sur plusieurs lignes (\[ … \] ou $$ … $$)
+        flush();
+        const body = [l.trim().slice(2)]; i++;
+        while (i < L.length && !L[i].includes(mathEnd)) body.push(L[i++]);
+        if (i < L.length) { body.push(L[i].slice(0, L[i].indexOf(mathEnd))); i++; }
+        out += `<div class="math math-block">${esc(window.FsLatex.latexToText(body.join('\n')))}</div>`;
         continue;
       }
       let m;

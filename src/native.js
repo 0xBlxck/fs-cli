@@ -103,6 +103,29 @@ export function htmlDocumentName(d, root) {
   return `${slug}.html`;
 }
 
+/** langage d'un document de code d'après son contenu (le site ne le donne pas) → extension */
+const CODE_EXT = [[/^\s*(use\s+\w+::|fn\s+main\s*\(|\[package\])/m, 'rs'], [/^\s*(def |import \w+|from \w+ import |if __name__)/m, 'py'],
+  [/^\s*<\?php/, 'php'], [/^\s*(package\s+main|func\s+main\s*\()/m, 'go'], [/^\s*#include\s*</m, 'cpp'],
+  [/^\s*(public\s+class|import\s+java\.)/m, 'java'], [/^\s*(import .* from ['"]|export (default |const |function )|const \w+ = require\()/m, 'js'],
+  [/^\s*(#!\/bin\/(ba)?sh|set -e)/m, 'sh'], [/^\s*[{[]/, 'json']];
+
+/**
+ * Document du site SANS nom de fichier ni HTML (« Arcade Deck — prototype Rust/Bevy », vu sur Discord avec GPT) : avant, il restait
+ * sur le site et l'utilisateur ne récupérait rien. Écrit sous un nom tiré du titre (jamais par-dessus un fichier existant).
+ * Les mises à jour d'un document ne créent pas de nouveau fichier.
+ */
+export function fallbackDocumentName(d, root) {
+  if (d?.update || typeof d?.content !== 'string' || !d.content.trim()) return null;
+  const slug = String(d.title || 'document').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'document';
+  const ext = /^code$/i.test(String(d.kind || '')) ? (CODE_EXT.find(([re]) => re.test(d.content))?.[1] || 'txt') : 'md';
+  for (let n = 1; n < 100; n++) {
+    const name = `${slug}${n > 1 ? '-' + n : ''}.${ext}`;
+    if (!root || !fs.existsSync(path.join(root, name))) return name;
+  }
+  return null;
+}
+
 /** document qui n'est pas un fichier (« Rapport », mise à jour sans contenu…) : montré dans le terminal, sinon l'utilisateur ne le voit nulle part */
 function showDocument(d) {
   ui.println(c.dim(`  ⓘ document « ${d.title || 'sans titre'} »${d.update ? ' modifié' : ''} dans le panneau du site`));
@@ -118,16 +141,18 @@ function showDocument(d) {
  */
 async function takeDocuments(S, docs, io) {
   for (const d of docs) {
-    const name = documentFileName(d) || htmlDocumentName(d, io.root);
+    const named = documentFileName(d) || htmlDocumentName(d, io.root);
+    const name = named || fallbackDocumentName(d, io.root);
     if (!name || typeof d.content !== 'string') {
       showDocument(d);
       S.notes.push(`Le document « ${d.title || 'sans titre'} » est resté dans le panneau de documents du site, que l'utilisateur ne voit pas ici. Pour un fichier, utilise write_file ou edit_file dans le dossier de travail.`);
       continue;
     }
-    ui.println(c.dim(`  ↳ « ${d.title} » créé dans le panneau du site : écrit dans le dossier de travail`));
+    ui.println(c.dim(named ? `  ↳ « ${d.title} » créé dans le panneau du site : écrit dans le dossier de travail`
+      : `  ↳ « ${d.title} » créé dans le panneau du site (sans nom de fichier) : copie écrite dans ${name}`));
     const r = await execCall(S, { name: 'write_file', args: { path: name, content: d.content } }, io);
     S.notes.push(r.ok
-      ? `Ton document « ${d.title} » (panneau de documents du site) a été écrit sur le PC de l'utilisateur dans ${name}. Pour les fichiers, utilise directement write_file et edit_file : l'utilisateur ne voit pas ce panneau.`
+      ? `Ton document « ${d.title} » (panneau de documents du site) a été écrit sur le PC de l'utilisateur dans ${name}.${named ? '' : ' S\'il contient plusieurs fichiers d\'un projet, crée chacun d\'eux à sa place avec write_file.'} Pour les fichiers, utilise directement write_file et edit_file : l'utilisateur ne voit pas ce panneau.`
       : `Ton document « ${d.title} » n'a pas été écrit sur le PC (${String(r.output || '').slice(0, 200)}). Pour les fichiers, utilise write_file et edit_file.`);
   }
 }

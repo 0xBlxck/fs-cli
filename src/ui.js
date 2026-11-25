@@ -2,6 +2,7 @@ import fs from 'node:fs';
 // UI : couleurs, spinner, rendu markdown en streaming, blocs d'outils
 import process from 'node:process';
 import { parseFenceInfo } from './fence.js';
+import { replaceMath, latexToText, mathBlockStart } from './latex.js';
 import { wrapAnsi, strWidth as visWidth } from './tui/layout.js';
 
 export const THEMES = {
@@ -191,6 +192,9 @@ function inline(s) {
   const codes = [];
   s = s.replace(/`([^`\n]+)`/g, (_, t) => { codes.push(t); return `\u0000${codes.length - 1}\u0000`; });
   // liens AVANT le gras : sinon le « [ » des codes couleur (ESC[1m) est pris pour le début d'un lien et casse le texte
+  // formules LaTeX (\( … \), $ … $) → texte Unicode, mises de côté pour que * et _ ne soient pas pris pour de l'italique
+  const maths = [];
+  s = replaceMath(s, t => { maths.push(t); return `\u0002${maths.length - 1}\u0002`; });
   const links = [];
   s = s.replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, (_, t, u) => { links.push([t, u]); return `\u0001${links.length - 1}\u0001`; });
   s = s.replace(/\*\*\*(.+?)\*\*\*/g, (_, t) => c.bold(c.italic(t)));
@@ -198,6 +202,7 @@ function inline(s) {
   s = s.replace(/__(.+?)__/g, (_, t) => c.bold(t));
   s = s.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)/g, (_, p, t) => p + c.italic(t));
   s = s.replace(/\u0001(\d+)\u0001/g, (_, i) => `${c.underline(links[i][0])} ${c.dim('(' + links[i][1] + ')')}`);
+  s = s.replace(/\u0002(\d+)\u0002/g, (_, i) => c.italic(maths[i]));
   s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `${bg([48, 50, 60])}${fg([240, 205, 150])} ${codes[i]} \x1b[39m\x1b[49m`);
   return s;
 }
@@ -232,6 +237,15 @@ export class MdStream {
     this.flushLine();
     if (this.tableRows) this.flushTable();
     if (this.inCode) this.closeCode();
+    if (this.mathEnd) this.flushMath();
+  }
+  flushMath() {
+    const text = latexToText(this.mathBuf.join('\n'));
+    this.mathEnd = null; this.mathBuf = [];
+    if (!text) return;
+    this.blank();
+    for (const l of text.split('\n')) this.emit('    ' + c.italic(l));
+    this.blank();
   }
   closeCode() {
     if (this.collapse) {
@@ -288,6 +302,15 @@ export class MdStream {
       this.inCode = true; this.tick = open[1]; this.lang = lang; this.codeName = name; this.opened = false; this.codeLines = 0;
       return;
     }
+    // formule LaTeX sur plusieurs lignes (\[ … \] ou $$ … $$) : rassemblée, puis écrite convertie en texte Unicode
+    if (this.mathEnd) {
+      const k = line.indexOf(this.mathEnd);
+      if (k < 0) { this.mathBuf.push(line); return; }
+      this.mathBuf.push(line.slice(0, k)); this.flushMath();
+      if (line.slice(k + 2).trim()) this.line(line.slice(k + 2));
+      return;
+    }
+    { const end = mathBlockStart(line); if (end) { this.mathEnd = end; this.mathBuf = [line.trim().slice(2)]; return; } }
 
     // tableau : on accumule les lignes, il est affiché d'un bloc (colonnes alignées) à la première ligne qui n'en fait pas partie
     if (/^\s*\|.*\|\s*$/.test(line)) {

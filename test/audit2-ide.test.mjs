@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const PANEL_SRC = fs.readFileSync(path.join(ROOT, 'vscode', 'media', 'panel.js'), 'utf8');
+const LATEX_SRC = fs.readFileSync(path.join(ROOT, 'vscode', 'media', 'latex.js'), 'utf8');
 
 // ── faux module « vscode » (juste ce que Chat et editorContext utilisent) ──
 const VS = {
@@ -238,6 +239,7 @@ function makeDom() {
     clearTimeout: id => { if (timers[id - 1]) timers[id - 1].f = null; },
     setInterval: () => 0, clearInterval: () => {},
   };
+  vm.runInNewContext(LATEX_SRC, sandbox, { filename: 'latex.js' });   // chargé avant panel.js, comme dans extension.js
   vm.runInNewContext(PANEL_SRC, sandbox, { filename: 'panel.js' });
   const ev = (k, extra = {}) => ({ key: k, shiftKey: false, isComposing: false, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra });
   const D = {
@@ -443,4 +445,25 @@ test('extension : une question annulée par le CLI ferme aussi son diff proposé
   const src = fs.readFileSync(path.join(ROOT, 'vscode', 'extension.js'), 'utf8');
   assert.match(src, /ev\.type === 'selectCancelled'\) this\.closeProposal\(ev\.id\)/);
   assert.match(PANEL_SRC, /case 'selectCancelled':/);
+});
+
+test('panneau : formules LaTeX converties (en ligne et en bloc sur plusieurs lignes), code et prix intacts (bug signalé sur Discord)', () => {
+  const D = makeDom();
+  const txt = String.raw`- \(\pi_\theta\) est la politique formée par le **VAE**.
+- Les paramètres \(\theta\) sont ceux de ` + '`policy.net` et `a_b`' + String.raw`.
+
+\[
+\sum_{i=1}^{n} x_i^2 \leq \frac{1}{2}
+\]
+Ça coûte 5$ et 10$.
+`;
+  for (let i = 0; i < txt.length; i += 17) { D.event({ type: 'text', delta: txt.slice(i, i + 17) }); D.flushFrames(); }
+  D.event({ type: 'textEnd' });
+  const html = D.log.querySelector('.msg-ai').innerHTML;
+  assert.match(html, /<span class="math">π_θ<\/span> est la politique/);
+  assert.match(html, /<span class="math">θ<\/span>/);
+  assert.match(html, /<div class="math math-block">∑ᵢ₌₁ⁿ xᵢ² ≤ 1\/2<\/div>/);
+  assert.match(html, /<code>a_b<\/code>/, 'code jamais converti');
+  assert.match(html, /5\$ et 10\$/, 'prix intacts');
+  assert.ok(!['\\(', '\\theta', '\\pi', '\\sum'].some(t => html.includes(t)), 'plus aucun LaTeX brut');
 });

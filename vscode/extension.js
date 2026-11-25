@@ -522,7 +522,7 @@ class Chat {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="${media('panel.css')}">
 <title>FS-CLI</title></head>
-<body data-logo="${media('logo.png')}" data-platform="${process.platform}"><div id="app"></div><script nonce="${nonce}" src="${media('panel.js')}"></script></body></html>`;
+<body data-logo="${media('logo.png')}" data-platform="${process.platform}"><div id="app"></div><script nonce="${nonce}" src="${media('latex.js')}"></script><script nonce="${nonce}" src="${media('panel.js')}"></script></body></html>`;
   }
 }
 

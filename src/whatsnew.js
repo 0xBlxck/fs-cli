@@ -1,6 +1,13 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.3', items: [
+    'Formules mathématiques lisibles : le LaTeX des réponses (\\(\\pi_\\theta\\), \\frac, \\sum…) s’affiche en symboles (π_θ, a/b, ∑) dans le terminal et le panneau de l’éditeur, au lieu du code brut',
+    'Document créé « sur le site » par le modèle sans nom de fichier (souvent avec GPT) : une copie est écrite dans ton dossier au lieu de rester sur le site, aussi dans `fs claude`',
+  ] },
+  { version: '3.56.2', items: [
+    'Installé depuis un clone git : `/update` (ou le clic sur le badge de version) fait le `git pull` tout seul puis réinstalle le panneau ; tes fichiers modifiés ne sont jamais écrasés',
+  ] },
   { version: '3.56.1', items: [
     '`fs claude` : ses sessions ne se mélangent plus à celles de ton vrai Claude Code (liste de VS Code, `/resume`) ; tes réglages, skills, commandes, plugins et serveurs MCP restent partagés ; `fs claude --resume` retrouve les siennes ; `--fs-historique commun` pour l’ancien fonctionnement',
   ] },

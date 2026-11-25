@@ -146,3 +146,22 @@ test('MCP évoqué sans nom de serveur (« tu vois mes mcp ? ») → la liste de
   assert.equal(mcpListNote(dir, 'utilise le mcp leboncoin pour chercher'), null, 'serveur nommé : ses outils sont joints, pas la liste');
   assert.equal(mcpListNote(dir, 'corrige le bug du login'), null, 'MCP non évoqué : rien');
 });
+
+test('document du site sans nom de fichier (vu sur Discord avec GPT-6.2 Sol) : copie écrite en local sous un nom tiré du titre, jamais par-dessus un fichier', async () => {
+  const { fallbackDocumentName } = await import('../src/native.js');
+  const { dir, S } = mk();
+  const rust = { title: 'Arcade Deck — prototype Rust/Bevy pour Windows', kind: 'code', content: 'use bevy::prelude::*;\nfn main() {}\n' };
+  assert.equal(fallbackDocumentName(rust, dir), 'arcade-deck-prototype-rust-bevy-pour-windows.rs');
+  assert.equal(fallbackDocumentName({ title: 'Plan du jeu', kind: 'text', content: '# Plan' }, dir), 'plan-du-jeu.md');
+  assert.equal(fallbackDocumentName({ ...rust, update: true }, dir), null, 'mise à jour : pas de nouveau fichier');
+  assert.equal(fallbackDocumentName({ title: 'Vide', kind: 'text', content: '  ' }, dir), null);
+  fs.writeFileSync(path.join(dir, 'plan-du-jeu.md'), 'à moi');
+  assert.equal(fallbackDocumentName({ title: 'Plan du jeu', kind: 'text', content: '# Plan' }, dir), 'plan-du-jeu-2.md', 'jamais par-dessus');
+
+  let n = 0;
+  const stream = async o => { n++; o.onChat?.('chat-doc'); return n === 1 ? { text: 'Créé.', usage: null, toolCalls: [], documents: [rust] } : { text: 'ok', usage: null, toolCalls: [], documents: [] }; };
+  await runNative(S, 'fais un prototype rust', { ...io(), stream });
+  assert.equal(fs.readFileSync(path.join(dir, 'arcade-deck-prototype-rust-bevy-pour-windows.rs'), 'utf8'), rust.content);
+  assert.equal(fs.readFileSync(path.join(dir, 'plan-du-jeu.md'), 'utf8'), 'à moi');
+  assert.ok(S.notes.some(x => /arcade-deck-prototype-rust-bevy-pour-windows\.rs[\s\S]*crée chacun d'eux à sa place avec write_file/.test(x)), 'le modèle est prévenu');
+});
