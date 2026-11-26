@@ -194,3 +194,31 @@ test('script Python sans flush : ses lignes arrivent en direct (PYTHONUNBUFFERED
   assert.equal(seen.length, 3);
   assert.ok(seen[2] - seen[0] > 1000, `lignes reçues au fil de l'eau (écarts : ${seen.join(', ')} ms), pas d'un bloc à la fin`);
 });
+
+test('pare-feu sur la demande (vu sur Discord, en boucle) : petite requête sans contenu → contenu bloqué : renvoyée sans le contexte joint ; réseau bloqué : message clair', async () => {
+  const { firewallProbe, FIREWALL_CONTENT, FIREWALL_NETWORK } = await import('../src/api.js');
+  assert.equal(await firewallProbe(async () => ({ status: 200, data: {} })), 'ok');
+  assert.equal(await firewallProbe(async () => ({ status: 401, data: { error: 'x' } })), 'ok', 'le serveur répond : le réseau passe');
+  assert.equal(await firewallProbe(async () => ({ status: 403, data: null })), 'blocked', 'page HTML de Cloudflare');
+  assert.equal(await firewallProbe(async () => ({ status: 0 })), 'unreachable');
+
+  const fw = () => Object.assign(new Error('403 — pare-feu'), { status: 403, code: 'FIREWALL' });
+  // contenu : la 3e tentative part sans le contexte joint, et passe
+  let { S } = mk();
+  const sent = [];
+  let stream = async o => { sent.push(o.content); o.onChat?.('c'); if (sent.length <= 2) throw fw(); return { text: 'ok', usage: null, toolCalls: [], documents: [] }; };
+  await runNative(S, '[Contexte du projet : FSCLI.md…]\n\nfais le build', { ...io(), stream, firewallDelayMs: 0, probe: async () => 'ok', bare: 'fais le build' });
+  assert.equal(sent.length, 3);
+  assert.match(sent[0], /Contexte du projet/);
+  assert.equal(sent[2], 'fais le build', 'renvoyée seule');
+  // contenu, déjà sans contexte : message qui explique quoi changer
+  ({ S } = mk());
+  stream = async () => { throw fw(); };
+  await assert.rejects(runNative(S, 'SELECT * FROM users', { ...io(), stream, firewallDelayMs: 0, probe: async () => 'ok', bare: 'SELECT * FROM users' }), e => e.message === FIREWALL_CONTENT);
+  // réseau : rien à renvoyer, message réseau
+  ({ S } = mk());
+  let n = 0;
+  stream = async () => { n++; throw fw(); };
+  await assert.rejects(runNative(S, 'x', { ...io(), stream, firewallDelayMs: 0, probe: async () => 'blocked', bare: 'x' }), e => e.message === FIREWALL_NETWORK);
+  assert.equal(n, 2, 'pas de 3e envoi quand c\'est le réseau');
+});

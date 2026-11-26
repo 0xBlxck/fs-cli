@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.6', items: [
+    'Erreur 403 du pare-feu de France Student qui revenait en boucle : FS-CLI dit maintenant si c’est ton RÉSEAU (VPN, réseau d’école…) ou le CONTENU de ta demande qui est bloqué, et renvoie tout seul la demande sans le contexte qu’il y joint quand c’est ce contexte qui gêne (CLI et `fs claude`)',
+  ] },
   { version: '3.56.5', items: [
     'Panneau de l’éditeur façon Claude Code : liste de tâches en carte (coche, roue qui tourne, cercle pointillé), fichiers en ligne compacte « Modifié real_lib.py +135 −8 › » / « Créé lookdev_nuit.py +43 › » (diff au clic), temps écoulé en direct sur l’action en cours',
     'Commande longue (rendu vidéo, build…) : on voit ses DERNIÈRES lignes en direct (la progression) au lieu des premières, et les print() de Python s’affichent tout de suite',

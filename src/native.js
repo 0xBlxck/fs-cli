@@ -4,7 +4,7 @@
 // Documentation FS : « Outils client (mode avancé) », flag 2026_11_client_tools.
 import fs from 'node:fs';
 import path from 'node:path';
-import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents, resumeStream, fetchChat, documentsOf, imagesOf, cancelStream } from './api.js';
+import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents, resumeStream, fetchChat, documentsOf, imagesOf, cancelStream, firewallProbe, FIREWALL_CONTENT, FIREWALL_NETWORK } from './api.js';
 import { recoverSend } from './resilient.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
@@ -218,6 +218,7 @@ export async function runNative(S, userText, opts) {
   const budgetOf = opts.budget !== undefined ? opts.budget : (opts.stream ? null : chatBudget);
   const resumeFn = opts.resume !== undefined ? opts.resume : (opts.stream ? null : resumeStream);      // rattachement après coupure (tests : injecté)
   const fetchChatFn = opts.fetchChat !== undefined ? opts.fetchChat : (opts.stream ? null : fetchChat);   // budget de chat du compte (tests : désactivé)
+  const probeFn = opts.probe !== undefined ? opts.probe : (opts.stream ? null : firewallProbe);   // pare-feu : réseau ou contenu ? (tests : injecté)
   ui.liveTokens.reset();                                              // ↓ tokens en direct dans l'indicateur d'attente (comme Claude Code)
   const firstTurn = !S.chatId;                                         // 1er message d'une conversation (pour la récupération des refus)
   let content = userText;
@@ -275,6 +276,20 @@ export async function runNative(S, userText, opts) {
         ui.spinner.start('réflexion…');
         try { return await send(web); }
         catch (e2) {
+          if (e2?.code === 'FIREWALL' && !results?.length && !signal.aborted && probeFn) {
+            // la demande elle-même est bloquée : réseau ou contenu ? une petite requête sans contenu tranche
+            const net = await probeFn().catch(() => null);
+            const bare = typeof opts.bare === 'string' ? opts.bare.trim() : '';
+            if (net === 'ok' && bare && String(content).trim() !== bare) {   // contenu : souvent le contexte joint par FS-CLI → la demande seule, une fois
+              ui.spinner.stop();
+              ui.println(c.yellow('  ⚠ le pare-feu refuse ta demande avec le contexte joint (instructions du projet, notes) : renvoyée seule'));
+              ui.spinner.start('réflexion…');
+              content = bare;
+              try { return await send(web); } catch (e3) { if (e3?.code !== 'FIREWALL') throw e3; e2 = e3; }
+            }
+            if (net === 'ok' || net === 'blocked') e2.message = net === 'ok' ? FIREWALL_CONTENT : FIREWALL_NETWORK;
+            throw e2;
+          }
           if (e2?.code !== 'FIREWALL' || !results?.length || signal.aborted) throw e2;
           ui.spinner.stop();
           ui.println(c.yellow(`  ⚠ le pare-feu bloque le contenu renvoyé au modèle (${results.length} résultat${results.length > 1 ? 's' : ''}) : il reçoit une note « contenu non transmis » à la place`));

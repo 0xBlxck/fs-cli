@@ -1072,6 +1072,28 @@ test('(pare-feu) 403 Cloudflare passager sur un message : un seul nouvel essai s
   assert.equal(r.sse.text, 'Bonjour.');
 });
 
+test('(pare-feu) demande bloquée deux fois : petite requête sans contenu → contenu : renvoyée seule (sans contexte joint) ; réseau : message clair (vu sur Discord)', async t => {
+  const { FIREWALL_NETWORK } = await import('../src/api.js');
+  const fw = { status: 403, code: 'FIREWALL', message: '403 — le pare-feu de France Student (Cloudflare) a bloqué la requête.' };
+  let { fake, gw } = await setup(t, { turns: [{ fail: fw }, { fail: fw }, 'Bonjour.'] });
+  fake.deps.firewallDelayMs = 0;
+  fake.deps.probe = async () => 'ok';
+  let r = await call(gw, ccReq([user('bonjour')]));
+  assert.equal(r.status, 200);
+  assert.equal(fake.sent.length, 3);
+  assert.equal(fake.sent[2].content, 'bonjour', 'renvoyée seule, sans le contexte joint');
+  assert.notEqual(fake.sent[0].content, 'bonjour', 'le 1er envoi portait le contexte');
+  assert.ok(r.sse.text.startsWith(MESSAGES.firewallStripped));
+  assert.ok(r.sse.text.endsWith('Bonjour.'));
+
+  ({ fake, gw } = await setup(t, { turns: [{ fail: fw }, { fail: fw }] }));
+  fake.deps.firewallDelayMs = 0;
+  fake.deps.probe = async () => 'blocked';
+  r = await call(gw, ccReq([user('bonjour')]));
+  assert.equal(fake.sent.length, 2, 'réseau : rien à renvoyer');
+  assert.ok(String(r.json?.error?.message || r.text).includes(FIREWALL_NETWORK), 'cause expliquée : le réseau');
+});
+
 test('(vu en vrai) 200 puis « 409 CONFLICT » dans le flux sur des toolResults → traité comme un 409 (reconcile), pas comme une réponse perdue', async t => {
   const { fake, gw } = await setup(t, {
     files: { [HELLO]: 'x\n' },

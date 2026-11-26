@@ -5,7 +5,7 @@
 // documents du site écrits par des Write synthétiques, puis émission des tool_use APRÈS la sauvegarde de l'état (I4).
 // Ce module n'écrit rien sur le disque lui-même : tout passe par ctx.store, et le réseau par ctx.deps (injectables).
 import { textCleaner, FIREWALL_NOTE } from '../native.js';
-import { documentsOf } from '../api.js';
+import { documentsOf, FIREWALL_CONTENT, FIREWALL_NETWORK } from '../api.js';
 import { tag } from '../chats.js';
 import { CONTINUE_FR } from './context.js';
 import { fpAssistant } from './transcript.js';
@@ -231,6 +231,19 @@ async function beforeAccept(conv, e, send, reply, ctx) {
         ctx.fwNoted = true; ctx.prefix.push(MESSAGES.firewall);
         return { ...send, toolResults: send.toolResults.map(r => ({ callId: r.callId, output: FIREWALL_NOTE, isError: true })) };
       }
+      // la demande elle-même est bloquée : réseau ou contenu ? une petite requête sans contenu tranche (vu sur Discord :
+      // l'erreur revenait en boucle sans que l'utilisateur sache quoi changer)
+      if (!ctx.fwProbed && typeof ctx.deps?.probe === 'function') {
+        ctx.fwProbed = true;
+        const net = await ctx.deps.probe().catch(() => null);
+        ctx.fwCause = net === 'ok' ? 'content' : net === 'blocked' ? 'network' : null;
+        // contenu : souvent le contexte joint par FS-CLI (extrait du CLAUDE.md, rappels) → la demande seule, une fois
+        if (ctx.fwCause === 'content' && !send.toolResults?.length && ctx.userText && String(send.content || '').trim() !== ctx.userText.trim()) {
+          ctx.prefix.push(MESSAGES.firewallStripped);
+          return { ...send, content: ctx.userText };
+        }
+      }
+      if (ctx.fwCause && e) e.message = ctx.fwCause === 'content' ? FIREWALL_CONTENT : FIREWALL_NETWORK;
       break;
     }
     case 'disabled': ctx.onDisabled?.(); break;

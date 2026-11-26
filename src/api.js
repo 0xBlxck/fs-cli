@@ -357,6 +357,22 @@ export function requestJson(method, p, body, timeout = 15000) {
 }
 
 /** Conversations dont le titre ou le contenu contient query (GET /chats/search) → [{ id, title, … }] ; [] en cas d'échec (jamais d'exception). */
+/**
+ * Après un 403 du pare-feu (Cloudflare) : une petite requête SANS contenu tranche entre le réseau et le contenu.
+ * → 'ok' (le serveur répond, même 401 : c'est le CONTENU de la demande qui est bloqué) | 'blocked' (même une requête vide
+ *   est refusée : réseau, VPN, adresse IP) | 'unreachable' (pas de réponse).
+ */
+export async function firewallProbe(get = requestJson) {
+  const r = await get('GET', '/user/usage', undefined, 8000).catch(() => ({ status: 0 }));
+  if (!r || !r.status) return 'unreachable';
+  if (r.status === 403 && !r.data) return 'blocked';                  // page HTML de Cloudflare, pas une réponse de l'API
+  return 'ok';
+}
+export const FIREWALL_CONTENT = '403 — le pare-feu de France Student (Cloudflare) bloque le CONTENU de cette demande (ton réseau passe : une requête vide est acceptée). '
+  + 'Souvent un passage qui ressemble à une attaque pour lui : code SQL, balises <script>, chemins ../../, commandes système, mots de passe. Reformule ou retire ce passage (ou mets-le dans un fichier que le modèle lira), puis renvoie.';
+export const FIREWALL_NETWORK = '403 — le pare-feu de France Student (Cloudflare) bloque ton RÉSEAU (même une requête vide est refusée). '
+  + 'Coupe le VPN ou le proxy, ou essaie un autre réseau (partage 4G), puis réessaie dans une minute.';
+
 export async function searchChats(query, limit = 10) {
   const q = String(query ?? '').trim();
   if (!q) return [];

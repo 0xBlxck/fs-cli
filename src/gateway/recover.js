@@ -19,6 +19,7 @@ export const MESSAGES = Object.freeze({
   nativeOff: '(Ce modèle ne peut pas agir sur tes fichiers avec France Student : réponse en texte seul. Choisis un modèle Claude ou GPT avec /model.)',
   chatGone: '(La conversation France Student n\'est plus disponible : reprise dans une nouvelle conversation.)',
   contentPolicy: '(France Student a bloqué cette demande : filtre de contenu.)',
+  firewallStripped: '(Le pare-feu de France Student a refusé ta demande avec le contexte que FS-CLI y joint (extrait du CLAUDE.md, rappels) : elle est renvoyée seule, sans ce contexte.)',
   firewall: '(Le pare-feu de France Student a refusé le contenu renvoyé au modèle, souvent à cause de ce que contient un fichier lu (ex. un SKILL.md) : le modèle reçoit une note « contenu non transmis » à la place et continue sans.)',
   accountDisabled: 'Compte France Student désactivé : la passerelle ne peut plus rien envoyer. Vérifie ton compte sur le site de France Student.',
   giveUp: '(Le modèle a refusé d\'utiliser les outils : il n\'a rien lu ni modifié. Choisis un autre modèle avec /model, par exemple sonnet, puis renvoie ta demande. Ou reformule.)',

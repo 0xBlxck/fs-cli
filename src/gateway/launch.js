@@ -495,6 +495,8 @@ export async function realDeps() {
     compactChat: api.compactChat,
     uploadFile: api.uploadFile,
     cancelStream: api.cancelStream,
+    /** après un 403 du pare-feu : réseau bloqué ou contenu refusé ? (petite requête sans contenu) */
+    probe: () => api.firewallProbe(),
     fetchAgentsFull: api.fetchAgentsFull,
     /** /fs:conversations : conversations du site (celles du projet si projectId) */
     listChats: ({ projectId = null } = {}) => (projectId ? api.projectChats(projectId) : api.allRecentChats()),
