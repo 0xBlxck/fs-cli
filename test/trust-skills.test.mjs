@@ -16,10 +16,19 @@ function runTrust(answer) {
   fs.writeFileSync(path.join(home, '.env'), 'FS_SESSION_TOKEN=jeton-de-test\n');
   const p = spawn(process.execPath, [CLI, '--stdio'], { cwd: os.homedir(), env: { ...process.env, FS_CLI_HOME: home, FS_CLI_NO_UPDATE_CHECK: '1', FS_IMPORT_HOME: '' }, stdio: ['pipe', 'pipe', 'pipe'] });
   const say = m => p.stdin.write(JSON.stringify(m) + '\n');
-  const seen = { questions: [], cwd: null, exit: null, home, warned: false };
-  let buf = '', asks = 0;
+  const seen = { questions: [], exit: null, home, warned: false };
+  let buf = '', asks = 0, quiet = null, finished = false;
   return new Promise(resolve => {
-    const done = () => { clearTimeout(timer); try { say({ type: 'quit' }); p.stdin.end(); } catch {} setTimeout(() => { p.kill(); resolve(seen); }, 300); };
+    // fin : FS-CLI arrêté, ou 2,5 s sans nouvelle question de confiance après la dernière réponse (dossier accepté, FS-CLI
+    // continue). Jamais d'attente sur le réseau : avec un faux jeton, les appels au site peuvent traîner (vu sur la CI GitHub).
+    const done = () => {
+      if (finished) return; finished = true;
+      clearTimeout(timer); clearTimeout(quiet);
+      seen.alive = seen.exit === null;
+      try { say({ type: 'quit' }); p.stdin.end(); } catch {}
+      setTimeout(() => { p.kill(); resolve(seen); }, 300);
+    };
+    const settle = () => { clearTimeout(quiet); quiet = setTimeout(done, 2500); };
     const timer = setTimeout(done, 25000);
     p.stdout.on('data', d => {
       buf += d; let i;
@@ -30,11 +39,11 @@ function runTrust(answer) {
         if (e.type === 'select' && /confiance/i.test(e.title || '')) {
           seen.questions.push(e.options);
           say({ type: 'select', id: e.id, index: answer.select(e.options, seen.questions.length) });
+          settle();
         } else if (e.type === 'select') say({ type: 'select', id: e.id, index: 0 });
-        if (e.type === 'ask') say({ type: 'ask', id: e.id, text: answer.path(++asks) });
-        if (e.type === 'pickFolder') say({ type: 'folderPicked', purpose: e.purpose || 'trust', path: answer.path(++asks) });
+        if (e.type === 'ask') { say({ type: 'ask', id: e.id, text: answer.path(++asks) }); settle(); }
+        if (e.type === 'pickFolder') { say({ type: 'folderPicked', purpose: e.purpose || 'trust', path: answer.path(++asks) }); settle(); }
         if (e.type === 'print' && /dossier très large/.test(e.text || '')) seen.warned = true;
-        if (e.type === 'status' && e.cwd && seen.questions.length) { seen.cwd = e.cwd; done(); }
       }
     });
     p.on('exit', code => { seen.exit = code; done(); });
@@ -46,7 +55,7 @@ test('dossier personnel choisi soi-même dans le sélecteur : accepté pour la s
   const r = await runTrust({ select: pick('Choisir un autre dossier'), path: () => os.homedir() });
   assert.equal(r.questions.length, 1, 'une seule question');
   assert.ok(r.questions[0].includes('Oui, toujours pour ce dossier (très large)'), 'option « toujours » proposée pour un dossier très large');
-  assert.equal(path.resolve(r.cwd).toLowerCase(), path.resolve(os.homedir()).toLowerCase());
+  assert.ok(r.alive, 'dossier accepté : FS-CLI continue');
   assert.ok(r.warned, 'avertissement « dossier très large » affiché');
   assert.ok(!fs.existsSync(path.join(r.home, 'trusted-folders.json')), 'pas retenu pour toujours sans le demander');
 });
@@ -60,7 +69,7 @@ test('sélecteur fermé sans choix : la question revient (avant : FS-CLI s\'arr�
 test('« Oui, toujours pour ce dossier (très large) » : retenu, plus de question aux lancements suivants', async () => {
   const r = await runTrust({ select: pick('Oui, toujours'), path: () => '' });
   assert.equal(r.questions.length, 1);
-  assert.ok(r.cwd);
+  assert.ok(r.alive, 'dossier accepté : FS-CLI continue');
   const trusted = JSON.parse(fs.readFileSync(path.join(r.home, 'trusted-folders.json'), 'utf8'));
   assert.ok(trusted.some(t => path.resolve(t).toLowerCase() === path.resolve(os.homedir()).toLowerCase()));
 });
