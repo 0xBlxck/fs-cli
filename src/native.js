@@ -361,16 +361,35 @@ export async function runNative(S, userText, opts) {
     results = [];
     let total = 0;
     const done = [];                                                    // actions vraiment faites de ce lot (pour Ctrl+C)
+    // Ctrl+C / Échap : ce qui a vraiment été fait est noté pour le modèle. Vérifié avant chaque action ET après la dernière
+    // (avant : une commande arrêtée en dernier, ex. un rendu seul, n'était notée nulle part → « il n'a pas démarré »)
+    const stopIfAborted = () => {
+      if (!signal.aborted) return;
+      if (done.length) S.notes.push(`Avant l'interruption par l'utilisateur, ces actions ont VRAIMENT été exécutées (ne refais pas celles qui ont abouti) : ${done.join(' ; ')}.`
+        + (done.some(d => d.includes('arrêtée par l\'utilisateur')) ? ' Une commande arrêtée avant la fin a commencé son travail sans le terminer : dis-le tel quel (depuis combien de temps elle tournait) au lieu de dire qu\'elle n\'a pas démarré.' : ''));
+      throw Object.assign(new Error('annulé'), { name: 'AbortError' });
+    };
     for (const call of calls) {
-      if (signal.aborted) {
-        if (done.length) S.notes.push(`Avant l'interruption par l'utilisateur, ces actions ont VRAIMENT été exécutées (ne les refais pas) : ${done.join(' ; ')}.`);
-        throw Object.assign(new Error('annulé'), { name: 'AbortError' });
-      }
+      stopIfAborted();
       nTools++;
-      let r = await execNative(S, call, { signal, ask, root });
-      { const a = parseArgs(call.arguments); done.push(`${call.name}${a.path ? ' ' + a.path : a.command ? ' « ' + String(a.command).slice(0, 80) + ' »' : ''} (${r.isError ? 'échec' : 'ok'})`); }
+      const tCall = Date.now();
+      let r;
+      try { r = await execNative(S, call, { signal, ask, root }); }
+      catch (e) {
+        if (e?.name !== 'AbortError') throw e;
+        r = { callId: call.callId || call.call_id || call.id, output: '', isError: true };   // arrêtée en cours : notée ci-dessous, puis arrêt
+      }
+      {
+        const a = parseArgs(call.arguments);
+        // arrêtée par l'utilisateur en cours de route : depuis combien de temps elle tournait (vu : un rendu arrêté après
+        // 6 min 30, et le modèle croyait qu'il « n'avait pas démarré »)
+        const s = Math.round((Date.now() - tCall) / 1000);
+        const state = signal.aborted ? `arrêtée par l'utilisateur après ${s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`} d'exécution, avant la fin` : r.isError ? 'échec' : 'ok';
+        done.push(`${call.name}${a.path ? ' ' + a.path : a.command ? ' « ' + String(a.command).slice(0, 80) + ' »' : ''} (${state})`);
+      }
       total += r.output.length; results.push(r);
     }
+    stopIfAborted();
     // limite FS par envoi : parts équitables (les petits résultats intacts, les gros se partagent le reste) au lieu de premier servi
     if (total > MAX_TOTAL) {
       const share = shares(results.map(r => r.output.length), MAX_TOTAL - 64 * results.length);

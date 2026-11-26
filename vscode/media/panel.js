@@ -183,13 +183,18 @@
           break;
         }
         const stack = [];
+        // liste de tâches du modèle ([ ] à faire, [~] / [>] / [-] en cours, [x] fait) : carte façon Claude Code
+        // (cercle pointillé, roue qui tourne, coche) ; avant, « [~] » s'affichait tel quel
+        const TASK_RE = /^\[([ xX~>-])\]\s+(.*)$/s;
+        const card = items.length > 0 && items.every(it => TASK_RE.test(it.text));
         for (const it of items) {
           while (stack.length && it.ind < stack[stack.length - 1].ind) out += `</li></${stack.pop().tag}>`;
           const top = stack[stack.length - 1];
-          if (!top || it.ind > top.ind) { const tag = it.ord ? 'ol' : 'ul'; stack.push({ ind: it.ind, tag }); out += `<${tag}>`; }
+          if (!top || it.ind > top.ind) { const tag = it.ord && !card ? 'ol' : 'ul'; stack.push({ ind: it.ind, tag }); out += card ? `<${tag} class="task-card">` : `<${tag}>`; }
           else out += '</li>';
-          const task = it.text.match(/^\[([ xX])\]\s+(.*)$/s);
-          out += task ? `<li class="task">${task[1] === ' ' ? '☐' : '☒'} ${inline(task[2])}` : `<li>${it.text.split('\n').map(inline).join('<br>')}`;
+          const task = it.text.match(TASK_RE);
+          const st = task ? (/[xX]/.test(task[1]) ? 'done' : task[1] === ' ' ? 'todo' : 'doing') : '';
+          out += task ? `<li class="task tk ${st}"><span class="ic ${st}"></span><span class="tx">${inline(task[2])}</span>` : `<li>${it.text.split('\n').map(inline).join('<br>')}`;
         }
         while (stack.length) out += `</li></${stack.pop().tag}>`;
         continue;
@@ -280,15 +285,24 @@
     if (append) pre.textContent += (pre.textContent ? '\n' : '') + text; else pre.textContent = text;
     if (error) row.classList.add('error');
     row.classList.toggle('long', pre.textContent.split('\n').length > 3 || pre.textContent.length > 400);
+    // sortie en direct : le cadre replié montre les DERNIÈRES lignes (la progression), pas les premières (vu : un rendu de
+    // 10 min dont l'avancement restait caché sous la 1re ligne ; l'utilisateur, croyant tout bloqué, l'a arrêté)
+    if (append) { row.classList.add('live'); pre.scrollTop = pre.scrollHeight; }
     toBottom();
   }
+
+  /** durée lisible : « 12 s », « 2 min 58 s » */
+  const dur = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`; };
+  // fichiers : une ligne compacte façon Claude Code (« Modification real_lib.py » puis « Modifié real_lib.py +135 −8 › »)
+  const EDIT_RUNNING = { write_file: 'Écriture en cours', edit_file: 'Modification' };
 
   function toolStart(ev) {
     aiEnd(); thinkEnd();
     const el = h('div', 'tl tool running');
     const head = h('div', 'th');
     const mcp = ev.tag === 'MCP';
-    const name = mcp ? 'MCP' : ev.name === 'shell' ? shellName() : (TOOL_NAME[ev.name] || ev.label || ev.name);
+    const name = mcp ? 'MCP' : ev.name === 'shell' ? shellName() : (EDIT_RUNNING[ev.name] || TOOL_NAME[ev.name] || ev.label || ev.name);
+    if (EDIT_RUNNING[ev.name]) el.classList.add('editrow');
     head.append(h('b', null, name));
     const p = PATH_TOOLS.has(ev.name) ? firstPath(ev.detail) : '';
     if (p) {
@@ -300,7 +314,12 @@
     } else if (mcp) head.append(' ', h('span', 'td', ev.label));
     else if (!IN_TOOLS.has(ev.name) && ev.detail) head.append(' ', h('span', 'td', ev.detail));
     el.append(head);
-    const t = { el, name: ev.name, path: p, box: null };
+    const t = { el, head, name: ev.name, path: p, box: null, t0: Date.now(), timer: 0 };
+    // temps écoulé en direct (« 2 min 58 s ») : on voit que ça travaille, même sans sortie (vu : rendu arrêté faute de signe de vie)
+    const elapsed = h('span', 'el');
+    head.append(elapsed);
+    t.elapsed = elapsed;
+    t.timer = setInterval(() => { const ms = Date.now() - t.t0; if (ms >= 2000) elapsed.textContent = dur(ms); }, 1000);
     S.tool = t;
     add(el);
     const input = mcp ? ev.detail : IN_TOOLS.has(ev.name) ? (ev.raw || ev.detail) : '';
@@ -316,6 +335,8 @@
   function toolDone(ok) {
     const t = S.tool; if (!t) return;
     t.el.classList.remove('running'); t.el.classList.add(ok ? 'ok' : 'err');
+    clearInterval(t.timer);
+    if (t.elapsed) { const ms = Date.now() - t.t0; t.elapsed.textContent = ms >= 3000 ? dur(ms) : ''; }   // durée gardée pour les actions longues
   }
   function note(text, kind) {
     const t = S.tool;
@@ -339,6 +360,18 @@
       body.append(row);
     }
     d.append(dh, body);
+    // écriture / modification : « Créé lookdev_nuit.py +43 › » ou « Modifié real_lib.py +135 −8 › » ; le diff se déplie au clic
+    if (t && EDIT_RUNNING[t.name] && t.head) {
+      const created = t.name === 'write_file' && !ev.removed && (ev.lines || []).every(l => !l || l.t === '+');
+      t.head.querySelector('b').textContent = created ? 'Créé' : 'Modifié';
+      const cnt = h('span', 'cnt');
+      if (ev.added) cnt.append(h('span', 'a', `+${ev.added}`));
+      if (ev.removed) cnt.append(h('span', 'r', `−${ev.removed}`));
+      t.head.insertBefore(cnt, t.elapsed || null);
+      t.head.append(h('span', 'chev', '›'));
+      d.hidden = true;
+      t.head.onclick = () => { d.hidden = !d.hidden; t.el.classList.toggle('open', !d.hidden); toBottom(); };
+    }
     if (t) { t.el.append(d); toBottom(); } else { const w = h('div', 'tl'); w.append(d); add(w); }
   }
 
@@ -504,7 +537,7 @@
     const th = h('div', 'th'); th.append(h('span', null, `Tâches · ${done}/${L.length}`), h('span', null, S.tasksMin ? '▴' : '▾'));
     th.onclick = () => { S.tasksMin = !S.tasksMin; renderTasks(); };
     tasksEl.append(th);
-    for (const t of L) { const r = h('div', 't ' + (t.state || '')); r.append(h('span', 'g', t.state === 'done' ? '☒' : t.state === 'doing' ? '◐' : '☐'), h('span', null, t.text)); tasksEl.append(r); }
+    for (const t of L) { const st = t.state === 'done' ? 'done' : t.state === 'doing' ? 'doing' : 'todo'; const r = h('div', 't ' + (t.state || '')); r.append(h('span', 'ic ' + st), h('span', null, t.text)); tasksEl.append(r); }
   }
 
   // ── barre d'état ──

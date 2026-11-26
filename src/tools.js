@@ -276,7 +276,9 @@ let gitSshSet;
 const userSetsGitSsh = () => gitSshSet ??= !!(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || [path.join(os.homedir(), '.gitconfig'), path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'git', 'config')]
   .some(f => { try { return /^\s*sshCommand\s*=/im.test(fs.readFileSync(f, 'utf8')); } catch { return false; } });
 function childEnv(extra) {
-  const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
+  // PYTHONUNBUFFERED : les print() d'un script Python lancé par le modèle s'affichent en direct (sortie redirigée = tampon
+  // jusqu'à la fin, vu sur un rendu vidéo de 10 min : rien ne bougeait, l'utilisateur a tout arrêté) ; aussi pour ses sous-processus
+  const env = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONUNBUFFERED: '1', NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
   if (!IS_WIN) {                                                 // Windows : Git Credential Manager (fenêtre) et UAC, pas de conflit → inchangé
     if (IS_MAC) env.PATH = childPath();
     env.GIT_TERMINAL_PROMPT = '0';

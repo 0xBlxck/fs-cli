@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.5', items: [
+    'Panneau de l’éditeur façon Claude Code : liste de tâches en carte (coche, roue qui tourne, cercle pointillé), fichiers en ligne compacte « Modifié real_lib.py +135 −8 › » / « Créé lookdev_nuit.py +43 › » (diff au clic), temps écoulé en direct sur l’action en cours',
+    'Commande longue (rendu vidéo, build…) : on voit ses DERNIÈRES lignes en direct (la progression) au lieu des premières, et les print() de Python s’affichent tout de suite',
+    'Arrêt d’une commande en cours (Échap) : elle est vraiment arrêtée, et le modèle sait depuis combien de temps elle tournait (fini « le rendu n’a pas démarré »)',
+  ] },
   { version: '3.56.4', items: [
     '`fs-cli` se lance tel quel dans PowerShell, cmd et Git Bash, même sur un Windows neuf qui bloque les scripts PowerShell (« l’exécution de scripts est désactivée ») : aucun réglage de sécurité à changer',
     'Dossier de travail : choisir ton dossier personnel (ou un autre dossier très large) ne tourne plus en boucle ; nouvelle option « Oui, toujours pour ce dossier » ; sélecteur fermé sans choix : la question revient au lieu de quitter',

@@ -165,3 +165,32 @@ test('document du site sans nom de fichier (vu sur Discord avec GPT-6.2 Sol) : c
   assert.equal(fs.readFileSync(path.join(dir, 'plan-du-jeu.md'), 'utf8'), 'à moi');
   assert.ok(S.notes.some(x => /arcade-deck-prototype-rust-bevy-pour-windows\.rs[\s\S]*crée chacun d'eux à sa place avec write_file/.test(x)), 'le modèle est prévenu');
 });
+
+test('commande longue arrêtée par l\'utilisateur : le modèle sait depuis combien de temps elle tournait (vu : « le rendu n\'a pas démarré » après 6 min 30)', async () => {
+  const { S } = mk();
+  const ac = new AbortController();
+  let n = 0;
+  const cmd = `node -e "setTimeout(()=>{}, 8000)"`;
+  const stream = async o => { n++; o.onChat?.('chat-stop'); return n === 1 ? { text: '', usage: null, toolCalls: [{ callId: 'c1', name: 'run_command', arguments: JSON.stringify({ command: cmd, timeout_seconds: 30 }) }], documents: [] } : { text: 'ok', usage: null, toolCalls: [], documents: [] }; };
+  setTimeout(() => ac.abort(), 1500);
+  await assert.rejects(runNative(S, 'lance le rendu', { ...io(), signal: ac.signal, stream }), e => e.name === 'AbortError');
+  const note = S.notes.find(x => /Avant l'interruption/.test(x)) || '';
+  assert.match(note, /run_command « node -e .*» \(arrêtée par l'utilisateur après \d+ s d'exécution, avant la fin\)/);
+  assert.match(note, /au lieu de dire qu'elle n'a pas démarré/);
+});
+
+test('script Python sans flush : ses lignes arrivent en direct (PYTHONUNBUFFERED), pas toutes à la fin', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const py = ['python3', 'python'].find(p => { try { return spawnSync(p, ['-c', 'import sys; sys.exit(0)'], { timeout: 10000 }).status === 0; } catch { return false; } });
+  if (!py) return t.skip('Python absent');
+  const { runShellDirect } = await import('../src/tools.js');
+  const ui = await import('../src/ui.js');
+  const { dir } = mk();
+  fs.writeFileSync(path.join(dir, 'lent.py'), 'import time\nfor i in range(3):\n    print("etape", i)\n    time.sleep(0.8)\n');
+  const seen = [];
+  const t0 = Date.now();
+  ui.attachSink({ event: (type, d) => { if (type === 'toolLive' && /etape/.test(d.line)) seen.push(Date.now() - t0); }, print() {} });
+  try { await runShellDirect(`${py} lent.py`, { cwd: dir, signal: new AbortController().signal }); } finally { ui.attachSink(null); }
+  assert.equal(seen.length, 3);
+  assert.ok(seen[2] - seen[0] > 1000, `lignes reçues au fil de l'eau (écarts : ${seen.join(', ')} ms), pas d'un bloc à la fin`);
+});

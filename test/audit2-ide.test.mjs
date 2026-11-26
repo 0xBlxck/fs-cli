@@ -467,3 +467,51 @@ test('panneau : formules LaTeX converties (en ligne et en bloc sur plusieurs lig
   assert.match(html, /5\$ et 10\$/, 'prix intacts');
   assert.ok(!['\\(', '\\theta', '\\pi', '\\sum'].some(t => html.includes(t)), 'plus aucun LaTeX brut');
 });
+
+test('panneau : commande longue → le cadre replié montre les DERNIÈRES lignes (progression), message en file expliqué (vu : rendu de 10 min arrêté faute d\'avancement visible)', () => {
+  const D = makeDom();
+  D.event({ type: 'tool', name: 'shell', detail: 'python render.py' });
+  D.event({ type: 'toolLive', line: '{"gap":[[0,0],[1,-0.3],[2,-0.9],[3,-1.4],[4,-2],[5,-2.4],[6,-2.7],[7,-3],[8,-3.2],[9,-3.4]]}' });
+  for (const n of [1200, 2400, 3600, 4800]) D.event({ type: 'toolLive', line: `${n} / 5400` });
+  const row = D.log.querySelector('.io-row.out');
+  assert.ok(row && row.classList.contains('live') && row.classList.contains('long'), 'sortie en direct : vue sur la fin');
+  assert.match(row.querySelector('pre').textContent, /4800 \/ 5400$/);
+  const css = fs.readFileSync(path.join(ROOT, 'vscode', 'media', 'panel.css'), 'utf8');
+  assert.match(css, /\.io-row\.live\.long:not\(\.open\) \.io-text \{[^}]*linear-gradient\(transparent, #000/, 'fondu en haut : les dernières lignes restent lisibles');
+  assert.match(css, /\.msg-user\.queued::after \{ content: 'en file d\\'attente : part à la fin de la tâche en cours \(Échap pour l\\'arrêter\)'/);
+});
+
+test('panneau façon Claude Code : tâches en carte (coche, roue, cercle pointillé ; plus de « [~] » brut), fichiers en ligne compacte « Modifié x +135 −8 › » / « Créé y +43 », diff replié', () => {
+  const D = makeDom();
+  D.event({ type: 'text', delta: 'Plan :\n\n- [x] Ambiance nuit\n- [~] Projecteurs\n- [ ] Rendu final\n' });
+  D.event({ type: 'textEnd' }); D.flushFrames();
+  const html = D.log.querySelector('.msg-ai').innerHTML;
+  assert.match(html, /<ul class="task-card"><li class="task tk done"><span class="ic done"><\/span><span class="tx">Ambiance nuit<\/span>/);
+  assert.match(html, /<li class="task tk doing"><span class="ic doing"><\/span><span class="tx">Projecteurs/);
+  assert.match(html, /<li class="task tk todo"><span class="ic todo"><\/span><span class="tx">Rendu final/);
+  assert.doesNotMatch(html, /\[~\]|☐|☒/);
+
+  D.event({ type: 'tool', name: 'edit_file', detail: 'real_lib.py' });
+  const edit = D.log.querySelectorAll('.tool').at(-1);
+  assert.equal(edit.querySelector('b').textContent, 'Modification', 'pendant : « Modification »');
+  D.event({ type: 'diff', added: 135, removed: 8, lines: [{ t: '-', n: 1, line: 'a' }, { t: '+', n: 1, line: 'b' }] });
+  D.event({ type: 'toolDone', ok: true });
+  assert.equal(edit.querySelector('b').textContent, 'Modifié');
+  assert.equal(edit.querySelector('.cnt').textContent, '+135−8');
+  const d = edit.querySelector('.diff');
+  assert.equal(d.hidden, true, 'diff replié');
+  edit.querySelector('.th').onclick();
+  assert.equal(d.hidden, false, 'déplié au clic');
+  assert.ok(edit.classList.contains('open'));
+
+  D.event({ type: 'tool', name: 'write_file', detail: 'lookdev_nuit.py' });
+  D.event({ type: 'diff', added: 43, removed: 0, lines: [{ t: '+', n: 1, line: 'x' }] });
+  D.event({ type: 'toolDone', ok: true });
+  const created = D.log.querySelectorAll('.tool').at(-1);
+  assert.equal(created.querySelector('b').textContent, 'Créé');
+  assert.equal(created.querySelector('.cnt').textContent, '+43');
+
+  D.event({ type: 'tool', name: 'shell', detail: 'python render.py', raw: 'python render.py' });
+  const sh = D.log.querySelectorAll('.tool').at(-1);
+  assert.ok(sh.querySelector('.el'), 'temps écoulé affiché sur l\'action en cours');
+});
