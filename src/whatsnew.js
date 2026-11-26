@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.7', items: [
+    'Panneau : les actions d’affilée sont rangées dans un bloc repliable, comme Claude Code (« En train d’exécuter une commande · 2 min 58 s » pendant le travail, puis « 2 fichiers modifiés, 1 commande · 3 min 06 s › » une fois fini, clic pour rouvrir)',
+  ] },
   { version: '3.56.6', items: [
     'Erreur 403 du pare-feu de France Student qui revenait en boucle : FS-CLI dit maintenant si c’est ton RÉSEAU (VPN, réseau d’école…) ou le CONTENU de ta demande qui est bloqué, et renvoie tout seul la demande sans le contexte qu’il y joint quand c’est ce contexte qui gêne (CLI et `fs claude`)',
   ] },

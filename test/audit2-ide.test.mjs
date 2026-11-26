@@ -515,3 +515,31 @@ test('panneau façon Claude Code : tâches en carte (coche, roue, cercle pointil
   const sh = D.log.querySelectorAll('.tool').at(-1);
   assert.ok(sh.querySelector('.el'), 'temps écoulé affiché sur l\'action en cours');
 });
+
+test('panneau : bloc d\'actions repliable comme Claude Code (titre en direct pendant le travail, résumé replié à la fin) ; une action seule reste dans le fil', () => {
+  const D = makeDom();
+  const kids = () => D.log.children.filter(x => !String(x.className).includes('spin'));
+  D.event({ type: 'busy', busy: true });
+  D.event({ type: 'text', delta: 'Je commence.' }); D.event({ type: 'textEnd' });
+  D.event({ type: 'tool', name: 'read_file', detail: 'a.py' }); D.event({ type: 'toolDone', ok: true });
+  assert.equal(D.log.querySelectorAll('.acts').length, 0, 'une seule action : pas de bloc');
+  D.event({ type: 'tool', name: 'edit_file', detail: 'real_lib.py' });
+  const g = D.log.querySelector('.acts');
+  assert.ok(g && g.classList.contains('running'), '2e action d\'affilée : bloc ouvert');
+  assert.equal(g.querySelector('.acts-l').textContent, 'Modification de real_lib.py');
+  assert.equal(g.querySelector('.acts-b').querySelectorAll('.tool').length, 2, 'les deux actions dans le bloc');
+  D.event({ type: 'diff', added: 3, removed: 1, lines: [] }); D.event({ type: 'toolDone', ok: true });
+  D.event({ type: 'thinking', delta: 'je vérifie' });
+  D.event({ type: 'tool', name: 'shell', detail: 'npm test', raw: 'npm test' });
+  assert.equal(g.querySelector('.acts-l').textContent, 'En train d’exécuter une commande');
+  assert.ok(g.querySelector('.acts-b').querySelector('.think'), 'la réflexion entre deux actions reste dans le bloc');
+  D.event({ type: 'toolDone', ok: false });
+  D.event({ type: 'text', delta: 'Fini.' }); D.event({ type: 'textEnd' });
+  assert.ok(!g.classList.contains('running'), 'texte du modèle : le bloc se referme');
+  assert.match(g.querySelector('.acts-l').textContent, /^1 fichier modifié, 1 commande, 1 lecture · 1 en échec$/);
+  const body = g.querySelector('.acts-b');
+  assert.equal(body.hidden, true, 'replié');
+  g.querySelector('.acts-h').onclick();
+  assert.equal(body.hidden, false, 'rouvert au clic');
+  assert.ok(kids().indexOf(g) < kids().indexOf(D.log.querySelectorAll('.msg-ai').at(-1)), 'la réponse vient après le bloc');
+});

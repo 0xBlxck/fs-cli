@@ -451,3 +451,22 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .tool.editrow .th:hover .chev { color: var(--fg); }
 .tool.editrow.open .chev { transform: rotate(90deg); }
 .tool.editrow .th b { font-weight: 500; color: var(--dim); }
+
+/* ── bloc d'actions repliable (comme Claude Code) ── */
+.acts { margin: 4px 0; }
+.acts > .acts-h { display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; padding: 3px 10px; border: 1px solid transparent; border-radius: 7px; cursor: pointer; color: var(--dim); font-size: 12.5px; }
+.acts > .acts-h:hover { background: var(--hover); color: var(--fg); }
+.acts.running > .acts-h { color: var(--fg); border-color: var(--accent); }
+.acts .acts-l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acts .acts-err { color: var(--err); }
+.acts > .acts-h .el { color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
+.acts > .acts-h .chev { color: var(--dim); display: inline-block; transition: transform .15s; flex: none; }
+.acts.open > .acts-h .chev { transform: rotate(90deg); }
+.acts > .acts-b { margin: 6px 0 2px; padding: 6px 10px 2px; border: 1px solid var(--border); border-radius: 8px; }
+.acts > .acts-b > .tl { margin-bottom: 6px; }
+.acts .dots { flex: none; display: inline-grid; grid-template-columns: 4px 4px; gap: 3px; }
+.acts .dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--dim); }
+.acts.running .dots i { background: #e8743b; animation: dotpulse 1.2s ease-in-out infinite; }
+.acts.running .dots i:nth-child(2) { animation-delay: .3s; } .acts.running .dots i:nth-child(4) { animation-delay: .6s; } .acts.running .dots i:nth-child(3) { animation-delay: .9s; }
+@keyframes dotpulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+.tl.acts::before { display: none; }

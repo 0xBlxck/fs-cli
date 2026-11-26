@@ -88,7 +88,85 @@
   let stick = true;
   log.addEventListener('scroll', () => { stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
   const toBottom = () => { if (stick) log.scrollTop = log.scrollHeight; };
-  const add = el => { if (S.spin && S.spin.el.parentNode === log) log.insertBefore(el, S.spin.el); else log.append(el); welcomeOff(); toBottom(); return el; };
+  const add = el => {
+    if (!el._acts) { actsClose(); S.seq = []; }                        // autre chose que des actions (texte, question…) : le bloc d'actions se referme
+    if (S.spin && S.spin.el.parentNode === log) log.insertBefore(el, S.spin.el); else log.append(el);
+    welcomeOff(); toBottom(); return el;
+  };
+
+  // ── bloc d'actions repliable, comme Claude Code : les actions d'affilée (commandes, fichiers, lectures, réflexion) dans un
+  // seul cadre ; pendant le travail, son titre dit ce qui se passe (« En train d'exécuter une commande · 2 min 58 s ») ;
+  // une fois fini, il se replie en une ligne de résumé (« 2 fichiers modifiés, 1 commande · 3 min 06 s › ») ──
+  S.seq = []; S.acts = null;
+  function actLabel(ev) {
+    const f = String(firstPath(ev.detail) || '').split(/[\\/]/).pop();
+    switch (ev.name) {
+      case 'shell': case 'python': return 'En train d’exécuter une commande';
+      case 'edit_file': return `Modification de ${f}`;
+      case 'write_file': return `Écriture de ${f}`;
+      case 'read_file': return `Lecture de ${f}`;
+      case 'list_dir': case 'grep': case 'glob': return 'Recherche dans les fichiers';
+      case 'web_search': case 'fetch_url': return 'Recherche sur le web';
+      default: return ev.tag === 'MCP' ? `Outil ${ev.label || 'MCP'}` : (ev.label || ev.name || 'Action en cours');
+    }
+  }
+  function actsSummary(body) {
+    const tools = [...body.querySelectorAll('.tool')];
+    const n = k => tools.filter(k).length;
+    const plural = (c, one, many) => `${c} ${c > 1 ? many : one}`;
+    const parts = [];
+    const mod = n(t => t.dataset.tool === 'edit_file' || (t.dataset.tool === 'write_file' && t.querySelector('b')?.textContent !== 'Créé'));
+    const cre = n(t => t.dataset.tool === 'write_file' && t.querySelector('b')?.textContent === 'Créé');
+    const cmd = n(t => t.dataset.tool === 'shell' || t.dataset.tool === 'python');
+    const rd = n(t => ['read_file', 'list_dir', 'grep', 'glob'].includes(t.dataset.tool));
+    const web = n(t => ['web_search', 'fetch_url'].includes(t.dataset.tool));
+    const other = tools.length - mod - cre - cmd - rd - web;
+    if (mod) parts.push(plural(mod, 'fichier modifié', 'fichiers modifiés'));
+    if (cre) parts.push(plural(cre, 'fichier créé', 'fichiers créés'));
+    if (cmd) parts.push(plural(cmd, 'commande', 'commandes'));
+    if (rd) parts.push(plural(rd, 'lecture', 'lectures'));
+    if (web) parts.push(plural(web, 'recherche web', 'recherches web'));
+    if (other > 0) parts.push(plural(other, 'autre action', 'autres actions'));
+    return { text: parts.join(', ') || 'Actions', errors: n(t => t.classList.contains('err')) };
+  }
+  function actsClose() {
+    const g = S.acts; if (!g) return;
+    S.acts = null;
+    clearInterval(g.timer);
+    g.el.classList.remove('running');
+    const s = actsSummary(g.body);
+    g.label.textContent = s.text;
+    if (s.errors) g.label.append(h('span', 'acts-err', ` · ${s.errors} en échec`));
+    const ms = Date.now() - g.t0;
+    g.elapsed.textContent = ms >= 1000 ? dur(ms) : '';
+    g.body.hidden = true; g.el.classList.remove('open');
+  }
+  /** une action (outil ou réflexion) : seule, elle va dans le fil ; dès la 2e d'affilée, toutes passent dans un bloc */
+  function addAct(el, label) {
+    el._acts = true;
+    if (S.acts) { S.acts.body.append(el); if (label) S.acts.label.textContent = label; toBottom(); return el; }
+    const prev = (S.seq || []).filter(x => x.isConnected && x.parentNode === log);
+    const tools = prev.filter(x => x.classList.contains('tool')).length + (el.classList.contains('tool') ? 1 : 0);
+    if (tools < 2) { add(el); S.seq.push(el); return el; }
+    const g = { el: h('div', 'tl acts running open'), t0: (prev[0] && prev[0]._t0) || Date.now() };
+    g.el._acts = true;
+    const head = h('div', 'acts-h');
+    const dots = h('span', 'dots'); for (let i = 0; i < 4; i++) dots.append(h('i'));
+    g.label = h('span', 'acts-l', label || 'Actions en cours');
+    g.elapsed = h('span', 'el');
+    head.append(dots, g.label, g.elapsed, h('span', 'chev', '›'));
+    g.body = h('div', 'acts-b');
+    head.onclick = () => { g.body.hidden = !g.body.hidden; g.el.classList.toggle('open', !g.body.hidden); toBottom(); };
+    g.el.append(head, g.body);
+    log.insertBefore(g.el, prev[0]);
+    for (const x of prev) g.body.append(x);
+    g.body.append(el);
+    g.timer = setInterval(() => { g.elapsed.textContent = dur(Date.now() - g.t0); }, 1000);
+    g.elapsed.textContent = dur(Date.now() - g.t0);
+    S.acts = g; S.seq = [];
+    toBottom();
+    return el;
+  }
 
   // ── accueil ──
   let welcome = null;
@@ -321,7 +399,8 @@
     t.elapsed = elapsed;
     t.timer = setInterval(() => { const ms = Date.now() - t.t0; if (ms >= 2000) elapsed.textContent = dur(ms); }, 1000);
     S.tool = t;
-    add(el);
+    el.dataset.tool = ev.name; el._t0 = t.t0;
+    addAct(el, actLabel(ev));
     const input = mcp ? ev.detail : IN_TOOLS.has(ev.name) ? (ev.raw || ev.detail) : '';
     if (input) setIo(t, 'in', input);
   }
@@ -386,7 +465,7 @@
       head.onclick = () => { body.hidden = !body.hidden; toBottom(); };
       el.append(head, body);
       S.think = { el, lab, body, t0: Date.now() };
-      add(el);
+      addAct(el, null);                                                  // réflexion entre deux actions : dans le même bloc
     }
     S.think.body.textContent += delta;
   }
@@ -559,7 +638,7 @@
     bSend.innerHTML = b ? ICON.stop : ICON.send; bSend.title = b ? 'Interrompre (Échap)' : 'Envoyer (Entrée)';
     ta.placeholder = b ? 'Ajouter un message à la file…  (/usage s\'ouvre tout de suite)' : 'Demande quelque chose à FS-CLI…  (/ pour les commandes)';   // comme Claude Code : « Queue another message… »
     if (b) { S.spinT0 = Date.now(); const q = log.querySelector('.msg-user.queued'); if (q) q.classList.remove('queued'); }
-    else { spinner(null); aiEnd(); thinkEnd(); S.tool = null; }
+    else { spinner(null); aiEnd(); thinkEnd(); S.tool = null; actsClose(); S.seq = []; }
   }
   let flashT = 0;
   function showFlash(text) { flash.textContent = macKeys(text); flash.style.opacity = '1'; clearTimeout(flashT); flashT = setTimeout(() => { flash.style.opacity = '0'; }, 3500); }
