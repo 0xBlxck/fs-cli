@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents, resumeStream, fetchChat, documentsOf, imagesOf, cancelStream, firewallProbe, FIREWALL_CONTENT, FIREWALL_NETWORK } from './api.js';
 import { recoverSend } from './resilient.js';
-import { prettifyIfMinified } from './prettify.js';
+import { prettifyIfMinified, PRETTY_NOTE } from './prettify.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent, chatBudget, budgetText, fetchChatContext } from './account.js';
@@ -76,8 +76,15 @@ async function execNative(S, call, io) {
   if (cfg.mode === 'plan' && !READ_TOOLS.includes(call.name)) {
     return { callId, output: 'Mode plan (lecture seule) : aucune écriture ni commande. Propose un plan détaillé ; l\'utilisateur repassera en mode auto pour l\'appliquer.', isError: true };
   }
+  // write_file avec du code minifié sur une ligne (HTML, CSS, JS) : remis en forme sur le PC, sans token, même code
+  let pretty = false;
+  if (mapped.name === 'write_file' && typeof mapped.args.content === 'string') {
+    const content = prettifyIfMinified(mapped.args.path, mapped.args.content);
+    if (content !== mapped.args.content) { mapped.args.content = content; pretty = true; }
+  }
   const r = await execCall(S, { name: mapped.name, args: mapped.args }, io);
   let out = String(r.output ?? '');
+  if (pretty && r.ok) out += `\n${PRETTY_NOTE}`;
   if (!r.ok && /REFUSÉ|refusé par la politique/i.test(out)) out = out.includes('REFUSÉ') ? `Commande refusée par l'utilisateur. ${out.replace(/^.*?REFUSÉ cette action\.?/i, '').trim()}`.trim() : out;
   if (out.length > MAX_RESULT && r.cacheKey) forgetRead(S, r.cacheKey);   // lecture coupée : jamais notée « déjà reçue » (sinon la relecture répondrait « inchangé »)
   return { callId, output: clipMiddle(out, MAX_RESULT), isError: !r.ok, cacheKey: r.cacheKey };
@@ -195,7 +202,10 @@ function activityTracker() {
       const a = it.action || {};
       const q = a.query || (Array.isArray(a.queries) ? a.queries[0] : '') || '';
       const n = Array.isArray(a.sources) ? a.sources.length : 0;
-      ui.toolNote(`⌕ recherche web${q ? ` : « ${String(q).slice(0, 80)} »` : ''}${n ? ` · ${n} source${n > 1 ? 's' : ''}` : ''}`);
+      const page = !q && typeof a.url === 'string' ? a.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 80) : '';
+      // GPT envoie aussi des « recherches » sans requête, sans page ni source (vu en vrai : une ligne vide après chaque étape) : rien à montrer
+      if (q || n) ui.toolNote(`⌕ recherche web${q ? ` : « ${String(q).slice(0, 80)} »` : ''}${n ? ` · ${n} source${n > 1 ? 's' : ''}` : ''}`);
+      else if (page) ui.toolNote(`⌕ page lue : ${page}`);
       return ui.spinner.show('réflexion…');
     }
     if (type === 'response.output_item.added' && it.type === 'function_call') { fn = it.name || 'outil'; chars = 0; last = 0; return ui.spinner.show(WRITING[fn] || `le modèle prépare ${fn}`); }

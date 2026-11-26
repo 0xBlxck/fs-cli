@@ -59,3 +59,10 @@ test('prettifyIfMinified : seulement le code sur une ligne (≥ 400 car.), jamai
   assert.equal(prettifyIfMinified('court.js', 'a=1;b=2'), 'a=1;b=2');
   assert.equal(prettifyIfMinified('notes.md', 'x'.repeat(500)), 'x'.repeat(500), 'autres types : intact');
 });
+
+test('prettifyIfMinified : garde-fou — si la remise en forme changeait autre chose que des espaces, le contenu reste tel quel', () => {
+  const src = '<!doctype html><html><head><title>x</title></head><body>' + '<div><p>texte</p></div>'.repeat(30) + '</body></html>';
+  const out = prettifyIfMinified('page.html', src);
+  assert.notEqual(out, src);
+  assert.equal(out.replace(/\s+/g, ''), src.replace(/\s+/g, ''));
+});

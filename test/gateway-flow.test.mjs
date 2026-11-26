@@ -985,24 +985,31 @@ test('(o3) menu à flèches : /fs:conversations propose AskUserQuestion (3 par p
   checkInvariants(fake);
 });
 
-test('(o4) /fs:conversations : d\'abord les projets du site, puis leurs conversations ; « Suivantes ▸ » fait défiler et revient au début', async t => {
+test('(o4) /fs:conversations : tes conversations récentes tout de suite, « 📁 Par projet… » mène aux projets ; « Suivantes ▸ » fait défiler et revient au début', async t => {
   const fake = fakeFs({});
   const asked = [];
   fake.deps.listProjects = async () => [{ id: 'pA', name: 'Cours "EPSI"' }, { id: 'pB', name: 'Perso' }];
   fake.deps.listChats = async o => { asked.push(o.projectId); return o.projectId === 'pA'
     ? Array.from({ length: 7 }, (_, i) => ({ id: `a${i}`, title: `TP ${i}`, lastMessageAt: `2026-11-1${9 - i}T10:00:00Z` }))
-    : [{ id: 'x', title: 'Autre' }]; };
+    : [{ id: 'x', title: 'Autre' }, { id: 'y', title: 'Récente' }]; };
   const { gw } = await setup(t, {}, {}, { fake });
   const body = { tools: [...BASE.body.tools, { name: 'AskUserQuestion', description: 'q', input_schema: { type: 'object' } }] };
   const answer = (ask, label) => results([ask.id, `User has answered your questions: "${ask.input.questions[0].question}"="${label}". You can now continue with the user's answers in mind.`]);
   const m = [user('FSCLI-COMMANDE conversations')];
+  const r0 = await call(gw, ccReq(m, { body }));
+  const c0 = r0.sse.toolUses[0];
+  assert.equal(c0.input.questions[0].header, 'Conversation', 'les conversations d\'abord, pas les projets');
+  assert.deepEqual(asked, [null], 'toutes les conversations récentes');
+  assert.deepEqual(c0.input.questions[0].options.map(o => o.label), ['📁 Par projet…', '1. Autre', '2. Récente']);
+  assert.match(r0.sse.text, /1\. Autre[\s\S]*2\. Récente/);
+  m.push(asst(r0), answer(c0, '📁 Par projet…'));
   const r1 = await call(gw, ccReq(m, { body }));
   const p = r1.sse.toolUses[0];
   assert.equal(p.input.questions[0].header, 'Projet');
   assert.deepEqual(p.input.questions[0].options.map(o => o.label), ['Toutes mes conversations', '📁 Cours \'EPSI\'', '📁 Perso']);
   m.push(asst(r1), answer(p, '📁 Cours \'EPSI\''));
   const r2 = await call(gw, ccReq(m, { body }));
-  assert.deepEqual(asked, ['pA']);
+  assert.deepEqual(asked, [null, 'pA']);
   assert.match(r2.sse.text, /du projet « Cours "EPSI" »/);
   const c1 = r2.sse.toolUses[0];
   assert.deepEqual(c1.input.questions[0].options.map(o => o.label), ['1. TP 0', '2. TP 1', '3. TP 2', 'Suivantes ▸ (page 1/3)']);
@@ -1020,6 +1027,8 @@ test('(o4) /fs:conversations : d\'abord les projets du site, puis leurs conversa
   assert.equal(fake.sent.length, 0);
   // « Other » dans le menu des projets : un mot cherché dans toutes les conversations
   m.push(asst(r5), user('FSCLI-COMMANDE conversations'));
+  const r6a = await call(gw, ccReq(m, { body }));
+  m.push(asst(r6a), answer(r6a.sse.toolUses[0], '📁 Par projet…'));
   const r6 = await call(gw, ccReq(m, { body }));
   m.push(asst(r6), answer(r6.sse.toolUses[0], 'autre'));
   const r7 = await call(gw, ccReq(m, { body }));

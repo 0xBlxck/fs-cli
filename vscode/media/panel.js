@@ -329,8 +329,24 @@
   function aiEnd() {
     if (!S.ai) return;
     cancelRender();
-    if (!S.ai.text.trim()) S.ai.el.remove(); else renderAI(true);
+    if (!S.ai.text.trim()) S.ai.el.remove(); else { renderAI(true); keepLastTaskCard(S.ai.el, S.ai.text); }
     S.ai = null;
+  }
+  /** nouvelle liste de tâches : elle REMPLACE celle d'avant dans la même demande (une seule liste à jour, comme Claude Code) ;
+   *  le message d'avant est réaffiché sans ses lignes de tâches, ou retiré s'il ne contenait qu'elles */
+  const TASK_LINE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX~>-]\][ \t]+.*(?:\n|$)/gm;
+  function keepLastTaskCard(el, text) {
+    if (!/class="task-card"/.test(el.innerHTML)) return;
+    el.dataset.md = text; el.dataset.tasks = '1';
+    for (let prev = el.previousElementSibling; prev && !prev.classList.contains('msg-user'); ) {
+      const before = prev.previousElementSibling;
+      if (prev.dataset.tasks && prev.dataset.md != null) {
+        const rest = prev.dataset.md.replace(TASK_LINE, '').replace(/\n{3,}/g, '\n\n').trim();
+        if (!rest) prev.remove();
+        else { prev.innerHTML = md(rest, false) || ''; prev.dataset.md = rest; delete prev.dataset.tasks; }
+      }
+      prev = before;
+    }
   }
 
   // ── actions de l'agent : style « fil » (puce + nom de l'outil en gras + boîte IN / OUT), comme Claude Code ──
@@ -1202,7 +1218,7 @@
     if (ev.older) add(h('div', 'hold', `… ${ev.older} message${ev.older > 1 ? 's' : ''} plus ancien${ev.older > 1 ? 's' : ''}`));
     for (const m of ev.messages || []) {
       if (m.role === 'user') add(h('div', 'msg-user', m.text));
-      else { const el = h('div', 'tl msg-ai'); el.innerHTML = md(m.text, false); add(el); }
+      else { const el = h('div', 'tl msg-ai'); el.innerHTML = md(m.text, false); add(el); keepLastTaskCard(el, m.text); }
     }
     const n = h('div', 'print'); n.textContent = `↺ conversation reprise · ${ev.title || ''} · ${ev.model || ''}`; add(n);
     askReattach();

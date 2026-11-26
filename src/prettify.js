@@ -166,16 +166,22 @@ export function formatHtml(src) {
   return out.replace(/[ \t]+$/gm, '').trim() + '\n';
 }
 
-/** Contenu d'un document du site écrit en une seule ligne (HTML, CSS, JS) → formaté ; sinon tel quel. */
+/** ajouté au résultat d'écriture : le modèle sait que le fichier n'est plus sur une ligne (sinon son prochain edit_file ne correspondrait pas) */
+export const PRETTY_NOTE = 'Note : le contenu était sur une seule ligne ; il a été écrit remis sur plusieurs lignes et indenté (même code). Relis le fichier avant de le modifier avec edit_file.';
+
+const noWs = s => s.replace(/\s+/g, '');
+
+/** Code (document du site ou write_file) écrit en une seule ligne (HTML, CSS, JS) → formaté ; sinon tel quel. */
 export function prettifyIfMinified(name, content) {
   const text = String(content ?? '');
   const lines = text.split('\n').length;
   if (lines > 3 || text.length < 400 || /\.min\.[a-z]+$/i.test(String(name))) return text;
   const ext = (String(name).match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+  let out = text;
   try {
-    if (ext === 'html' || ext === 'htm' || ext === 'svg' || (!ext && /^\s*<!doctype html|^\s*<html/i.test(text))) return formatHtml(text);
-    if (ext === 'css') return formatCss(text) + '\n';
-    if (['js', 'mjs', 'cjs'].includes(ext)) return formatJs(text) + '\n';
-  } catch {}
-  return text;
+    if (ext === 'html' || ext === 'htm' || ext === 'svg' || (!ext && /^\s*<!doctype html|^\s*<html/i.test(text))) out = formatHtml(text);
+    else if (ext === 'css') out = formatCss(text) + '\n';
+    else if (['js', 'mjs', 'cjs'].includes(ext)) out = formatJs(text) + '\n';
+  } catch { return text; }
+  return noWs(out) === noWs(text) ? out : text;   // garde-fou : seuls des espaces et retours à la ligne ajoutés, jamais autre chose
 }

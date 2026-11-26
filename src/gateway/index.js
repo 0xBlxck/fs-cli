@@ -283,7 +283,18 @@ export function createGateway(deps, opts = {}) {
   }
 
   /** liste des conversations (toutes, d'un projet, ou filtrées par un mot) : texte numéroté + menu à flèches si possible */
-  async function chatStage(conv, reply, avail, { projectId, projectName = '', word = '' } = {}) {
+  async function projectStage(conv, reply, avail) {
+    let projects = null;
+    try { projects = await deps.listProjects(); } catch {}
+    if (!Array.isArray(projects) || !projects.length) return localTurn(conv, reply, Array.isArray(projects) ? 'Aucun projet sur ton compte France Student.' : NO_LIST);
+    const items = [{ label: 'Toutes mes conversations', description: 'les plus récentes, tous projets', value: { projectId: null } },
+      ...projects.map(p => ({ label: `📁 ${String(p.name || 'sans nom').replace(/["“”]/g, '\'').slice(0, 40)}`, description: 'projet du site France Student', value: { projectId: p.id, name: p.name || '' } }))];
+    line({ event: 'commande', name: 'projets', n: projects.length });
+    return askPage(conv, reply, { stage: 'project', page: 0, items, question: 'Quel projet ? (« Other » : un mot cherché dans les titres)', header: 'Projet' },
+      `Projets France Student : ${projects.map(p => p.name).join(', ')}`);
+  }
+
+  async function chatStage(conv, reply, avail, { projectId, projectName = '', word = '', byProject = false } = {}) {
     const key = conv.key || conv.id;
     const list = await siteChats(projectId === undefined ? (o.listProject || null) : projectId);
     if (!Array.isArray(list)) return localTurn(conv, reply, NO_LIST);
@@ -293,8 +304,9 @@ export function createGateway(deps, opts = {}) {
     const where = projectName ? ` du projet « ${projectName} »` : (projectId === undefined && o.listProject) ? ' du projet' : '';
     if (!cands.length) return localTurn(conv, reply, `Aucune conversation France Student${where}${word ? ` dont le titre contient « ${word} »` : ''}.`);
     const text = `Conversations France Student${where}${word ? ` (titre contenant « ${word} »)` : ''} :\n\n${cands.map((c, i) => chatLine(c, i).trim()).join('\n')}`;
-    if (!avail.has('AskUserQuestion') || cands.length < 2) return localTurn(conv, reply, `${text}\n\nPour continuer l'une d'elles ici : /fs:reprendre <numéro>`);
+    if (!avail.has('AskUserQuestion') || (cands.length < 2 && !byProject)) return localTurn(conv, reply, `${text}\n\nPour continuer l'une d'elles ici : /fs:reprendre <numéro>`);
     const items = cands.map((c, i) => ({ label: pickLabel(c, i), description: chatDetails(c), value: { id: c.id, title: displayTitle(c) } }));
+    if (byProject) items.unshift({ label: '📁 Par projet…', description: 'voir les conversations d\'un projet du site', value: { projects: true } });
     return askPage(conv, reply, { stage: 'chat', page: 0, items, question: 'Quelle conversation continuer ici ? (« Other » : un numéro ou un mot du titre)', header: 'Conversation' },
       `${text}\n\nChoisis avec les flèches, ou plus tard : /fs:reprendre <numéro>`);
   }
@@ -327,6 +339,7 @@ export function createGateway(deps, opts = {}) {
       if (opt) return chatStage(conv, reply, avail, { projectId: opt.value?.projectId ?? null, projectName: opt.value?.name || '' });
       return chatStage(conv, reply, avail, { projectId: null, word: answer });   // « Other » : un mot cherché dans toutes les conversations
     }
+    if (opt?.value?.projects) return projectStage(conv, reply, avail);
     if (opt?.value?.id) return resumeChat(conv, reply, opt.value);
     return runFsCommand(conv, { name: 'reprendre', arg: answer }, reply, avail);   // « Other » : numéro de la liste ou mot du titre
   }
@@ -335,19 +348,9 @@ export function createGateway(deps, opts = {}) {
   async function runFsCommand(conv, cmd, reply, avail = new Set()) {
     const key = conv.key || conv.id;
     if (cmd.name === 'conversations') {
-      // sans mot ni --fs-projet : d'abord tes projets du site (menu à flèches), puis leurs conversations
-      if (!cmd.arg && !o.listProject && avail.has('AskUserQuestion') && typeof deps.listProjects === 'function') {
-        let projects = null;
-        try { projects = await deps.listProjects(); } catch {}
-        if (Array.isArray(projects) && projects.length) {
-          const items = [{ label: 'Toutes mes conversations', description: 'les plus récentes, tous projets', value: { projectId: null } },
-            ...projects.map(p => ({ label: `📁 ${String(p.name || 'sans nom').replace(/["“”]/g, '\'').slice(0, 40)}`, description: 'projet du site France Student', value: { projectId: p.id, name: p.name || '' } }))];
-          line({ event: 'commande', name: 'projets', n: projects.length });
-          return askPage(conv, reply, { stage: 'project', page: 0, items, question: 'Quelles conversations afficher ? (« Other » : un mot cherché dans les titres)', header: 'Projet' },
-            `Projets France Student : ${projects.map(p => p.name).join(', ')}`);
-        }
-      }
-      return chatStage(conv, reply, avail, { word: cmd.arg });
+      // sans mot ni --fs-projet : tes conversations récentes tout de suite (comme le panneau), « 📁 Par projet… » en tête du menu
+      const byProject = !cmd.arg && !o.listProject && avail.has('AskUserQuestion') && typeof deps.listProjects === 'function';
+      return chatStage(conv, reply, avail, { word: cmd.arg, byProject });
     }
     const arg = cmd.arg;
     if (!arg) return localTurn(conv, reply, 'Indique laquelle : /fs:reprendre <numéro> (après /fs:conversations), un mot du titre, ou son id.');

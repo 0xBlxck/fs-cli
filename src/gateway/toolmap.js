@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fsId, synthId, retryId, decodeId } from './ids.js';
 import { documentFileName, htmlDocumentName, fallbackDocumentName, cleanText } from '../native.js';
 import { clipMiddle, commandOutput, condenseTestOutput, shares } from '../output.js';
-import { prettifyIfMinified } from '../prettify.js';
+import { prettifyIfMinified, PRETTY_NOTE } from '../prettify.js';
 
 export { condenseTestOutput };
 
@@ -414,7 +414,9 @@ function mapUse(name, a, ctx, avail, shell) {
     case 'write_file': {
       if (!avail.has('Write')) return null;
       const abs = absPath(a.path, env);
-      return { name: 'Write', input: { file_path: abs, content: asText(a.content) }, path: abs, write: true };
+      const raw = asText(a.content), content = prettifyIfMinified(abs, raw);   // code minifié sur une ligne : remis en forme, même code
+      return { name: 'Write', input: { file_path: abs, content }, path: abs, write: true,
+        ...(content !== raw ? { note: PRETTY_NOTE } : {}) };
     }
     case 'run_command': {
       if (!shell) return null;

@@ -543,3 +543,25 @@ test('panneau : bloc d\'actions repliable comme Claude Code (titre en direct pen
   assert.equal(body.hidden, false, 'rouvert au clic');
   assert.ok(kids().indexOf(g) < kids().indexOf(D.log.querySelectorAll('.msg-ai').at(-1)), 'la réponse vient après le bloc');
 });
+
+test('panneau : une nouvelle liste de tâches REMPLACE la précédente de la même demande (vu : deux cartes presque identiques empilées) ; le texte autour reste ; chaque demande garde sa liste', () => {
+  const D = makeDom();
+  const cards = () => D.log.querySelectorAll('.msg-ai').map(e => e.innerHTML).join('').split('class="task-card"').length - 1;
+  const say = t => { D.event({ type: 'text', delta: t }); D.event({ type: 'textEnd' }); D.flushFrames(); };
+  say('Je commence.\n\n- [ ] Repérer la scène\n- [ ] Exporter\n');
+  say('- [~] Repérer la scène\n- [ ] Exporter\n');
+  D.event({ type: 'tool', name: 'shell', detail: 'ls' }); D.event({ type: 'toolDone', ok: true });
+  say('- [x] Repérer la scène\n- [~] Exporter\n');
+  assert.equal(cards(), 1, 'une seule liste, la dernière');
+  const last = D.log.querySelectorAll('.msg-ai').at(-1).innerHTML;
+  assert.match(last, /tk done[\s\S]*Repérer[\s\S]*tk doing[\s\S]*Exporter/);
+  assert.match(D.log.querySelectorAll('.msg-ai')[0].innerHTML, /Je commence\./, 'le texte d\'avant reste');
+  assert.equal(D.log.querySelectorAll('.msg-ai').length, 2, 'message devenu vide (liste seule) retiré');
+  // conversation reprise : même règle, mais une liste par demande
+  D.event({ type: 'transcript', messages: [
+    { role: 'user', text: 'a' }, { role: 'assistant', text: '- [ ] un\n' }, { role: 'assistant', text: '- [x] un\n' },
+    { role: 'user', text: 'b' }, { role: 'assistant', text: '- [ ] deux\n' },
+  ] });
+  assert.equal(cards(), 2);
+  assert.doesNotMatch(D.log.querySelectorAll('.msg-ai').map(e => e.innerHTML).join(''), /tk todo[\s\S]{0,80}>un</, 'l\'ancienne liste « un » remplacée');
+});
