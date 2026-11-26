@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { TOKEN, VERSION, HOME_DIR, ROOT, cfg } from './config.js';
 import { getJson } from './api.js';
 import { checkUpdate, INSTALL_CMD, globalDirWritable, npmPrefixFix } from './update.js';
+import { BLOCKING } from './postinstall.js';
 import { isFolderTrusted, isBroadFolder } from './trust.js';
 import { loadMcpConfig } from './mcp.js';
 import { isImportApproved } from './approvals.js';
@@ -98,7 +99,12 @@ export async function runDoctor(S) {
   if (IS_WIN) {
     const ep = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-ExecutionPolicy'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
     const pol = (ep.stdout || '').trim();
-    if (/^(Restricted|AllSigned)$/i.test(pol)) add('err', 'PowerShell', `stratégie d'exécution « ${pol} » : npm et fs-cli peuvent être bloqués`, 'Set-ExecutionPolicy -Scope CurrentUser RemoteSigned');
+    // scripts bloqués : à l'installation, FS-CLI met de côté son lanceur fs-cli.ps1 (src/postinstall.js) et PowerShell prend
+    // fs-cli.cmd ; la stratégie de sécurité de Windows n'a pas besoin d'être changée
+    const cmdShim = where.status === 0 ? String(where.stdout).split(/\r?\n/).map(l => l.trim()).find(l => /fs-cli\.cmd$/i.test(l)) : null;
+    const ps1 = !!cmdShim && fs.existsSync(cmdShim.replace(/\.cmd$/i, '.ps1'));   // « where » ne liste pas les .ps1
+    if (BLOCKING.test(pol) && ps1) add('warn', 'PowerShell', `stratégie d'exécution « ${pol} » : dans PowerShell, « fs-cli » est refusé (scripts désactivés)`, `dans cmd : ${INSTALL_CMD} (FS-CLI s'adapte tout seul, sans toucher à la sécurité de Windows)`);
+    else if (BLOCKING.test(pol)) add('ok', 'PowerShell', `stratégie d'exécution « ${pol} » : « fs-cli » passe par fs-cli.cmd et marche aussi dans PowerShell ; pour npm, tape npm.cmd`);
     else add('ok', 'PowerShell', `stratégie d'exécution « ${pol || '?'} »`);
     const term = process.env.WT_SESSION ? 'Windows Terminal' : process.env.TERM_PROGRAM === 'vscode' ? 'terminal de VS Code' : process.env.ConEmuPID ? 'ConEmu' : process.env.TERM_PROGRAM || '';
     if (term) add('ok', 'Terminal', term);

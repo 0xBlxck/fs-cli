@@ -1,6 +1,6 @@
 {
   "name": "fs-cli",
-  "version": "3.56.3",
+  "version": "3.56.4",
   "description": "Client terminal communautaire (non officiel) pour France Student AI : agent avec vrais appels d'outils, permissions, mémoire, MCP",
   "type": "module",
   "bin": {
@@ -25,8 +25,9 @@
     "vscode/scripts/pack.mjs"
   ],
   "scripts": {
+    "postinstall": "node src/postinstall.js",
     "start": "node cli.js",
-    "test": "node --test test/syntax.test.mjs test/agents.test.mjs test/mcp-oauth.test.mjs test/stdio.test.mjs test/changes.test.mjs test/bridge.test.mjs test/features.test.mjs test/images.test.mjs test/discover.test.mjs test/setup.test.mjs test/intent.test.mjs test/fresh.test.mjs test/trust.test.mjs test/outside.test.mjs test/tui.test.mjs test/pinned.test.mjs test/confirm.test.mjs test/proposal.test.mjs test/blocks.test.mjs test/team.test.mjs test/native.test.mjs test/projects.test.mjs test/macos-security.test.mjs test/macos-ui.test.mjs test/macos-tools.test.mjs test/macos-extension.test.mjs test/macos-install.test.mjs test/audit-critiques.test.mjs test/audit2-moteur.test.mjs test/audit2-cli.test.mjs test/audit2-commandes.test.mjs test/audit2-terminal.test.mjs test/audit2-ide.test.mjs test/audit2-mcp.test.mjs test/security.test.mjs test/mcp-server.test.mjs test/gateway-helpers.test.mjs test/gateway-api.test.mjs test/gateway-classify.test.mjs test/gateway-context.test.mjs test/gateway-background.test.mjs test/gateway-ids.test.mjs test/gateway-transcript.test.mjs test/gateway-store.test.mjs test/gateway-toolmap.test.mjs test/gateway-outbound.test.mjs test/gateway-sse.test.mjs test/gateway-server.test.mjs test/gateway-models.test.mjs test/gateway-recover.test.mjs test/gateway-launch.test.mjs test/gateway-flow.test.mjs test/welcome.test.mjs test/output.test.mjs test/resilient.test.mjs test/bugreport.test.mjs test/claudehome.test.mjs test/latex.test.mjs && node test/permissions.check.mjs && node test/web.offline.check.mjs && node test/web.transport.check.mjs && node test/mcp/run-tests.js",
+    "test": "node --test test/syntax.test.mjs test/agents.test.mjs test/mcp-oauth.test.mjs test/stdio.test.mjs test/changes.test.mjs test/bridge.test.mjs test/features.test.mjs test/images.test.mjs test/discover.test.mjs test/setup.test.mjs test/intent.test.mjs test/fresh.test.mjs test/trust.test.mjs test/outside.test.mjs test/tui.test.mjs test/pinned.test.mjs test/confirm.test.mjs test/proposal.test.mjs test/blocks.test.mjs test/team.test.mjs test/native.test.mjs test/projects.test.mjs test/macos-security.test.mjs test/macos-ui.test.mjs test/macos-tools.test.mjs test/macos-extension.test.mjs test/macos-install.test.mjs test/audit-critiques.test.mjs test/audit2-moteur.test.mjs test/audit2-cli.test.mjs test/audit2-commandes.test.mjs test/audit2-terminal.test.mjs test/audit2-ide.test.mjs test/audit2-mcp.test.mjs test/security.test.mjs test/mcp-server.test.mjs test/gateway-helpers.test.mjs test/gateway-api.test.mjs test/gateway-classify.test.mjs test/gateway-context.test.mjs test/gateway-background.test.mjs test/gateway-ids.test.mjs test/gateway-transcript.test.mjs test/gateway-store.test.mjs test/gateway-toolmap.test.mjs test/gateway-outbound.test.mjs test/gateway-sse.test.mjs test/gateway-server.test.mjs test/gateway-models.test.mjs test/gateway-recover.test.mjs test/gateway-launch.test.mjs test/gateway-flow.test.mjs test/welcome.test.mjs test/output.test.mjs test/resilient.test.mjs test/bugreport.test.mjs test/claudehome.test.mjs test/latex.test.mjs test/postinstall.test.mjs test/trust-skills.test.mjs && node test/permissions.check.mjs && node test/web.offline.check.mjs && node test/web.transport.check.mjs && node test/mcp/run-tests.js",
     "scan": "node scripts/scan.mjs",
     "scan:staged": "node scripts/scan.mjs --staged"
   },

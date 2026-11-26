@@ -15,6 +15,7 @@ import { mcpOverview, connectAll } from './mcp-status.js';
 import { approveServer } from './pseudo.js';
 import { isImportApproved } from './approvals.js';
 import { TOOLS, resolveP, scanProject } from './tools.js';
+import { discoverSkills, searchSkills, importHome } from './discover.js';
 import * as ui from './ui.js';
 import { c, println } from './ui.js';
 
@@ -821,12 +822,57 @@ export async function extraCommand(cmd, arg, env) {
       return true;
     }
     case '/skills': {
+      // skills du PC (~/.claude/skills, .agents, Codex, plugins, dossier du projet) : avant, seuls les 5 profils intégrés
+      // étaient listés ici, et on croyait ses skills introuvables alors que le modèle les avait (vu sur Discord)
+      const all = discoverSkills(cwd, { all: true });
+      const off = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase()));
+      const isOn = s => !off.has(s.name.toLowerCase());
       println();
+      if (arg) {                                                        // /skills <mot> : recherche
+        const hits = searchSkills(all, arg, 15);
+        if (!hits.length) println(c.dim(`  aucun skill ne correspond à « ${arg} » (${all.length} sur ce PC)`));
+        hits.forEach(s => println(`  ${isOn(s) ? c.green('●') : c.dim('○')} ${c.bold(s.name)} ${c.dim('· ' + s.source)}\n     ${c.dim(clip(String(s.description || '').replace(/\s+/g, ' '), 100))}`));
+        println(c.dim('\n  /skill <nom> pour le désactiver ou le réactiver · /<nom> pour l\'utiliser tout de suite\n'));
+        return true;
+      }
+      if (!importHome() && !all.length) println(c.dim('  Skills de ton PC : lecture coupée (/import on pour lire ~/.claude/skills, Codex…)'));
+      else if (!all.length) println(c.dim('  Skills de ton PC : aucun trouvé (~/.claude/skills, ~/.agents/skills, ~/.codex/skills, .claude/skills du projet)'));
+      else {
+        const on = all.filter(isOn).length;
+        println(`  ${c.bold('Skills de ton PC')} ${c.dim(`· ${on} actif${on > 1 ? 's' : ''} sur ${all.length} · le modèle ouvre celui qui sert ta demande`)}`);
+        const bySource = new Map();
+        for (const s of all) { if (!bySource.has(s.source)) bySource.set(s.source, []); bySource.get(s.source).push(s); }
+        const where = { 'Claude Code': '~/.claude/skills', agents: '~/.agents/skills', Codex: '~/.codex/skills', 'plugin Claude Code': 'plugins de Claude Code', projet: 'dossier du projet' };
+        const width = Math.max(40, ui.cols() - 6);
+        for (const [source, list] of bySource) {
+          println(c.accent(`\n  ${source}`) + c.dim(` (${where[source] || source}) : ${list.length}`));
+          let line = '    ';
+          for (const s of list) {
+            const word = (isOn(s) ? s.name : `${s.name} (off)`) + '  ';
+            if (ui.stripAnsi(line).length + word.length > width) { println(line); line = '    '; }
+            line += isOn(s) ? word : c.dim(word);
+          }
+          if (line.trim()) println(line);
+        }
+        println(c.dim('\n  /skills <mot> pour chercher · /skill <nom> pour désactiver ou réactiver · /<nom> pour l\'utiliser tout de suite'));
+      }
+      println(`\n  ${c.bold('Profils FS-CLI')} ${c.dim('· consignes ajoutées à chaque message quand ils sont activés')}`);
       mem.loadSkills().forEach((s, i) => println(`  ${cfg.skills.includes(s.id) ? c.green('●') : c.dim('○')} ${c.accent(String(i + 1))}  ${c.bold(s.name)} ${c.dim('· ' + (s.badge || ''))}\n       ${c.dim(clip(s.description || '', 90))}`));
-      println(c.dim('\n  /skill <n°|id> pour activer/désactiver (pris en compte dès ton prochain message)\n'));
+      println(c.dim('\n  /skill <n°> pour activer ou désactiver un profil (pris en compte dès ton prochain message)\n'));
       return true;
     }
     case '/skill': {
+      // un skill du PC (nom exact) : désactivé / réactivé (comme le bouton du panneau) ; sinon un profil FS-CLI (n°, id, nom)
+      const pc = arg && !/^\d+$/.test(arg.trim()) ? discoverSkills(cwd, { all: true }).find(x => x.name.toLowerCase() === arg.trim().replace(/^\//, '').toLowerCase()) : null;
+      if (pc) {
+        const n = pc.name.toLowerCase(), set = new Set((cfg.disabledSkills || []).map(x => String(x).toLowerCase()));
+        const enable = set.has(n);
+        if (enable) set.delete(n); else set.add(n);
+        cfg.disabledSkills = [...set]; saveCfg();
+        S.toolsHintSig = ''; S.skillsCatSig = '';                       // index des skills renvoyé au modèle au prochain message
+        println(c.dim(`  → skill ${pc.name} : ${enable ? c.green('réactivé') : 'désactivé'} (pris en compte dès ton prochain message)`));
+        return true;
+      }
       const list = mem.loadSkills();
       const s = list[parseInt(arg) - 1] || list.find(x => x.id === arg || x.name.toLowerCase().includes(arg.toLowerCase()));
       if (!arg || !s) { println(c.red('  skill introuvable') + c.dim(' (/skills)')); return true; }

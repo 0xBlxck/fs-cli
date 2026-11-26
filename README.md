@@ -18,17 +18,15 @@ Gratuit, open source, sans dépendance et sans télémétrie. Interface en fran�
 winget install OpenJS.NodeJS.LTS
 ```
 
-Ferme puis rouvre le terminal. Sur un Windows neuf, autorise aussi les scripts de npm (une seule fois, réponds `O`) :
+Ferme puis rouvre le terminal (sinon il ne connaît pas encore `npm`).
+
+**2. Installe FS-CLI** (dans PowerShell, cmd ou Git Bash, la même commande) :
 
 ```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+npm.cmd install -g https://github.com/0xBlxck/fs-cli/archive/refs/heads/main.tar.gz
 ```
 
-**2. Installe FS-CLI :**
-
-```powershell
-npm install -g https://github.com/0xBlxck/fs-cli/archive/refs/heads/main.tar.gz
-```
+`npm.cmd` plutôt que `npm` : un Windows neuf bloque les scripts PowerShell, donc `npm` y répond « l'exécution de scripts est désactivée sur ce système ». `npm.cmd` marche partout, sans toucher à la sécurité de Windows.
 
 **3. Lance-le dans le dossier de ton projet :**
 
@@ -36,6 +34,8 @@ npm install -g https://github.com/0xBlxck/fs-cli/archive/refs/heads/main.tar.gz
 cd "C:\chemin\vers\ton projet"
 fs-cli
 ```
+
+`fs-cli` marche tel quel dans **PowerShell, cmd et Git Bash**, même quand Windows bloque les scripts PowerShell : l'installation s'en rend compte et fait passer `fs-cli` par son lanceur `fs-cli.cmd` (aucun réglage de sécurité n'est changé). Si `fs-cli` « n'est pas reconnu », ferme et rouvre le terminal. Sous WSL (Linux dans Windows), installe FS-CLI à part, comme sous Linux.
 
 Au premier lancement, un **assistant** connecte ton compte France Student : il ouvre le site, t'explique où copier ta clé de session (F12, ou ⌘⌥I sur Mac → *Application* → *Cookies* → `next-auth.session-token`), la vérifie et l'enregistre sur ton PC (`~/.fs-cli/.env`). Rien à éditer à la main. Il te demande ensuite si tu fais confiance au dossier.
 
@@ -50,7 +50,7 @@ Au premier lancement, un **assistant** connecte ton compte France Student : il o
 | Vérifier que tout marche | `fs-cli` puis `/doctor` |
 | Signaler un bug (rapport à coller sur Discord, sans clé ni conversation) | `/bug` |
 | Envoyer une demande quand le budget revient (ou à 5h, 17h30…) | `/plus-tard ta demande` · `/plus-tard 5h ta demande` |
-| Désinstaller | `npm uninstall -g fs-cli` (tes réglages restent dans `~/.fs-cli`) |
+| Désinstaller | `npm.cmd uninstall -g fs-cli` (tes réglages restent dans `~/.fs-cli` ; il peut rester `fs-cli.ps1.bloque` dans le dossier de npm, sans effet) |
 
 ## Installation sur Mac (Apple Silicon et Intel) et Linux
 
@@ -380,7 +380,7 @@ Une faille ? Signale-la en privé (onglet *Security* → *Report a vulnerability
 
 | Problème | Solution |
 |---|---|
-| « l'exécution de scripts est désactivée sur ce système » (npm ou fs-cli) | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, puis réessaie (ou lance `fs-cli.cmd`) |
+| « l'exécution de scripts est désactivée sur ce système » (npm ou fs-cli) | tape `npm.cmd` au lieu de `npm`. Pour `fs-cli` (installation d'avant la 3.56.4) : `fs-cli.cmd update` une fois, ensuite `fs-cli` marche partout. Aucun réglage de sécurité à changer |
 | `npm` ou `fs-cli` n'est pas reconnu | ferme et rouvre le terminal ; sinon vérifie que `npm config get prefix` est dans ton `PATH` |
 | « clé de session expirée » / erreur 401 | `fs-cli --login` |
 | « Limite de 50 nouvelles conversations par jour » | continue dans une conversation existante (`fs-cli -c`, `/resume`) ; remise à zéro vers 5 h du matin |

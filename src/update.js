@@ -7,7 +7,10 @@ import { spawnSync } from 'node:child_process';
 import { HOME_DIR, VERSION } from './config.js';
 
 export const REPO = '0xBlxck/fs-cli';
-export const INSTALL_CMD = `npm install -g https://github.com/${REPO}/archive/refs/heads/main.tar.gz`;
+// Windows : npm.cmd et pas npm. Un Windows neuf bloque les scripts PowerShell, donc le lanceur npm.ps1 que PowerShell choisit
+// en premier (« l'exécution de scripts est désactivée sur ce système ») ; npm.cmd marche dans cmd, PowerShell et Git Bash.
+export const installCmd = (platform = process.platform) => `${platform === 'win32' ? 'npm.cmd' : 'npm'} install -g https://github.com/${REPO}/archive/refs/heads/main.tar.gz`;
+export const INSTALL_CMD = installCmd();
 const URL_PKG = `https://raw.githubusercontent.com/${REPO}/main/package.json`;
 const CACHE = () => path.join(HOME_DIR, 'update.json');
 const EVERY = 12 * 3600 * 1000;
@@ -126,7 +129,7 @@ export async function updateAll(deps = {}) {
     log('1/2  FS-CLI et fs-cli claude (npm)…');
     const r1 = run(platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', INSTALL_CMD.split(' ').pop()], { shell: platform === 'win32' });
     if (r1?.status !== 0) {
-      log('ÉCHEC : la mise à jour de FS-CLI n\'a pas marché. À la main : ' + INSTALL_CMD);
+      log('ÉCHEC : la mise à jour de FS-CLI n\'a pas marché. À la main : ' + installCmd(platform));
       return 1;
     }
   }

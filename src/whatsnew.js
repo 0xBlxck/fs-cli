@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.4', items: [
+    '`fs-cli` se lance tel quel dans PowerShell, cmd et Git Bash, même sur un Windows neuf qui bloque les scripts PowerShell (« l’exécution de scripts est désactivée ») : aucun réglage de sécurité à changer',
+    'Dossier de travail : choisir ton dossier personnel (ou un autre dossier très large) ne tourne plus en boucle ; nouvelle option « Oui, toujours pour ce dossier » ; sélecteur fermé sans choix : la question revient au lieu de quitter',
+    '`/skills` montre enfin tes skills (~/.claude/skills, Codex, plugins…) et pas seulement les 5 profils de FS-CLI ; `/skills <mot>` pour chercher, `/skill <nom>` pour en désactiver un',
+  ] },
   { version: '3.56.3', items: [
     'Formules mathématiques lisibles : le LaTeX des réponses (\\(\\pi_\\theta\\), \\frac, \\sum…) s’affiche en symboles (π_θ, a/b, ∑) dans le terminal et le panneau de l’éditeur, au lieu du code brut',
     'Document créé « sur le site » par le modèle sans nom de fichier (souvent avec GPT) : une copie est écrite dans ton dossier au lieu de rester sur le site, aussi dans `fs claude`',

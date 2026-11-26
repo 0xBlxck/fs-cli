@@ -499,7 +499,7 @@ const HELP_ROWS = [
     ['/retry [consigne] · /compare', 'relancer la dernière demande · même question à 2 modèles (/duel <modèle>)'],
     ['/remember · /memory · /forget', 'notes persistantes par dossier'],
     ['/preprompt · /profil', 'instructions permanentes · faits appris sur toi'],
-    ['/skills · /skill <n°>', 'compétences spécialisées (Fullstack, GLua, Sécurité, DevOps, Python…)'],
+    ['/skills [mot] · /skill <nom|n°>', 'tes skills (~/.claude/skills, Codex, plugins…) et les profils FS-CLI ; chercher, désactiver ou réactiver'],
     ['/project · /tree · /index', 'changer de projet · arborescence · générer RESUME.md'],
     ['/search · /fetch <url>', 'recherche web · lire une page (adresses locales refusées) ; résultat joint à ton prochain message'],
     ['!& <cmd> · /jobs', 'lancer une commande en arrière-plan (serveur…) · liste, logs, stop'],
@@ -1876,12 +1876,20 @@ async function ensureFolderTrust(dir, { picked = false } = {}) {
   if (isFolderTrusted(dir)) { if (picked) rememberWorkDir(dir); return dir; }
   const broad = isBroadFolder(dir);
   if (picked && !broad) { trustFolder(dir, { remember: false }); rememberWorkDir(dir); return dir; }   // dossier que tu viens de choisir toi-même : pas de 2e question
+  // dossier très large choisi toi-même (sélecteur, /cd) : accepté pour la session, sans reposer la question (avant : boucle
+  // « Choisir un autre dossier… » → même question, vue sur Antigravity) ; « Oui, toujours » au prochain lancement pour le garder
+  if (picked && broad) {
+    trustFolder(dir, { remember: false });
+    println(c.yellow(`  ⚠ ${dir} est un dossier très large (dossier personnel ou racine) : le modèle y voit tout. Confiance pour cette session.`));
+    return dir;
+  }
   const detail = `Le modèle pourra lire et modifier les fichiers de ce dossier et y lancer des commandes (avec confirmation pour les actions sensibles).` +
     (broad ? `\n⚠ C'est un dossier très large (racine du disque ou dossier personnel) : préfère le dossier précis d'un projet.` : '\nLa confiance vaut aussi pour ses sous-dossiers.');
   // lancé depuis un dossier large (ex. le dossier personnel) : le dernier dossier choisi est proposé en premier
   const last = broad && cfg.lastWorkDir && !samePathCI(cfg.lastWorkDir, dir) && fs.existsSync(cfg.lastWorkDir) && fs.statSync(cfg.lastWorkDir).isDirectory() ? cfg.lastWorkDir : '';
   const RESUME = last ? `Travailler dans ${ui.shortPath(last, 50)} (dernier dossier choisi)` : '';
-  const options = broad ? [...(last ? [RESUME] : []), 'Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'] : ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'];
+  const ALWAYS_BROAD = 'Oui, toujours pour ce dossier (très large)';
+  const options = broad ? [...(last ? [RESUME] : []), 'Oui, pour cette session seulement', ALWAYS_BROAD, 'Choisir un autre dossier…', 'Non'] : ['Oui, je fais confiance à ce dossier', 'Oui, pour cette session seulement', 'Choisir un autre dossier…', 'Non'];
   let idx;
   if (input.select && interactive) idx = await input.select({ title: `Faire confiance à ce dossier ? ${dir}`, detail, options, defaultIndex: 0 });
   else {
@@ -1894,11 +1902,11 @@ async function ensureFolderTrust(dir, { picked = false } = {}) {
   if (RESUME && options[idx] === RESUME) return ensureFolderTrust(path.resolve(last), { picked: true });
   if (options[idx] === 'Choisir un autre dossier…') {
     const other = await pickFolder('Dossier de travail de FS-CLI');
-    if (!other) return false;
-    if (!fs.existsSync(other) || !fs.statSync(other).isDirectory()) { println(c.red('  dossier introuvable : ' + other)); return false; }
+    if (!other) return ensureFolderTrust(dir);                       // sélecteur fermé sans choix : la question revient (avant : arrêt, puis relance en boucle)
+    if (!fs.existsSync(other) || !fs.statSync(other).isDirectory()) { println(c.red('  dossier introuvable : ' + other)); return ensureFolderTrust(dir); }
     return ensureFolderTrust(path.resolve(other), { picked: true });
   }
-  trustFolder(dir, { remember: options[idx].startsWith('Oui, je') });
+  trustFolder(dir, { remember: options[idx].startsWith('Oui, je') || options[idx] === ALWAYS_BROAD });
   return dir;
 }
 function samePathCI(a, b) { return path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase(); }
