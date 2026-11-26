@@ -237,7 +237,8 @@ export async function runNative(S, userText, opts) {
   ui.liveTokens.reset();                                              // ↓ tokens en direct dans l'indicateur d'attente (comme Claude Code)
   const firstTurn = !S.chatId;                                         // 1er message d'une conversation (pour la récupération des refus)
   let content = userText;
-  if (S.notes.length) { content = `[${S.notes.join(' ')}]\n${content}`; S.notes = []; }
+  // « Info de FS-CLI » : reconnu et masqué quand la conversation est reprise (sinon la note s'affiche comme un message de l'utilisateur)
+  if (S.notes.length) { content = `[Info de FS-CLI : ${S.notes.join(' ')}]\n${content}`; S.notes = []; }
   S.sid ||= newSid();
   if (!S.chatId && cfg.tagChats !== false) content = tag(S.sid, S.tagRole || '') + content;   // agents de /team : « [abcd·w0] »
   const root = baseDir(S);

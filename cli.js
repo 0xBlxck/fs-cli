@@ -690,7 +690,8 @@ function transcriptOf(chat) {
     let s = String(t || '');
     if (role === 'user') {
       s = s.replace(/^\[[0-9a-f]{4}(?:·[^\]]*)?\]\s*/i, '');                        // étiquette de session « [7f3a] »
-      for (let k = 0; k < 4 && /^\[(?:L'utilisateur|Dossier courant|Info de FS-CLI|Résultats|Contenu de la page|Contexte VS Code)[\s\S]*?\]\s*\n/.test(s); k++) s = s.replace(/^\[[\s\S]*?\]\s*\n/, '');
+      // notes de FS-CLI collées devant le message (les anciennes n'avaient pas l'étiquette « Info de FS-CLI ») : jamais affichées comme si l'utilisateur les avait écrites
+      for (let k = 0; k < 4 && /^\[(?:L'utilisateur|Dossier courant|Info de FS-CLI|Résultats|Contenu de la page|Contexte VS Code|Ton document|Le document|Une image générée|Image générée|Avant l'interruption)[\s\S]*?\]\s*\n/.test(s); k++) s = s.replace(/^\[[\s\S]*?\]\s*\n/, '');
       const cut = s.search(/\n\n\[(?:Info de FS-CLI|Guide «|Format de réponse|Instructions du projet|Sois concis|Outils MCP|Préprompt|Mémoire|Faits|Contexte)/);
       if (cut > 0) s = s.slice(0, cut);
     }

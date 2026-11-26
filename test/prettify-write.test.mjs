@@ -59,3 +59,12 @@ test('fs claude : write_file d\'une page sur une ligne → Write de Claude Code 
   assert.equal(w2.input.content, 'var a=1;'.repeat(80), '.min.js jamais touché');
   assert.equal(r.pending[1].note, undefined);
 });
+
+test('notes de FS-CLI jointes au message suivant : marquées « Info de FS-CLI » (masquées à la reprise, jamais affichées comme un message de l\'utilisateur)', async () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'ws-'));
+  const S = { chatId: 'chat-9', sid: 'abcd', agentId: -2003, cwd: dir, targetDir: null, undo: [], allow: {}, pendingResults: [], notes: ['Ton document « a.js » a été écrit dans a.js.'], tokens: { in: 0, out: 0 }, slots: {} };
+  const seen = [];
+  const stream = async o => { seen.push(o.content); return { text: 'ok', usage: null, toolCalls: [], documents: [] }; };
+  await runNative(S, 'dcp la video elle est ou ?', { ...io(), stream });
+  assert.match(seen[0], /^\[Info de FS-CLI : Ton document « a\.js » a été écrit dans a\.js\.\]\ndcp la video elle est ou \?$/);
+});

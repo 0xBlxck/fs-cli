@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.10', items: [
+    'Panneau : une seule liste de tâches aussi quand GPT écrit le plan puis sa mise à jour dans le même message, et quand tu rouvres une conversation',
+    'Conversation reprise : la note interne de FS-CLI (« Ton document … a été écrit sur le PC ») ne s’affiche plus comme si tu l’avais écrite',
+  ] },
   { version: '3.56.9', items: [
     'Code sur une seule ligne aussi remis en forme quand le modèle écrit le fichier lui-même (write_file), plus seulement les documents du site : la page reste lisible dans l’éditeur, même code, aucun token de plus (CLI, panneau et `fs claude`)',
     'Panneau : plus de lignes « recherche web » vides après chaque étape (GPT en envoie sans requête ni source)',

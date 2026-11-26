@@ -565,3 +565,24 @@ test('panneau : une nouvelle liste de tâches REMPLACE la précédente de la mê
   assert.equal(cards(), 2);
   assert.doesNotMatch(D.log.querySelectorAll('.msg-ai').map(e => e.innerHTML).join(''), /tk todo[\s\S]{0,80}>un</, 'l\'ancienne liste « un » remplacée');
 });
+
+test('panneau : GPT écrit le plan PUIS sa mise à jour dans le même message (vraie conversation reprise) → une seule liste, la dernière', () => {
+  const D = makeDom();
+  const all = () => D.log.querySelectorAll('.msg-ai').map(e => e.innerHTML).join('');
+  D.event({ type: 'transcript', messages: [
+    { role: 'user', text: 'bah aller transforme ca en video' },
+    { role: 'assistant', text: '- [ ] Repérer comment la scène se lance\n- [ ] Exporter la course\n- [ ] Vérifier le fichier\n\n- [~] Repérer comment la scène se lance' },
+    { role: 'assistant', text: '- [x] Repérer comment la scène se lance\n- [~] Exporter la course' },
+    { role: 'assistant', text: '**La course est prête en MP4.**\n\n- [x] Exporter la course\n- [x] Vérifier le fichier\n\n1 min 19 s.' },
+  ] });
+  assert.equal(all().split('class="task-card"').length - 1, 1, 'une seule liste');
+  assert.match(all(), /La course est prête/);
+  assert.match(all(), /1 min 19 s/, 'le texte après la liste reste');
+  // en direct : même règle dans un seul message
+  const L = makeDom();
+  L.event({ type: 'text', delta: 'Plan :\n\n- [ ] A\n- [ ] B\n\n- [~] A\n- [ ] B\n' }); L.event({ type: 'textEnd' }); L.flushFrames();
+  const html = L.log.querySelector('.msg-ai').innerHTML;
+  assert.equal(html.split('class="task-card"').length - 1, 1);
+  assert.match(html, /Plan/);
+  assert.match(html, /tk doing[\s\S]*>A</);
+});

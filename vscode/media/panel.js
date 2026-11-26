@@ -335,8 +335,30 @@
   /** nouvelle liste de tâches : elle REMPLACE celle d'avant dans la même demande (une seule liste à jour, comme Claude Code) ;
    *  le message d'avant est réaffiché sans ses lignes de tâches, ou retiré s'il ne contenait qu'elles */
   const TASK_LINE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX~>-]\][ \t]+.*(?:\n|$)/gm;
+  /** blocs de lignes de tâches d'un texte (une liste = lignes de tâches consécutives, lignes vides permises) */
+  function taskBlocks(text) {
+    const lines = String(text).split('\n'), blocks = [];
+    let cur = null;
+    lines.forEach((l, i) => {
+      const m = l.match(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX~>-]\][ \t]+(.*)$/);
+      if (m) {
+        const key = m[1].trim().toLowerCase();
+        if (cur && cur.seen.has(key)) cur = null;                 // la même étape revient : c'est la liste mise à jour, pas la suite
+        if (!cur) blocks.push(cur = { from: i, to: i, seen: new Set() });
+        cur.to = i; cur.seen.add(key);
+      } else if (l.trim()) cur = null;
+    });
+    return { lines, blocks };
+  }
   function keepLastTaskCard(el, text) {
     if (!/class="task-card"/.test(el.innerHTML)) return;
+    // GPT écrit parfois le plan puis sa mise à jour dans le MÊME message : seule la dernière liste reste
+    const { lines, blocks } = taskBlocks(text);
+    if (blocks.length > 1) {
+      const drop = new Set(blocks.slice(0, -1).flatMap(b => Array.from({ length: b.to - b.from + 1 }, (_, k) => b.from + k)));
+      text = lines.filter((_, i) => !drop.has(i)).join('\n').replace(/\n{3,}/g, '\n\n');
+      el.innerHTML = md(text, false) || '';
+    }
     el.dataset.md = text; el.dataset.tasks = '1';
     for (let prev = el.previousElementSibling; prev && !prev.classList.contains('msg-user'); ) {
       const before = prev.previousElementSibling;
