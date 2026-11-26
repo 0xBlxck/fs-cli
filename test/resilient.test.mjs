@@ -222,3 +222,15 @@ test('pare-feu sur la demande (vu sur Discord, en boucle) : petite requête sans
   await assert.rejects(runNative(S, 'x', { ...io(), stream, firewallDelayMs: 0, probe: async () => 'blocked', bare: 'x' }), e => e.message === FIREWALL_NETWORK);
   assert.equal(n, 2, 'pas de 3e envoi quand c\'est le réseau');
 });
+
+test('document du site en HTML minifié sur une ligne (vu : 8 Ko illisibles dans l\'éditeur) : écrit sur plusieurs lignes, même code ; le modèle est prévenu de relire avant de modifier', async () => {
+  const { dir, S } = mk();
+  const html = '<!doctype html><html><head><title>Test</title><style>body{margin:0;color:red}</style></head><body>' + '<div class="c"><p>Bloc</p></div>'.repeat(20) + '<script>let n=0;for(let i=0;i<3;i++){n+=i}document.title=String(n)</script></body></html>';
+  let k = 0;
+  const stream = async o => { k++; o.onChat?.('c'); return k === 1 ? { text: 'Créé.', usage: null, toolCalls: [], documents: [{ title: 'cathedrale.html', kind: 'code', content: html }] } : { text: 'ok', usage: null, toolCalls: [], documents: [] }; };
+  await runNative(S, 'fais la page', { ...io(), stream });
+  const written = fs.readFileSync(path.join(dir, 'cathedrale.html'), 'utf8');
+  assert.ok(written.split('\n').length > 30, 'sur plusieurs lignes');
+  assert.equal(written.replace(/\s+/g, ''), html.replace(/\s+/g, ''), 'même code (seuls des espaces ajoutés)');
+  assert.ok(S.notes.some(x => /remis sur plusieurs lignes \(même code\) : relis-le avant de le modifier/.test(x)));
+});

@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.8', items: [
+    'Page HTML, CSS ou JS créée par le modèle sur une seule ligne (souvent GPT, illisible dans l’éditeur) : remise sur plusieurs lignes et indentée avant d’être écrite, sans rien changer au code et sans aucun token de plus (CLI et `fs claude`)',
+  ] },
   { version: '3.56.7', items: [
     'Panneau : les actions d’affilée sont rangées dans un bloc repliable, comme Claude Code (« En train d’exécuter une commande · 2 min 58 s » pendant le travail, puis « 2 fichiers modifiés, 1 commande · 3 min 06 s › » une fois fini, clic pour rouvrir)',
   ] },

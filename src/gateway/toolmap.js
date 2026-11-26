@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fsId, synthId, retryId, decodeId } from './ids.js';
 import { documentFileName, htmlDocumentName, fallbackDocumentName, cleanText } from '../native.js';
 import { clipMiddle, commandOutput, condenseTestOutput, shares } from '../output.js';
+import { prettifyIfMinified } from '../prettify.js';
 
 export { condenseTestOutput };
 
@@ -556,9 +557,10 @@ export function planDocuments(docs, ctx) {
     const r = injectRead(abs, ctx, avail, seen);
     if (r) { uses.push(r); synthetic.push({ ccId: r.id, purpose: 'read', path: abs }); }
     const id = synthId('doc');
-    uses.push({ id, name: 'Write', input: { file_path: abs, content: d.content } });
+    const content = prettifyIfMinified(name, d.content);                    // code minifié sur une ligne : remis en forme, même code
+    uses.push({ id, name: 'Write', input: { file_path: abs, content } });
     synthetic.push({ ccId: id, purpose: 'doc', path: abs, name, title,
-      note: `Ton document « ${title} » a été écrit dans ${name}. Pour les fichiers, utilise directement write_file et edit_file.` });
+      note: `Ton document « ${title} » a été écrit dans ${name}.${content !== d.content ? ' Il a été remis sur plusieurs lignes (même code) : relis-le avant de le modifier.' : ''} Pour les fichiers, utilise directement write_file et edit_file.` });
   }
   return { uses, synthetic, text: texts.join('\n') };
 }

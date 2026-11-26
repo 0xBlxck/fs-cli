@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents, resumeStream, fetchChat, documentsOf, imagesOf, cancelStream, firewallProbe, FIREWALL_CONTENT, FIREWALL_NETWORK } from './api.js';
 import { recoverSend } from './resilient.js';
+import { prettifyIfMinified } from './prettify.js';
 import { HOME_DIR } from './config.js';
 import { takeQueuedImages } from './vision.js';
 import { contextPercent, chatBudget, budgetText, fetchChatContext } from './account.js';
@@ -150,9 +151,13 @@ async function takeDocuments(S, docs, io) {
     }
     ui.println(c.dim(named ? `  ↳ « ${d.title} » créé dans le panneau du site : écrit dans le dossier de travail`
       : `  ↳ « ${d.title} » créé dans le panneau du site (sans nom de fichier) : copie écrite dans ${name}`));
-    const r = await execCall(S, { name: 'write_file', args: { path: name, content: d.content } }, io);
+    // code minifié sur une ligne (HTML, CSS, JS) : remis sur plusieurs lignes, sur le PC (aucun token), sans changer ce qu'il fait
+    const content = prettifyIfMinified(name, d.content);
+    const pretty = content !== d.content;
+    if (pretty) ui.println(c.dim(`  ↳ code reçu sur une seule ligne : remis en forme (${content.split('\n').length} lignes)`));
+    const r = await execCall(S, { name: 'write_file', args: { path: name, content } }, io);
     S.notes.push(r.ok
-      ? `Ton document « ${d.title} » (panneau de documents du site) a été écrit sur le PC de l'utilisateur dans ${name}.${named ? '' : ' S\'il contient plusieurs fichiers d\'un projet, crée chacun d\'eux à sa place avec write_file.'} Pour les fichiers, utilise directement write_file et edit_file : l'utilisateur ne voit pas ce panneau.`
+      ? `Ton document « ${d.title} » (panneau de documents du site) a été écrit sur le PC de l'utilisateur dans ${name}.${named ? '' : ' S\'il contient plusieurs fichiers d\'un projet, crée chacun d\'eux à sa place avec write_file.'}${pretty ? ' Il a été remis sur plusieurs lignes (même code) : relis-le avant de le modifier avec edit_file.' : ''} Pour les fichiers, utilise directement write_file et edit_file : l'utilisateur ne voit pas ce panneau.`
       : `Ton document « ${d.title} » n'a pas été écrit sur le PC (${String(r.output || '').slice(0, 200)}). Pour les fichiers, utilise write_file et edit_file.`);
   }
 }
