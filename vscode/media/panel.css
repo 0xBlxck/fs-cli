@@ -505,3 +505,15 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .to-bottom[hidden] { display: none; }
 .to-bottom:hover { border-color: var(--accent); }
 .to-bottom.fresh::after { content: ''; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+/* ── /goal : indicateur en bas et bandeaux dans le fil ── */
+.hud-i.goal { cursor: pointer; color: var(--accent); }
+.hud-i.goal.paused { color: var(--warn); }
+.hud-i.goal:hover { text-decoration: underline; }
+.goal-line { display: flex; gap: 8px; align-items: flex-start; margin-left: 22px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 12px; line-height: 1.45; }
+.goal-line .gi { flex: none; }
+.goal-line .gt { white-space: pre-wrap; word-break: break-word; color: var(--dim); }
+.goal-line.info { border-color: rgba(91,134,255,.45); background: rgba(91,134,255,.07); }
+.goal-line.ok { border-color: var(--ok); background: rgba(63,185,80,.08); }
+.goal-line.ok .gi { color: var(--ok); font-weight: 700; } .goal-line.ok .gt { color: var(--fg); }
+.goal-line.warn { border-color: var(--warn); background: rgba(210,153,34,.07); }

@@ -22,6 +22,7 @@ import { decodeId } from './ids.js';
 import { fsCommand, pickChats, chatLine, isChatId, pickLabel, pickAnswer, chatDetails, displayTitle } from './fschats.js';
 import { synthId } from './ids.js';
 import { textCleaner } from '../native.js';
+import { hookVerdict } from '../goal.js';
 
 const MAX_IMAGES = 4;
 const LOCAL_KINDS_WITH_CONV = new Set(['compact', 'away_summary']);
@@ -63,6 +64,19 @@ export function createGateway(deps, opts = {}) {
   };
 
   // ── Requêtes locales (arrière-plan, § 3.11) : 0 appel France Student ──
+
+  /**
+   * Vérificateur d'un crochet « prompt » de Claude Code (/goal crée un crochet Stop : « Condition: … »). Réponse attendue :
+   * {"ok": true|false, "reason": …}. Le modèle de France Student refuse de servir de vérificateur séparé (vu en vrai) : on lit
+   * la ligne d'état que le modèle de la session écrit après avoir vérifié avec ses outils (« 🎯 atteint : … »). 0 appel à FS ;
+   * jamais un « atteint » sans cette ligne ; sinon la raison renvoyée lui rappelle de vérifier et de la donner.
+   */
+  async function hookCheck(res, body, cls) {
+    const v = hookVerdict(body.messages);
+    line({ event: 'goal', ok: v.ok, impossible: v.impossible || undefined });
+    const text = JSON.stringify(v);
+    wholeReply(res, { model: body.model, stream: cls.stream, content: [{ type: 'text', text }], stop: 'end_turn', usage: { input_tokens: estimateTokens(body), output_tokens: Math.ceil(text.length / 4) } });
+  }
 
   async function local(res, body, cls) {
     const est = estimateTokens(body);
@@ -561,6 +575,7 @@ export function createGateway(deps, opts = {}) {
     const cls = classify(body, req.headers);
     if (disabled) return sendError(res, 400, 'invalid_request_error', MESSAGES.accountDisabled);
     debug(`requete-${cls.kind}`, body);
+    if (cls.kind === 'hook_check') return hookCheck(res, body, cls);
     if (cls.kind !== 'main' && cls.kind !== 'subagent') return local(res, body, cls);
     const out = await engine(res, body, cls);
     line({ event: 'request', kind: cls.kind, chatId: out?.chatId || null, ms: Date.now() - t0, outcome: out?.outcome || '' });

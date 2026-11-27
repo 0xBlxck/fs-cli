@@ -6,8 +6,9 @@
  * Sortes de requêtes envoyées par Claude Code (§ 3.1).
  * - main, subagent : moteur complet (un chat France Student) ;
  * - web_search : chat annexe si --fs-web, sinon réponse locale ;
+ * - hook_check : vérificateur d'un crochet « prompt » (/goal) → conversation de vérification sur France Student (une par session et condition) ;
  * - toutes les autres : réponse locale (background.js), 0 appel France Student.
- * @typedef {'main'|'subagent'|'title'|'name'|'probe'|'suggestion'|'compact'|'away_summary'|'agent_summary'|'tool_summary'|'bash_prefix'|'web_search'|'web_fetch'|'side_question'|'background_other'} Kind
+ * @typedef {'main'|'subagent'|'title'|'name'|'probe'|'suggestion'|'compact'|'away_summary'|'agent_summary'|'tool_summary'|'bash_prefix'|'web_search'|'web_fetch'|'side_question'|'hook_check'|'background_other'} Kind
  */
 
 /** @type {readonly Kind[]} */
@@ -15,7 +16,7 @@ export const KINDS = Object.freeze([
   'main', 'subagent',
   'title', 'name', 'probe', 'suggestion', 'compact',
   'away_summary', 'agent_summary', 'tool_summary', 'bash_prefix',
-  'web_search', 'web_fetch', 'side_question', 'background_other',
+  'web_search', 'web_fetch', 'side_question', 'hook_check', 'background_other',
 ]);
 
 /**

@@ -12,6 +12,7 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 import { cfg, saveCfg, saveCfgKeys, TOKEN, VERSION, FILES, HOME_DIR, ROOT, loadSessions, upsertSession, markSessionsGone, unmarkSessionsGone, encodeHistory, decodeHistory, historyKeeps } from './src/config.js';
 import { fetchChatUsage, contextPercent, chatBudget } from './src/account.js';
 import { parseHour, createScheduler } from './src/schedule.js';
+import { GOAL_MAX_TURNS, parseStatus, startMessage, continueMessage } from './src/goal.js';
 import { recordError } from './src/bugreport.js';
 import { fetchAgents, listFsProjects, fetchChatsList, requestJson, renameChat, deleteChat, setProjectOnce, setProjectOverride, effectiveProject } from './src/api.js';
 import { TOOLS, detectEnv, sysEnv, resolveP, runShellDirect, undoLast, startJob, listJobs, stopJob, IS_WIN } from './src/tools.js';
@@ -334,7 +335,7 @@ function copyToClipboard(text) {
 // ── Complétion ────────────────────────────────────────────────────────────────
 const SLASH = ['/help', '/new', '/clear', '/status', '/model ', '/mode ', '/cd ', '/read ', '/web', '/copy', '/undo',
   '/continue', '/navigateur ', '/doctor', '/vscode', '/projet ', '/rewind', '/changes ', '/plan ', '/messages ', '/usage', '/image', '/import ', '/intent ', '/init', '/fr-project ', '/run ', '/code ', '/hint ', '/auto ', '/context', '/quota', '/compact ', '/autocompact ', '/threshold ', '/retry ', '/compare ', '/duel ',
-  '/sound', '/eco', '/plus-tard ', '/bug', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/nouveautes', '/conversations', '/quit'];
+  '/sound', '/eco', '/plus-tard ', '/goal ', '/bug', '/remember ', '/forget ', '/memory', '/preprompt ', '/profil ', '/skills', '/skill ', '/project ', '/tree ', '/index', '/history ', '/jobs ', '/feedback ', '/search ', '/fetch ', '/mcp ', '/permissions ', '/target ', '/team ', '/teammode ', '/chats', '/clean', '/workers ', '/parallel ', '/engine ', '/resume', '/rename ', '/effort ', '/export ', '/btw ', '/webhook ', '/sessions', '/theme ', '/think', '/steps ', '/tools', '/id', '/save', '/nouveautes', '/conversations', '/quit'];
 
 function pathCandidates(frag, dirsOnly = false) {
   const idx = Math.max(frag.lastIndexOf('/'), frag.lastIndexOf('\\'));
@@ -436,7 +437,7 @@ const SCHEDULED = createScheduler({
 });
 let holdInput = !!opts.stdio;                                          // démarrage du panneau : la file reste fermée jusqu'à la confiance du dossier
 const ask = query => input.askLine(query);
-const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, budget: S.budget ? S.budget.left : null, scheduled: SCHEDULED.next() ? SCHEDULED.next().at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + (SCHEDULED.list().length > 1 ? ` +${SCHEDULED.list().length - 1}` : '') : null, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
+const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, budget: S.budget ? S.budget.left : null, goal: S.goal ? { condition: S.goal.condition, iterations: S.goal.iterations, paused: !!S.goal.paused, max: GOAL_MAX_TURNS } : null, scheduled: SCHEDULED.next() ? SCHEDULED.next().at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + (SCHEDULED.list().length > 1 ? ` +${SCHEDULED.list().length - 1}` : '') : null, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
 // budget de chat du compte dans la barre d'état dès l'ouverture (sans attendre ; mis à jour après chaque réponse)
 if (!opts.print && agents) chatBudget(8000).then(b => { if (b) { S.budget = b; refreshStatus(); } }).catch(() => {});
@@ -494,6 +495,7 @@ const HELP_ROWS = [
     ['/run [n|all]', 'exécuter les blocs de code de la dernière réponse (écrit aussi les fichiers nommés)'],
     ['/context · /quota', 'contexte utilisé de la conversation · quota du compte'],
     ['/bug', 'rapport à coller sur Discord (version, système, modèle, dernières erreurs ; aucune clé ni conversation), copié dans le presse-papiers'],
+    ['/goal <condition> · /goal clear', 'objectif : le modèle continue tout seul jusqu\'à ce qu\'une vérification indépendante confirme la condition (ex. /goal tous les tests passent)'],
     ['/plus-tard [heure] <demande>', 'envoie ta demande plus tard : à la remise à zéro du budget (par défaut) ou à l\'heure donnée (5h, 17h30) ; FS-CLI ouvert et PC allumé'],
     ['/compact [consigne]', 'résume la conversation et repart d\'une nouvelle (auto à 80 % : /autocompact, /threshold)'],
     ['/retry [consigne] · /compare', 'relancer la dernière demande · même question à 2 modèles (/duel <modèle>)'],
@@ -890,6 +892,7 @@ async function command(line) {
       cfg.maxSteps = n; saveCfg(); return println(c.dim(`  → ${n} étapes max`));
     }
     case '/plus-tard': case '/programmer': return schedule(arg);
+    case '/goal': case '/objectif': return goalCommand(arg);
     case '/bug': {                                                    // rapport à coller sur Discord (rien n'est envoyé nulle part)
       const { bugReport, copyText, REPORT_FILE } = await import('./src/bugreport.js');
       const shell = process.env.PSModulePath && IS_WIN ? 'PowerShell' : (process.env.SHELL || process.env.ComSpec || '').split(/[\\/]/).pop();
@@ -1357,7 +1360,9 @@ async function chatTurn(text, { keepLast = false, retry = false } = {}) {
     if (!S.title) S.title = own.replace(/\s+/g, ' ').trim().slice(0, 60) || 'Conversation';   // provisoire (sans le contexte de l'éditeur) : remplacé par le titre de France Student dès qu'il est connu
     try {
       const agentBefore = S.agentId, turnT0 = Date.now();
+      S.lastTurnOk = false;
       try { await runAgent(S, message, { signal: turnAbort.signal, ask, bare: text, choose: interactive && input.select ? o => input.select(o) : null }); } finally { ui.liveTokens.end(); attachSentToChat(); }   // bare : ta demande seule (nouvel essai sans les ajouts de FS-CLI si GPT refuse)
+      S.lastTurnOk = !turnAbort.signal.aborted;
       if (cfg.webhook) {                                               // fin de demande → webhook (CI, notifications) : jamais de jeton ni de contenu de fichier
         const mark = (S.turnMarks || []).at(-1);
         const files = mark && S.undo.length > mark.at ? summarizeChanges(S.undo, mark.at).map(f => ({ file: path.relative(S.cwd, f.path), added: f.added, removed: f.removed, created: !!f.created, deleted: !!f.deleted })) : [];
@@ -1508,7 +1513,9 @@ async function handleInput(text) {
         const own = stripEditorContext(t).replace(/```[\s\S]*?```/g, ' ').slice(0, 600);   // pas le code sélectionné ni un log collé
         if (!wantsBrowser(own)) for (const u of urlsIn(own)) if (!alreadySent('url', u)) await extraCommand('/fetch', u + ' --auto', extraEnv());   // « va sur … dans le navigateur » : c'est le navigateur qui ira, pas un téléchargement
       }
+      if (S.goal) S.goal.paused = false;                              // /goal en pause : ton message relance l'objectif après sa réponse
       await chatTurn(t);
+      await goalLoop();
     }
   } catch (e) {
     ui.spinner.stop();
@@ -1526,6 +1533,50 @@ async function handleInput(text) {
 // ── /plus-tard : demande envoyée plus tard (remise à zéro du budget, ou heure choisie) ──────────────────────────────
 // Sur ce PC seulement : FS-CLI doit rester ouvert et le PC allumé (rien ne tourne chez France Student). Pas en -p.
 const hhmm = d => d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+/** /goal <condition> · /goal (état) · /goal clear : le modèle travaille jusqu'à ce qu'une vérification indépendante dise que c'est fait */
+async function goalCommand(arg) {
+  const a = String(arg || '').trim();
+  if (!a) {
+    const g = S.goal;
+    if (!g) return println(c.dim('  aucun objectif · /goal <condition> : le modèle continue tout seul jusqu\'à ce qu\'elle soit remplie (ex. /goal tous les tests passent)'));
+    println(`\n  ${c.accent('🎯 Objectif')} ${c.dim(g.paused ? '· en pause' : '· actif')}\n  « ${g.condition} »`);
+    println(c.dim(`  ${g.iterations ? `${g.iterations} étape${g.iterations > 1 ? 's' : ''} (max ${GOAL_MAX_TURNS})` : 'pas encore commencé'}${g.lastReason ? ` · dernier état : « ${g.lastReason} »` : ''}`));
+    return println(c.dim('  /goal clear pour l\'arrêter'));
+  }
+  if (/^(clear|stop|arr[eê]te[rz]?|annuler|off)$/i.test(a)) {
+    if (!S.goal) return println(c.dim('  aucun objectif en cours'));
+    S.goal = null; refreshStatus();
+    return println(c.dim('  🎯 objectif arrêté'));
+  }
+  if (cfg.mode === 'plan') return println(c.yellow('  /goal ne marche pas en mode plan (lecture seule) : passe en mode auto (Maj+Tab) pour que le modèle puisse travailler.'));
+  if (S.goal) println(c.dim(`  🎯 l'objectif précédent est remplacé (« ${S.goal.condition.slice(0, 60)} »)`));
+  S.goal = { condition: a, iterations: 0, missing: 0, paused: false, setAt: Date.now(), lastReason: '' };
+  refreshStatus();
+  println(c.accent(`  🎯 Objectif : « ${a} »`) + c.dim(` · le modèle continue jusqu'à l'avoir vérifié avec ses outils (${GOAL_MAX_TURNS} étapes au plus ; Échap met en pause, /goal clear arrête)`));
+  await chatTurn(startMessage(a));
+  await goalLoop();
+}
+
+/** après chaque réponse : ligne d'état du modèle (🎯 atteint / pas encore / impossible) ; pas encore → il reprend tout seul */
+async function goalLoop() {
+  while (S.goal && !S.goal.paused) {
+    const g = S.goal;
+    if (!S.lastTurnOk) { g.paused = true; refreshStatus(); return println(c.dim('  🎯 objectif en pause (réponse interrompue ou en erreur) : envoie un message pour reprendre, /goal clear pour arrêter')); }
+    if (input.queue?.length) return;                                   // message en file : il passe d'abord, l'objectif reprend après sa réponse
+    const st = parseStatus(S.lastResponse || '');
+    g.iterations++;
+    if (st?.state === 'met') { S.goal = null; refreshStatus(); return println(c.green('  🎯 Objectif atteint') + c.dim(` (${g.iterations} étape${g.iterations > 1 ? 's' : ''})${st.reason ? ` : ${st.reason}` : ''}`)); }
+    if (st?.state === 'impossible') { S.goal = null; refreshStatus(); return println(c.yellow(`  🎯 Objectif impossible selon le modèle : ${st.reason || 'sans raison donnée'}`)); }
+    g.missing = st ? 0 : g.missing + 1;
+    g.lastReason = st?.reason || '';
+    if (g.missing >= 3) { g.paused = true; refreshStatus(); return println(c.yellow('  🎯 le modèle ne dit pas où il en est (pas de ligne « 🎯 … » 3 fois de suite) : objectif en pause. Envoie un message pour reprendre, /goal clear pour arrêter.')); }
+    if (g.iterations >= GOAL_MAX_TURNS) { g.paused = true; refreshStatus(); return println(c.yellow(`  🎯 pas atteint après ${g.iterations} étapes : objectif en pause${g.lastReason ? ` (dernier état : « ${g.lastReason} »)` : ''}. Envoie un message pour continuer, /goal clear pour arrêter.`)); }
+    refreshStatus();
+    println(c.dim(`  🎯 pas encore (étape ${g.iterations}/${GOAL_MAX_TURNS})${g.lastReason ? ` : ${g.lastReason}` : ' : le modèle n\'a pas confirmé'} → il continue`));
+    await chatTurn(continueMessage(g.condition, g.lastReason, g.iterations));
+  }
+}
+
 async function schedule(arg) {
   const a = String(arg || '').trim();
   if (!a || /^(liste|list)$/i.test(a)) {

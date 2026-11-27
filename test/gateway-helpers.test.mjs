@@ -33,12 +33,12 @@ test('tmpHome : dossier neuf à chaque appel ; { env: true } change FS_CLI_HOME'
 
 // ── types.js ──
 
-test('KINDS : les 14 sortes de requêtes du § 3.1 plus side_question (/btw), figées et uniques', () => {
-  assert.equal(KINDS.length, 15);
-  assert.equal(new Set(KINDS).size, 15);
+test('KINDS : les 14 sortes de requêtes du § 3.1 plus side_question (/btw) et hook_check (/goal), figées et uniques', () => {
+  assert.equal(KINDS.length, 16);
+  assert.equal(new Set(KINDS).size, 16);
   assert.ok(Object.isFrozen(KINDS));
   for (const k of ['main', 'subagent', 'title', 'name', 'probe', 'suggestion', 'compact', 'away_summary', 'agent_summary',
-    'tool_summary', 'bash_prefix', 'web_search', 'web_fetch', 'side_question', 'background_other']) assert.ok(KINDS.includes(k), k);
+    'tool_summary', 'bash_prefix', 'web_search', 'web_fetch', 'side_question', 'hook_check', 'background_other']) assert.ok(KINDS.includes(k), k);
 });
 
 // ── Fixtures ──

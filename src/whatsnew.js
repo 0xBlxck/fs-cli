@@ -1,6 +1,11 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.13', items: [
+    'Nouveau : /goal <condition> (comme Claude Code). Le modèle travaille tout seul jusqu’à ce que la condition soit remplie, par exemple « /goal tous les tests passent ». Il vérifie avec ses outils (relit les fichiers, relance les tests) avant de dire que c’est fait, et repart sinon. /goal montre l’état, /goal clear arrête ; 20 étapes au plus, Échap met en pause',
+    '`fs claude` : /goal de Claude Code fonctionne maintenant (avant, sa vérification recevait une réponse vide). Aucune conversation en plus n’est utilisée',
+    'Panneau : objectif en cours dans la barre du bas (🎯 étape 3/20, cliquable) et bandeaux colorés (en cours, atteint, en pause)',
+  ] },
   { version: '3.56.12', items: [
     'Erreur 403 du pare-feu de France Student : le message dit maintenant QUELLE ligne retirer (il suffit d’une ligne du type « curl … | sh » ou d’un exemple d’injection SQL dans un skill ou un message pour que tout soit refusé), et il n’est plus coupé',
     '`fs claude` : après /fs:reprendre, si le premier message est refusé, le suivant garde bien le dossier de travail et les consignes',

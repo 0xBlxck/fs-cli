@@ -70,6 +70,8 @@ const FORKS = [
 // System des agents internes avec outils (hooks de type agent, recherche de sessions) : pas d'ancrage en début de texte,
 // Claude Code peut placer d'autres blocs system (identité, en-tête de facturation) avant.
 const INTERNAL_SYSTEMS = /You are verifying a stop condition in Claude Code|You are evaluating a [^\n.]{1,60} hook in Claude Code|You are searching for past Claude Code conversation sessions/;
+// Crochets de type « prompt » de Claude Code (/goal en crée un sur Stop) : système exact de Claude Code 2.1.x.
+const HOOK_CHECK = /You are evaluating a stop-condition hook in Claude Code|You are evaluating a hook condition in Claude Code/;
 // Question annexe (/btw, querySource « side_question ») : tout le prompt interne est dans un system-reminder.
 // Pas d'ancrage : le message peut être fusionné avec un message user précédent (tool_result, rappels).
 const SIDE_QUESTION = /<system-reminder>\s*This is a side question from the user\./;
@@ -101,6 +103,9 @@ export function classify(body, headers) {
   if (props.name) return k('name');
   if (SIDE_QUESTION.test(lastUserRaw(b.messages))) return k('side_question');   // avant unremind : le rappel EST le marqueur
   for (const [re, kind] of FORKS) if (starts(re)) return k(kind);
+  // vérificateur d'un crochet « prompt » (dont /goal : « Condition: … ») : il FAUT une vraie réponse {"ok": …}, sinon
+  // /goal ne s'arrête jamais ou s'arrête au hasard (avant : réponse vide, /goal cassé dans fs claude)
+  if (HOOK_CHECK.test(sys)) return k('hook_check');
   if (INTERNAL_SYSTEMS.test(sys)) return k('background_other');
   if (/tasked with summarizing conversations/i.test(sys)) return k('compact');
   // Requêtes « latérales » sans outils (Ij de Claude Code) : un texte d'utilisateur ne doit pas les imiter.

@@ -161,6 +161,14 @@ test('forks et agents internes avec outils (mémoire, rêve, hooks, recherche de
     f.body.system = [{ type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.207;' }, { type: 'text', text: sys }];
     assert.equal(kind(f), 'background_other', sys);
   }
+  // crochets « prompt » (dont /goal) : jugés par une vraie conversation FS, plus une réponse vide
+  for (const sys of ['You are evaluating a stop-condition hook in Claude Code. Read the conversation transcript carefully, then judge whether the user-provided condition is satisfied.',
+    'You are evaluating a hook condition in Claude Code. Judge whether the user-provided condition is met.']) {
+    const f = loadFixture('req-03');
+    f.body.system = [{ type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.207;' }, { type: 'text', text: sys }];
+    f.body.tools = [];
+    assert.equal(kind(f), 'hook_check', sys);
+  }
 });
 
 test('outils présents mais pas de prompt système Claude Code reconnu → main ; tools:[] inconnu → background_other', () => {

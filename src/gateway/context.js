@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import { systemText } from './classify.js';
 import { tag } from '../chats.js';
+import { goalStartFromClaudeCode } from '../goal.js';
 
 // ── Environnement (prompt système de Claude Code) ──
 
@@ -180,6 +181,10 @@ export function cleanUserContent(content) {
       if (note) out.notes.push(note);
     }
     let t = stripCommandTags(clean);
+    // /goal activé dans Claude Code : sa consigne anglaise → la nôtre, qui demande de vérifier avec les outils et de finir
+    // par la ligne d'état « 🎯 atteint / pas encore / impossible » (lue par le vérificateur, voir hookCheck)
+    const goalStart = goalStartFromClaudeCode(t);
+    if (goalStart) t = goalStart;
     const t0 = t;
     t = t.replace(INTERRUPT_RE, '');
     if (t !== t0) out.interrupted = true;

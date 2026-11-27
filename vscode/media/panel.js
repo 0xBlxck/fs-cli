@@ -27,7 +27,7 @@
   const MODE_UI = { auto: '⚡ Auto', edits: '✎ Modifs auto', ask: '✋ Confirmer', plan: '◇ Plan', bypass: '⚠ Tout autoriser' };
   const CMD_DESC = {
     '/new': 'nouvelle conversation', '/resume': 'reprendre une conversation', '/model': 'changer de modèle', '/mode': 'changer de mode',
-    '/plan': 'une demande en lecture seule', '/changes': 'fichiers modifiés : diff, annuler', '/rewind': 'revenir avant une demande', '/undo': 'annuler la dernière modification',
+    '/goal': 'objectif : continuer jusqu’à ce que ce soit fait', '/plan': 'une demande en lecture seule', '/changes': 'fichiers modifiés : diff, annuler', '/rewind': 'revenir avant une demande', '/undo': 'annuler la dernière modification',
     '/usage': 'consommation du compte', '/context': 'taille du contexte', '/compact': 'résumer pour libérer du contexte', '/messages': 'réafficher les messages',
     '/team': 'plusieurs agents sur une tâche', '/compare': 'deux modèles, même question', '/navigateur': 'piloter le navigateur', '/mcp': 'serveurs MCP',
     '/skills': 'skills installés', '/remember': 'retenir une info', '/memory': 'mémoire', '/init': 'créer FSCLI.md', '/doctor': 'vérifier l\'installation',
@@ -367,6 +367,13 @@
       const s = h('span', cls, text); if (title) s.title = title;
       el.append(s);
     });
+    add(el);
+  }
+  /** ligne de /goal → bandeau : bleu (objectif, vérification), vert (atteint), orange (en pause, impossible) */
+  function goalLine(text) {
+    const kind = /^Objectif atteint/.test(text) ? 'ok' : /^(Objectif impossible|objectif en pause|pas atteint|le modèle ne dit pas|vérification)/i.test(text) ? 'warn' : 'info';
+    const el = h('div', 'goal-line ' + kind);
+    el.append(h('span', 'gi', kind === 'ok' ? '✓' : '🎯'), h('span', 'gt', macKeys(text)));
     add(el);
   }
   /** erreur du CLI : carte rouge lisible (le message entier, qui dit quoi faire), plus une ligne grise perdue dans le fil */
@@ -731,6 +738,12 @@
     footL.title = `Dossier de travail : ${st.cwd || '?'}${st.target ? `\nFichiers écrits dans : ${st.target}` : ''}\nCliquer pour changer`;
     // tableau de bord : envoi programmé, budget de chat restant, jauge du contexte (vert, puis orange à 60 %, rouge à 80 %)
     footR.textContent = '';
+    if (st.goal && st.goal.condition) {
+      const gl = h('span', 'hud-i goal' + (st.goal.paused ? ' paused' : ''), `🎯 ${st.goal.paused ? 'en pause' : st.goal.iterations ? `${st.goal.iterations}/${st.goal.max || 20}` : 'objectif'}`);
+      gl.title = `Objectif (/goal) : « ${st.goal.condition} »${st.goal.paused ? '\nEn pause : envoie un message pour reprendre' : ''}\nCliquer pour voir l’état · /goal clear pour arrêter`;
+      gl.onclick = () => post({ type: 'command', text: '/goal' });
+      footR.append(gl);
+    }
     if (st.scheduled) { const s = h('span', 'hud-i', `⏰ ${st.scheduled}`); s.title = 'Envoi programmé (/plus-tard pour voir ou annuler)'; footR.append(s); }
     if (typeof st.budget === 'number') {
       const b = h('span', 'hud-i' + (st.budget <= 10 ? ' err' : st.budget <= 25 ? ' warn' : ''), `budget ${st.budget > 0 && st.budget < 1 ? st.budget.toFixed(1).replace('.', ',') : Math.round(st.budget)} %`);
@@ -1643,6 +1656,8 @@
         aiEnd();
         const stats = plain.match(/^\s*✻ Terminé en (.+?)\s*$/m);
         if (stats) { turnStats(stats[1]); break; }                  // fin de tâche : pastilles lisibles, plus une ligne grise brute
+        const goal = plain.match(/^\s*🎯 ([\s\S]+?)\s*$/);
+        if (goal) { goalLine(goal[1]); break; }                       // /goal : objectif fixé, vérification, atteint
         const err = plain.match(/^\s*Erreur\s*:\s*([\s\S]+?)\s*$/);
         if (err) { errorCard(err[1]); break; }
         const p = h('div', 'print'); p.append(ansi(macKeys(text).replace(/^\n+|\n+$/g, '').replace(/^ {2}/gm, ''))); add(p);

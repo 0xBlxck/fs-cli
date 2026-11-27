@@ -663,3 +663,28 @@ test('panneau : erreur du CLI en carte lisible (message entier) ; « Copier » d
   assert.equal(down.hidden, true);
   assert.equal(down.classList.contains('fresh'), false);
 });
+
+test('panneau /goal : indicateur en bas (étape, en pause), bandeaux colorés selon l\'état, clic → /goal', () => {
+  const D = makeDom();
+  const E = String.fromCharCode(27);
+  const foot = D.doc.body.querySelector('.foot');
+  D.event({ type: 'status', ctx: 10, goal: { condition: 'tous les tests passent', iterations: 3, max: 20, paused: false } });
+  const g = foot.querySelector('.hud-i.goal');
+  assert.equal(g.textContent, '🎯 3/20');
+  assert.match(g.title, /« tous les tests passent »/);
+  D.click(g);
+  assert.deepEqual(D.posts.at(-1), { type: 'command', text: '/goal' });
+  D.event({ type: 'status', goal: { condition: 'x', iterations: 20, max: 20, paused: true } });
+  assert.equal(foot.querySelector('.hud-i.goal').textContent, '🎯 en pause');
+  assert.ok(foot.querySelector('.hud-i.goal').classList.contains('paused'));
+  D.event({ type: 'status', goal: null });
+  assert.equal(foot.querySelector('.hud-i.goal'), null);
+
+  const kinds = [];
+  for (const t of ['🎯 Objectif : « x » · Échap met en pause, /goal clear arrête', '🎯 pas encore (étape 1/20) : 2 échecs → il continue', '🎯 Objectif atteint (2 étapes) : 14 passing', '🎯 objectif en pause (réponse interrompue)', '🎯 Objectif impossible selon le modèle : pas de réseau']) {
+    D.event({ type: 'print', text: `${E}[2m  ${t}${E}[0m\n` });
+    const el = D.log.querySelectorAll('.goal-line').at(-1);
+    kinds.push(['info', 'ok', 'warn'].find(k => el.classList.contains(k)));
+  }
+  assert.deepEqual(kinds, ['info', 'info', 'ok', 'warn', 'warn']);
+});

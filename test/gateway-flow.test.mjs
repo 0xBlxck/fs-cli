@@ -1168,3 +1168,26 @@ test('(pare-feu, vu en vrai) skill lancé par « /nom » refusé pour UNE ligne 
   assert.match(fake.sent[3].content, /^\[Suite de cette conversation : /, 'contexte gardé après un envoi refusé');
   assert.match(fake.sent[3].content, /Contexte : dossier de travail/);
 });
+
+test('(/goal) fs claude : consigne de départ traduite (vérifier avec les outils, ligne « 🎯 ») ; vérificateur de Claude Code répondu SANS appel à FS, d\'après la ligne d\'état ; jamais « atteint » sans elle', async t => {
+  const { fake, gw, lines } = await setup(t, { turns: ['Je lance les tests.\n\n🎯 pas encore : 2 tests échouent'] });
+  const start = 'A session-scoped Stop hook is now active with condition: "tous les tests passent". Briefly acknowledge the goal, then immediately start (or continue) working toward it — treat the condition itself as your directive.';
+  await call(gw, ccReq([user(start)]));
+  assert.match(fake.sent[0].content, /\[Objectif fixé avec \/goal : « tous les tests passent »[\s\S]*🎯 atteint/);
+  assert.doesNotMatch(fake.sent[0].content, /session-scoped Stop hook/, 'consigne anglaise remplacée');
+  const SYS = [{ type: 'text', text: 'You are evaluating a stop-condition hook in Claude Code. Read the conversation transcript carefully, then judge whether the user-provided condition is satisfied.' }];
+  const ask = { role: 'user', content: 'Based on the conversation transcript above, has the following stopping condition been satisfied?\n\nCondition: tous les tests passent' };
+  const hook = last => ccReq([{ role: 'user', content: 'lance les tests' }, { role: 'assistant', content: [{ type: 'text', text: last }] }, ask],
+    { stream: false, model: 'claude-haiku-4-5', body: { system: SYS, tools: [], max_tokens: 4096 } });
+  const before = fake.sent.length;
+  const r1 = await call(gw, hook('🎯 pas encore : 2 tests échouent'));
+  const v1 = JSON.parse(r1.json.content[0].text);
+  assert.equal(v1.ok, false);
+  assert.match(v1.reason, /^pas encore : 2 tests échouent\. Avant de finir, vérifie avec tes outils/);
+  const r2 = await call(gw, hook('Relancé : 14 passing.\n\n🎯 atteint : npm test affiche 14 passing'));
+  assert.deepEqual(JSON.parse(r2.json.content[0].text), { ok: true, reason: 'npm test affiche 14 passing' });
+  const r3 = await call(gw, hook('Normalement tout passe maintenant !'));
+  assert.equal(JSON.parse(r3.json.content[0].text).ok, false, 'sans ligne d\'état : pas encore');
+  assert.equal(fake.sent.length, before, 'aucun appel à France Student pour vérifier');
+  assert.ok(lines.some(l => l.event === 'goal' && l.ok === true));
+});
