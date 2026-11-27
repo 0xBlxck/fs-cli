@@ -2,7 +2,7 @@
   "name": "fs-cli-vscode",
   "displayName": "FS-CLI — France Student AI",
   "description": "(Communautaire, non officiel) Panneau de chat FS-CLI dans VS Code : l'agent France Student AI lit et modifie ton projet, avec diffs, tâches et confirmations.",
-  "version": "0.11.16",
+  "version": "0.11.17",
   "publisher": "0xblxck",
   "license": "MIT",
   "icon": "media/icon.png",

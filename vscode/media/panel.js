@@ -350,16 +350,33 @@
     });
     return { lines, blocks };
   }
+  const TASK_ITEM = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX~>-])\][ \t]+(.*)$/;
+  /** liste à jour = ancienne liste, statuts mis à jour par la nouvelle, étapes nouvelles à la fin
+   *  (GPT ne réécrit souvent que les étapes qui changent : « [x] B, [~] C » sans A → A doit rester affichée) */
+  function mergeTasks(old, upd) {
+    const out = old.map(t => ({ ...t }));
+    for (const t of upd) { const hit = out.find(o => o.key === t.key); if (hit) hit.mark = t.mark; else out.push({ ...t }); }
+    return out;
+  }
   function keepLastTaskCard(el, text) {
     if (!/class="task-card"/.test(el.innerHTML)) return;
-    // GPT écrit parfois le plan puis sa mise à jour dans le MÊME message : seule la dernière liste reste
-    const { lines, blocks } = taskBlocks(text);
-    if (blocks.length > 1) {
-      const drop = new Set(blocks.slice(0, -1).flatMap(b => Array.from({ length: b.to - b.from + 1 }, (_, k) => b.from + k)));
-      text = lines.filter((_, i) => !drop.has(i)).join('\n').replace(/\n{3,}/g, '\n\n');
-      el.innerHTML = md(text, false) || '';
+    // liste précédente de la même demande (déjà fusionnée)
+    let prevList = [];
+    for (let p = el.previousElementSibling; p && !p.classList.contains('msg-user'); p = p.previousElementSibling) {
+      if (p.dataset.tasklist) { try { prevList = JSON.parse(p.dataset.tasklist); } catch {} break; }
     }
-    el.dataset.md = text; el.dataset.tasks = '1';
+    // une seule liste par message, fusionnée avec les précédentes ; elle prend la place de la dernière liste écrite
+    const { lines, blocks } = taskBlocks(text);
+    let list = prevList;
+    for (const b of blocks) list = mergeTasks(list, lines.slice(b.from, b.to + 1).map(l => l.match(TASK_ITEM)).filter(Boolean)
+      .map(m => ({ mark: m[1], text: m[2].trim(), key: m[2].trim().toLowerCase() })));
+    if (blocks.length) {
+      const last = blocks.at(-1), drop = new Set(blocks.flatMap(b => Array.from({ length: b.to - b.from + 1 }, (_, k) => b.from + k)));
+      const merged = list.map(t => `- [${t.mark}] ${t.text}`);
+      const next = lines.flatMap((l, i) => (i === last.from ? merged : drop.has(i) ? [] : [l])).join('\n').replace(/\n{3,}/g, '\n\n');
+      if (next !== text) { text = next; el.innerHTML = md(text, false) || ''; }
+    }
+    el.dataset.md = text; el.dataset.tasks = '1'; el.dataset.tasklist = JSON.stringify(list);
     for (let prev = el.previousElementSibling; prev && !prev.classList.contains('msg-user'); ) {
       const before = prev.previousElementSibling;
       if (prev.dataset.tasks && prev.dataset.md != null) {

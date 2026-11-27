@@ -576,6 +576,7 @@ test('panneau : GPT écrit le plan PUIS sa mise à jour dans le même message (v
     { role: 'assistant', text: '**La course est prête en MP4.**\n\n- [x] Exporter la course\n- [x] Vérifier le fichier\n\n1 min 19 s.' },
   ] });
   assert.equal(all().split('class="task-card"').length - 1, 1, 'une seule liste');
+  assert.match(all(), /tk done[\s\S]{0,80}Repérer[\s\S]*tk done[\s\S]{0,80}Exporter[\s\S]*tk done[\s\S]{0,80}Vérifier/, 'liste complète, dans l\'ordre du plan');
   assert.match(all(), /La course est prête/);
   assert.match(all(), /1 min 19 s/, 'le texte après la liste reste');
   // en direct : même règle dans un seul message
@@ -585,4 +586,21 @@ test('panneau : GPT écrit le plan PUIS sa mise à jour dans le même message (v
   assert.equal(html.split('class="task-card"').length - 1, 1);
   assert.match(html, /Plan/);
   assert.match(html, /tk doing[\s\S]*>A</);
+});
+
+test('panneau : GPT ne réécrit que les étapes qui changent → la liste garde TOUTES les étapes du plan (vu : « Repérer… » disparu de la carte)', () => {
+  const D = makeDom();
+  const say = t => { D.event({ type: 'text', delta: t }); D.event({ type: 'textEnd' }); D.flushFrames(); };
+  say('- [ ] Repérer les points de dessin\n- [ ] Redessiner le pont\n- [ ] Générer la vidéo\n');
+  say('- [x] Repérer les points de dessin\n- [~] Redessiner le pont\n');
+  say('- [x] Redessiner le pont\n- [~] Générer la vidéo\n\nLe premier rendu s\'est arrêté.');
+  const ai = D.log.querySelectorAll('.msg-ai');
+  const html = ai.map(e => e.innerHTML).join('');
+  assert.equal(html.split('class="task-card"').length - 1, 1);
+  assert.match(html, /tk done[\s\S]{0,80}Repérer[\s\S]*tk done[\s\S]{0,80}Redessiner[\s\S]*tk doing[\s\S]{0,80}Générer/);
+  assert.match(html, /premier rendu/);
+  // nouvelle demande : on repart de zéro (pas de fusion avec la liste d'avant)
+  D.event({ type: 'transcript', messages: [{ role: 'user', text: 'a' }, { role: 'assistant', text: '- [x] A\n- [ ] B' }, { role: 'user', text: 'b' }, { role: 'assistant', text: '- [~] C' }] });
+  const last = D.log.querySelectorAll('.msg-ai').at(-1).innerHTML;
+  assert.doesNotMatch(last, />A<|>B</);
 });
