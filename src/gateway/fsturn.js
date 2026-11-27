@@ -5,7 +5,8 @@
 // documents du site écrits par des Write synthétiques, puis émission des tool_use APRÈS la sauvegarde de l'état (I4).
 // Ce module n'écrit rien sur le disque lui-même : tout passe par ctx.store, et le réseau par ctx.deps (injectables).
 import { textCleaner, FIREWALL_NOTE } from '../native.js';
-import { documentsOf, FIREWALL_CONTENT, FIREWALL_NETWORK } from '../api.js';
+import { documentsOf, FIREWALL_NETWORK } from '../api.js';
+import { firewallContentMessage } from '../firewall.js';
 import { tag } from '../chats.js';
 import { CONTINUE_FR } from './context.js';
 import { fpAssistant } from './transcript.js';
@@ -243,7 +244,8 @@ async function beforeAccept(conv, e, send, reply, ctx) {
           return { ...send, content: ctx.userText };
         }
       }
-      if (ctx.fwCause && e) e.message = ctx.fwCause === 'content' ? FIREWALL_CONTENT : FIREWALL_NETWORK;
+      // contenu : on cite la ligne en cause quand on la trouve (cherchée dans la demande de l'utilisateur, skill compris)
+      if (ctx.fwCause && e) e.message = ctx.fwCause === 'content' ? firewallContentMessage(ctx.userText || send.content || '') : FIREWALL_NETWORK;
       break;
     }
     case 'disabled': ctx.onDisabled?.(); break;

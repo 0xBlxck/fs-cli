@@ -4,7 +4,8 @@
 // Documentation FS : « Outils client (mode avancé) », flag 2026_11_client_tools.
 import fs from 'node:fs';
 import path from 'node:path';
-import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents, resumeStream, fetchChat, documentsOf, imagesOf, cancelStream, firewallProbe, FIREWALL_CONTENT, FIREWALL_NETWORK } from './api.js';
+import { streamChat, CLIENT_TOOLS, uploadFile, lastMessageImages, fetchApiFile, withDocumentContents, resumeStream, fetchChat, documentsOf, imagesOf, cancelStream, firewallProbe, FIREWALL_NETWORK } from './api.js';
+import { firewallContentMessage } from './firewall.js';
 import { recoverSend } from './resilient.js';
 import { prettifyIfMinified, PRETTY_NOTE } from './prettify.js';
 import { HOME_DIR } from './config.js';
@@ -303,7 +304,7 @@ export async function runNative(S, userText, opts) {
               content = bare;
               try { return await send(web); } catch (e3) { if (e3?.code !== 'FIREWALL') throw e3; e2 = e3; }
             }
-            if (net === 'ok' || net === 'blocked') e2.message = net === 'ok' ? FIREWALL_CONTENT : FIREWALL_NETWORK;
+            if (net === 'ok' || net === 'blocked') e2.message = net === 'ok' ? firewallContentMessage(content) : FIREWALL_NETWORK;
             throw e2;
           }
           if (e2?.code !== 'FIREWALL' || !results?.length || signal.aborted) throw e2;

@@ -196,7 +196,7 @@ test('script Python sans flush : ses lignes arrivent en direct (PYTHONUNBUFFERED
 });
 
 test('pare-feu sur la demande (vu sur Discord, en boucle) : petite requête sans contenu → contenu bloqué : renvoyée sans le contexte joint ; réseau bloqué : message clair', async () => {
-  const { firewallProbe, FIREWALL_CONTENT, FIREWALL_NETWORK } = await import('../src/api.js');
+  const { firewallProbe, FIREWALL_NETWORK } = await import('../src/api.js');
   assert.equal(await firewallProbe(async () => ({ status: 200, data: {} })), 'ok');
   assert.equal(await firewallProbe(async () => ({ status: 401, data: { error: 'x' } })), 'ok', 'le serveur répond : le réseau passe');
   assert.equal(await firewallProbe(async () => ({ status: 403, data: null })), 'blocked', 'page HTML de Cloudflare');
@@ -214,7 +214,9 @@ test('pare-feu sur la demande (vu sur Discord, en boucle) : petite requête sans
   // contenu, déjà sans contexte : message qui explique quoi changer
   ({ S } = mk());
   stream = async () => { throw fw(); };
-  await assert.rejects(runNative(S, 'SELECT * FROM users', { ...io(), stream, firewallDelayMs: 0, probe: async () => 'ok', bare: 'SELECT * FROM users' }), e => e.message === FIREWALL_CONTENT);
+  const sqli = 'teste ça : SELECT * FROM users WHERE id = 1 UNION SELECT password FROM admin';
+  await assert.rejects(runNative(S, sqli, { ...io(), stream, firewallDelayMs: 0, probe: async () => 'ok', bare: sqli }),
+    e => /refuse le CONTENU/.test(e.message) && /dans ton message : « teste ça : SELECT \* FROM users/.test(e.message) && /injection SQL/.test(e.message));
   // réseau : rien à renvoyer, message réseau
   ({ S } = mk());
   let n = 0;

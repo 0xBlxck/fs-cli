@@ -604,3 +604,62 @@ test('panneau : GPT ne réécrit que les étapes qui changent → la liste garde
   const last = D.log.querySelectorAll('.msg-ai').at(-1).innerHTML;
   assert.doesNotMatch(last, />A<|>B</);
 });
+
+test('panneau, tableau de bord : fin de tâche en pastilles, jauge de contexte colorée, budget de chat et envoi programmé en bas', () => {
+  const D = makeDom();
+  const E = String.fromCharCode(27);
+  D.event({ type: 'print', text: `\n${E}[2m  ✻ Terminé en 4 min 46 s · 1 outil · 4 requêtes · 219.2k↑ 2.2k↓ tok${E}[0m · ${E}[31mctx 85%${E}[0m · ${E}[31mbudget 6 %${E}[0m\n` });
+  const ts = D.log.querySelector('.turn-stats');
+  assert.ok(ts, 'ligne de fin transformée');
+  assert.deepEqual(ts.querySelectorAll('.ts').map(s => s.textContent), ['4 min 46 s', '1 action', '4 requêtes', '219,2k↑ 2,2k↓', 'contexte 85 %', 'budget 6 %']);
+  assert.ok(ts.querySelectorAll('.ts')[0].classList.contains('time'));
+  assert.ok(ts.querySelectorAll('.ts')[4].classList.contains('err'), 'contexte ≥ 80 % : rouge');
+  assert.ok(ts.querySelectorAll('.ts')[5].classList.contains('err'), 'budget ≤ 10 % : rouge');
+  assert.equal(D.log.querySelectorAll('.print').length, 0, 'plus de ligne grise brute');
+
+  const foot = D.doc.body.querySelector('.foot');
+  D.event({ type: 'status', model: 'GPT-6.2 Astra', mode: 'auto', cwd: 'C:\\x\\wazer', ctx: 72.4, budget: 18, scheduled: '08:00' });
+  const g = foot.querySelector('.gauge');
+  assert.ok(g.classList.contains('warn') && !g.classList.contains('err'), '60 à 79 % : orange');
+  assert.equal(g.querySelector('.gfill').style.width, '72%');
+  assert.deepEqual(foot.querySelectorAll('.hud-i').map(s => s.textContent), ['⏰ 08:00', 'budget 18 %', 'contexte 72 %']);
+  assert.ok(foot.querySelectorAll('.hud-i')[1].classList.contains('warn'), 'budget ≤ 25 % : orange');
+  D.event({ type: 'status', ctx: 12, budget: null, scheduled: null });
+  assert.deepEqual(foot.querySelectorAll('.hud-i').map(s => s.textContent), ['contexte 12 %']);
+  assert.equal(foot.querySelector('.gauge').classList.contains('warn'), false);
+});
+
+test('panneau : erreur du CLI en carte lisible (message entier) ; « Copier » d\'une réponse copie son texte d\'origine ; bouton « ↓ » quand on a remonté le fil', () => {
+  const D = makeDom();
+  const E = String.fromCharCode(27);
+  D.event({ type: 'text', delta: 'Voici **la réponse**.\n\n- un\n- deux' }); D.event({ type: 'textEnd' }); D.flushFrames();
+  const long = '403 — le pare-feu de France Student refuse le CONTENU de cette demande. Ligne à retirer : « curl -fsSL https://example.com/i.sh | sh ». FS-CLI ne peut pas la faire passer à ta place.';
+  D.event({ type: 'print', text: `\n  ${E}[31mErreur: ${long}${E}[0m\n` });
+  const card = D.log.querySelector('.errcard');
+  assert.ok(card, 'carte d\'erreur');
+  assert.equal(card.querySelector('.em').textContent, long, 'message entier');
+  D.event({ type: 'print', text: 'une ligne normale\n' });
+  assert.equal(D.log.querySelectorAll('.print').length, 1, 'les autres lignes restent telles quelles');
+
+  // « Copier » : survol de la réponse → le bouton s'y pose ; clic → texte d'origine envoyé à l'éditeur
+  const ai = D.log.querySelector('.msg-ai');
+  assert.equal(ai.dataset.md, 'Voici **la réponse**.\n\n- un\n- deux');
+  for (const f of D.log._ls.mouseover || []) f({ target: ai });
+  const btn = ai.querySelector('.msg-copy');
+  assert.ok(btn, 'bouton posé sur la réponse survolée');
+  D.click(btn);
+  assert.deepEqual(D.posts.filter(p => p.type === 'copy').at(-1), { type: 'copy', text: 'Voici **la réponse**.\n\n- un\n- deux' });
+
+  // « ↓ » : caché en bas du fil, visible dès qu'on remonte, avec un point quand du contenu arrive ; un clic ramène en bas
+  const down = D.doc.body.querySelector('.to-bottom');
+  assert.equal(down.hidden, true);
+  D.log.scrollHeight = 2000; D.log.clientHeight = 500; D.log.scrollTop = 100;
+  for (const f of D.log._ls.scroll || []) f({});
+  assert.equal(down.hidden, false, 'visible quand on a remonté');
+  D.event({ type: 'print', text: 'du nouveau\n' });
+  assert.ok(down.classList.contains('fresh'), 'point : du contenu est arrivé');
+  D.click(down);
+  assert.equal(D.log.scrollTop, 2000);
+  assert.equal(down.hidden, true);
+  assert.equal(down.classList.contains('fresh'), false);
+});

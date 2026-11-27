@@ -470,3 +470,38 @@ textarea::placeholder { color: var(--dim); opacity: .8; }
 .acts.running .dots i:nth-child(2) { animation-delay: .3s; } .acts.running .dots i:nth-child(4) { animation-delay: .6s; } .acts.running .dots i:nth-child(3) { animation-delay: .9s; }
 @keyframes dotpulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .tl.acts::before { display: none; }
+
+/* ── tableau de bord du bas : jauge de contexte, budget de chat, envoi programmé ── */
+.foot { align-items: center; }
+.foot > span:last-child { display: flex; align-items: center; gap: 10px; flex: none; overflow: visible; }
+.hud-i { display: inline-flex; align-items: center; gap: 5px; overflow: visible !important; }
+.hud-i.warn { color: var(--warn); } .hud-i.err { color: var(--err); }
+.gauge .gbar { display: inline-block; width: 42px; height: 4px; border-radius: 2px; background: var(--hover); overflow: hidden; }
+.gauge .gfill { display: block; height: 100%; border-radius: 2px; background: var(--ok); transition: width .4s ease; }
+.gauge.warn .gfill { background: var(--warn); } .gauge.err .gfill { background: var(--err); }
+
+/* ── fin de tâche : pastilles au lieu d'une ligne grise brute ── */
+.turn-stats { display: flex; flex-wrap: wrap; gap: 5px; padding-left: 22px; font-size: 11px; color: var(--dim); }
+.turn-stats .ts { padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
+.turn-stats .ts.time { color: var(--fg); }
+.turn-stats .ts.time::before { content: '✓'; color: var(--ok); margin-right: 5px; font-weight: 700; }
+.turn-stats .ts.warn { color: var(--warn); border-color: var(--warn); }
+.turn-stats .ts.err { color: var(--err); border-color: var(--err); }
+
+/* ── erreur : carte lisible ── */
+.errcard { border: 1px solid var(--err); border-left-width: 3px; border-radius: 8px; padding: 8px 11px 8px 14px; margin-left: 22px; background: rgba(248,81,73,.07); }
+.errcard::before, .errcard::after { display: none; }
+.errcard b { color: var(--err); font-size: 12px; }
+.errcard .em { margin-top: 3px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+
+/* ── bouton « Copier » d'une réponse (au survol) ── */
+.msg-copy { position: absolute; top: -6px; right: 0; font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--box); color: var(--dim); opacity: 0; transition: opacity .12s; z-index: 2; }
+.msg-ai:hover > .msg-copy { opacity: 1; }
+.msg-copy:hover { color: var(--fg); border-color: var(--accent); }
+.msg-ai > :has(+ .msg-copy) { margin-bottom: 0; }
+
+/* ── bouton « ↓ » : revenir en bas du fil ── */
+.to-bottom { position: absolute; top: -34px; right: 18px; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--box); border: 1px solid var(--border); color: var(--fg); box-shadow: 0 2px 8px rgba(0,0,0,.35); z-index: 5; }
+.to-bottom[hidden] { display: none; }
+.to-bottom:hover { border-color: var(--accent); }
+.to-bottom.fresh::after { content: ''; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }

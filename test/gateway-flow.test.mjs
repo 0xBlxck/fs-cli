@@ -1138,3 +1138,33 @@ test('(vu en vrai) plus de 32 appels FS dans un tour → résultats renvoyés en
   assert.match(last.content, /Message de FS-CLI[\s\S]*34 appels/);
   assert.equal((last.content.match(/^### \d+/gm) || []).length, 34);
 });
+
+test('(pare-feu, vu en vrai) skill lancé par « /nom » refusé pour UNE ligne : le message cite le skill et la ligne, en entier (plus coupé à 300 car.) ; après /fs:reprendre, le message suivant garde le contexte', async t => {
+  const fw = { status: 403, code: 'FIREWALL', message: '403 — le pare-feu de France Student (Cloudflare) a bloqué la requête.' };
+  const SKILL = 'Base directory for this skill: C:\\Users\\bob\\.claude\\skills\\studio-setup\n\n# Studio setup\n\n1. Ouvre Studio\n2. Lance : cat js_files.txt | xargs -I{} sh -c \'curl -s {} | linkfinder -i -\'\n3. Vérifie.';
+  const fake = fakeFs({ turns: [{ fail: fw }, { fail: fw }, { fail: fw }, 'Je reprends.'], chats: { 'site-cv': { id: 'site-cv', title: 'Mon CV', chatMessages: [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'r' }] } } });
+  fake.deps.listChats = async () => [{ id: 'site-cv', title: 'Mon CV', lastMessageAt: '2026-11-19T10:00:00Z' }];
+  fake.deps.firewallDelayMs = 0;
+  fake.deps.probe = async () => 'ok';
+  const { gw } = await setup(t, {}, {}, { fake });
+  const m = [user('FSCLI-COMMANDE reprendre cv')];
+  const r1 = await call(gw, ccReq(m));
+  assert.match(r1.sse.text, /« Mon CV » reprise/);
+  m.push(asst(r1), user('<command-message>studio-setup</command-message>\n<command-name>/studio-setup</command-name>\n' + SKILL));
+  const r2 = await call(gw, ccReq(m));
+  const msg = String(r2.json?.error?.message || r2.text);
+  assert.equal(r2.status, 400);
+  assert.match(msg, /refuse le CONTENU/);
+  assert.match(msg, /SKILL\.md du skill « studio-setup »/);
+  assert.match(msg, /xargs -I\{\} sh -c 'curl -s \{\} \| linkfinder -i -'/, 'la ligne en cause est citée');
+  assert.match(msg, /FS-CLI ne peut pas la faire passer à ta place\.$/, 'message entier, fin comprise');
+  assert.doesNotMatch(msg, /fichier que le modèle lira/, 'plus de conseil qui mène au même refus');
+  assert.equal(fake.sent.length, 3, 'essai, nouvel essai, puis la demande seule');
+  assert.match(fake.sent[0].content, /^\[Suite de cette conversation : /);
+  // l'utilisateur renvoie autre chose : le contexte de reprise (note + dossier de travail) part encore, puisque rien n'a été accepté
+  m.push(user('ok continue sans le skill'));
+  const r3 = await call(gw, ccReq(m));
+  assert.equal(r3.sse.text, 'Je reprends.');
+  assert.match(fake.sent[3].content, /^\[Suite de cette conversation : /, 'contexte gardé après un envoi refusé');
+  assert.match(fake.sent[3].content, /Contexte : dossier de travail/);
+});

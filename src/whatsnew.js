@@ -1,6 +1,12 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.12', items: [
+    'Erreur 403 du pare-feu de France Student : le message dit maintenant QUELLE ligne retirer (il suffit d’une ligne du type « curl … | sh » ou d’un exemple d’injection SQL dans un skill ou un message pour que tout soit refusé), et il n’est plus coupé',
+    '`fs claude` : après /fs:reprendre, si le premier message est refusé, le suivant garde bien le dossier de travail et les consignes',
+    'Panneau, tableau de bord du bas : jauge du contexte (verte, orange à 60 %, rouge à 80 %), budget de chat restant et heure du prochain envoi programmé',
+    'Panneau : fin de tâche en pastilles lisibles (durée, actions, tokens), erreurs dans une carte rouge, bouton « Copier » au survol d’une réponse, bouton « ↓ » pour revenir en bas du fil',
+  ] },
   { version: '3.56.11', items: [
     'Panneau : la liste de tâches garde toutes les étapes du plan même quand GPT ne réécrit que celles qui changent (avant, les étapes non répétées disparaissaient de la carte)',
   ] },

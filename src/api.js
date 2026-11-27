@@ -368,8 +368,7 @@ export async function firewallProbe(get = requestJson) {
   if (r.status === 403 && !r.data) return 'blocked';                  // page HTML de Cloudflare, pas une réponse de l'API
   return 'ok';
 }
-export const FIREWALL_CONTENT = '403 — le pare-feu de France Student (Cloudflare) bloque le CONTENU de cette demande (ton réseau passe : une requête vide est acceptée). '
-  + 'Souvent un passage qui ressemble à une attaque pour lui : code SQL, balises <script>, chemins ../../, commandes système, mots de passe. Reformule ou retire ce passage (ou mets-le dans un fichier que le modèle lira), puis renvoie.';
+// contenu refusé : le message (avec la ligne en cause quand on la trouve) est composé par firewallContentMessage, src/firewall.js
 export const FIREWALL_NETWORK = '403 — le pare-feu de France Student (Cloudflare) bloque ton RÉSEAU (même une requête vide est refusée). '
   + 'Coupe le VPN ou le proxy, ou essaie un autre réseau (partage 4G), puis réessaie dans une minute.';
 

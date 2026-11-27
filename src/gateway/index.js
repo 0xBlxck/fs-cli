@@ -420,7 +420,9 @@ export function createGateway(deps, opts = {}) {
     const cmd = cls.kind === 'main' && !u.results.length ? fsCommand(u.text) : null;
     if (cmd) { await runFsCommand(conv, cmd, reply, avail); return { outcome: 'commande', chatId: conv.chatId, cache: false }; }
     const extras = { web: !!o.web, date: isoDay(now()), shellTool, forceClaudeMd: !!o.claudeMd };
-    if (conv.attachNext) { conv.attachNext = false; extras.borrowed = true; extras.attached = true; }   // 1er envoi après /fs:reprendre : note + préambule
+    // 1er envoi après /fs:reprendre : note + préambule. Le drapeau ne tombe qu'une fois l'envoi ACCEPTÉ (finishTurn) : s'il est
+    // refusé (pare-feu, erreur), le message suivant porte encore le dossier de travail et les consignes
+    if (conv.attachNext) { extras.borrowed = true; extras.attached = true; }
     const ctxBase = { deps, store, models, agent, key: delta.key, est: estimateTokens(body), prefix, userText: u.text, timing, quota,
       log: line, debug, onDisabled: () => { disabled = true; },
       toolCtx: { env, tools, sessionId: cls.sessionId, fsExists: deps.fsExists, fsStat: deps.fsStat } };
@@ -537,7 +539,7 @@ export function createGateway(deps, opts = {}) {
   }
 
   function finishTurn(conv, result, env, u, shellTool) {
-    if (result.accepted) { afterSend(conv, env, { claudeMd: u.claudeMd, shellTool }); store.save(conv); }
+    if (result.accepted) { conv.attachNext = false; afterSend(conv, env, { claudeMd: u.claudeMd, shellTool }); store.save(conv); }
     return { outcome: result.outcome, chatId: conv.chatId, cache: result.accepted && result.outcome !== 'annulé' };
   }
 

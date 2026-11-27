@@ -197,6 +197,8 @@ export function httpErrorFor(kind, quota = null, e = null) {
     case 'auth': return { status: 400, type: 'invalid_request_error', message: MESSAGES.expired, headers: {} };
     case 'disabled': return { status: 400, type: 'invalid_request_error', message: MESSAGES.accountDisabled, headers: {} };
     case 'busy': return { status: 529, type: 'overloaded_error', message: MESSAGES.busy, headers: { 'retry-after': '5' } };
+    // pare-feu : message déjà complet (cause + ligne à retirer), jamais coupé à 300 car. (vu : le conseil disparaissait, « ce pass… »)
+    case 'firewall': return { status: 400, type: 'invalid_request_error', message: one(e?.message || 'le pare-feu de France Student a refusé la demande', 700), headers: {} };
     case 'other': return { status: 400, type: 'invalid_request_error', message: `France Student a refusé la demande : ${one(e?.message || 'erreur inconnue', 300)}`, headers: {} };
     default: return null;
   }

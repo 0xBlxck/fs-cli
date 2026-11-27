@@ -86,8 +86,17 @@
 
   // ── défilement : reste en bas si on y était ──
   let stick = true;
-  log.addEventListener('scroll', () => { stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40; });
-  const toBottom = () => { if (stick) log.scrollTop = log.scrollHeight; };
+  // bouton « ↓ » : apparaît dès qu'on a remonté le fil ; un point signale du nouveau contenu arrivé entre-temps
+  const bDown = h('button', 'to-bottom'); bDown.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M8 3v9M4 8.5 8 12.5l4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  bDown.title = 'Revenir en bas'; bDown.hidden = true;
+  bDown.onclick = () => { stick = true; log.scrollTop = log.scrollHeight; bDown.hidden = true; bDown.classList.remove('fresh'); };
+  composer.prepend(bDown);
+  log.addEventListener('scroll', () => {
+    stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    bDown.hidden = stick;
+    if (stick) bDown.classList.remove('fresh');
+  });
+  const toBottom = () => { if (stick) log.scrollTop = log.scrollHeight; else bDown.classList.add('fresh'); };
   const add = el => {
     if (!el._acts) { actsClose(); S.seq = []; }                        // autre chose que des actions (texte, question…) : le bloc d'actions se referme
     if (S.spin && S.spin.el.parentNode === log) log.insertBefore(el, S.spin.el); else log.append(el);
@@ -329,8 +338,42 @@
   function aiEnd() {
     if (!S.ai) return;
     cancelRender();
-    if (!S.ai.text.trim()) S.ai.el.remove(); else { renderAI(true); keepLastTaskCard(S.ai.el, S.ai.text); }
+    if (!S.ai.text.trim()) S.ai.el.remove(); else { renderAI(true); S.ai.el.dataset.md = S.ai.text; keepLastTaskCard(S.ai.el, S.ai.text); }
     S.ai = null;
+  }
+  // bouton « Copier » d'une réponse : un seul bouton, posé sur la réponse survolée (il copie le texte d'origine, mise en forme comprise)
+  const bCopyMsg = h('button', 'msg-copy', 'Copier'); bCopyMsg.title = 'Copier cette réponse';
+  bCopyMsg.onclick = e => {
+    e.stopPropagation();
+    post({ type: 'copy', text: bCopyMsg.parentNode?.dataset?.md || '' });
+    bCopyMsg.textContent = 'Copié ✓'; setTimeout(() => { bCopyMsg.textContent = 'Copier'; }, 1500);
+  };
+  log.addEventListener('mouseover', e => {
+    const m = e.target?.closest?.('.msg-ai');
+    if (m && m.dataset.md && !m.classList.contains('cursor') && bCopyMsg.parentNode !== m) m.append(bCopyMsg);
+  });
+  /** fin de tâche (« 4 min 46 s · 3 outils · 4 requêtes · 219.2k↑ 2.2k↓ tok · ctx 21% · budget 89 % ») → pastilles */
+  function turnStats(line) {
+    const el = h('div', 'turn-stats');
+    const parts = String(line).split(/\s+·\s+/).map(s => s.trim()).filter(Boolean);
+    parts.forEach((p, i) => {
+      let cls = 'ts', text = p, title = '';
+      const ctx = p.match(/^ctx (\d+)\s*%$/), bud = p.match(/^budget ([\d.,]+)\s*%$/), tok = /tok$/.test(p);
+      if (i === 0) { cls += ' time'; title = 'Durée de la tâche'; }
+      else if (ctx) { const n = Number(ctx[1]); cls += n >= 80 ? ' err' : n >= 60 ? ' warn' : ''; text = `contexte ${n} %`; title = 'Mémoire de la conversation utilisée'; }
+      else if (bud) { const n = parseFloat(bud[1].replace(',', '.')); cls += n <= 10 ? ' err' : n <= 25 ? ' warn' : ''; title = 'Budget de messages restant sur cette conversation'; }
+      else if (tok) { text = p.replace(/\s*tok$/, '').replace(/\./g, ','); title = 'Tokens : ↑ lus par le modèle, ↓ écrits par le modèle'; }
+      else if (/outils?$/.test(p)) text = p.replace(/outils?$/, m => (m === 'outil' ? 'action' : 'actions'));
+      const s = h('span', cls, text); if (title) s.title = title;
+      el.append(s);
+    });
+    add(el);
+  }
+  /** erreur du CLI : carte rouge lisible (le message entier, qui dit quoi faire), plus une ligne grise perdue dans le fil */
+  function errorCard(message) {
+    const el = h('div', 'tl err errcard');
+    el.append(h('b', null, 'Erreur'), h('div', 'em', macKeys(message)));
+    add(el);
   }
   /** nouvelle liste de tâches : elle REMPLACE celle d'avant dans la même demande (une seule liste à jour, comme Claude Code) ;
    *  le message d'avant est réaffiché sans ses lignes de tâches, ou retiré s'il ne contenait qu'elles */
@@ -686,7 +729,22 @@
     const tgt = String(st.target || '').split(/[\\/]/).filter(Boolean).pop() || '';
     footL.textContent = [dir ? `📁 ${dir}` : '', tgt ? `✎ écrit dans ${tgt}` : '', st.project ? `◆ projet ${st.project}` : ''].filter(Boolean).join('  ·  ');
     footL.title = `Dossier de travail : ${st.cwd || '?'}${st.target ? `\nFichiers écrits dans : ${st.target}` : ''}\nCliquer pour changer`;
-    footR.textContent = typeof st.ctx === 'number' ? `contexte ${Math.round(st.ctx)} %` : '';
+    // tableau de bord : envoi programmé, budget de chat restant, jauge du contexte (vert, puis orange à 60 %, rouge à 80 %)
+    footR.textContent = '';
+    if (st.scheduled) { const s = h('span', 'hud-i', `⏰ ${st.scheduled}`); s.title = 'Envoi programmé (/plus-tard pour voir ou annuler)'; footR.append(s); }
+    if (typeof st.budget === 'number') {
+      const b = h('span', 'hud-i' + (st.budget <= 10 ? ' err' : st.budget <= 25 ? ' warn' : ''), `budget ${st.budget > 0 && st.budget < 1 ? st.budget.toFixed(1).replace('.', ',') : Math.round(st.budget)} %`);
+      b.title = 'Budget de messages restant sur cette conversation (limite du site). À 0 %, ouvre une nouvelle conversation.';
+      footR.append(b);
+    }
+    if (typeof st.ctx === 'number') {
+      const p = Math.max(0, Math.min(100, Math.round(st.ctx)));
+      const g = h('span', 'hud-i gauge' + (p >= 80 ? ' err' : p >= 60 ? ' warn' : ''));
+      const bar = h('i', 'gbar'); const fill = h('i', 'gfill'); fill.style.width = p + '%'; bar.append(fill);
+      g.append(bar, h('span', null, `contexte ${p} %`));
+      g.title = `Mémoire de la conversation utilisée : ${p} %.${p >= 60 ? ' /compact la résume pour libérer de la place.' : ''}`;
+      footR.append(g);
+    }
   }
   function setBusy(b) {
     S.busy = b;
@@ -1257,7 +1315,7 @@
     if (ev.older) add(h('div', 'hold', `… ${ev.older} message${ev.older > 1 ? 's' : ''} plus ancien${ev.older > 1 ? 's' : ''}`));
     for (const m of ev.messages || []) {
       if (m.role === 'user') add(h('div', 'msg-user', m.text));
-      else { const el = h('div', 'tl msg-ai'); el.innerHTML = md(m.text, false); add(el); keepLastTaskCard(el, m.text); }
+      else { const el = h('div', 'tl msg-ai'); el.innerHTML = md(m.text, false); el.dataset.md = m.text; add(el); keepLastTaskCard(el, m.text); }
     }
     const n = h('div', 'print'); n.textContent = `↺ conversation reprise · ${ev.title || ''} · ${ev.model || ''}`; add(n);
     askReattach();
@@ -1580,8 +1638,13 @@
       case 'clear': S.ai = null; S.tool = null; S.think = null; agReset(); showWelcome(); askReattach(); break;
       case 'print': {
         const text = String(ev.text || '');
-        if (!text.replace(/\x1b\[[0-9;]*m/g, '').trim()) break;
+        const plain = text.replace(/\x1b\[[0-9;]*m/g, '');
+        if (!plain.trim()) break;
         aiEnd();
+        const stats = plain.match(/^\s*✻ Terminé en (.+?)\s*$/m);
+        if (stats) { turnStats(stats[1]); break; }                  // fin de tâche : pastilles lisibles, plus une ligne grise brute
+        const err = plain.match(/^\s*Erreur\s*:\s*([\s\S]+?)\s*$/);
+        if (err) { errorCard(err[1]); break; }
         const p = h('div', 'print'); p.append(ansi(macKeys(text).replace(/^\n+|\n+$/g, '').replace(/^ {2}/gm, ''))); add(p);
         break;
       }
