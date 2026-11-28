@@ -82,6 +82,32 @@ export function duration(secs) {
 }
 
 /** Liste de tâches courante (la dernière écrite par le modèle) : affichée en panneau épinglé au-dessus de la saisie. */
+// Liste de tâches mise à jour par le modèle (même règle que le panneau, vscode/media/panel.js) : la nouvelle liste se FUSIONNE
+// avec la précédente. GPT ne réécrit souvent que les étapes qui changent, en reformule certaines, et ne recoche pas les premières.
+const taskWords = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(w => w.length > 2);
+/** même étape reformulée (mêmes 2 premiers mots, 60 % des mots en commun) */
+export function sameTask(a, b) {
+  if (a.text.trim().toLowerCase() === b.text.trim().toLowerCase()) return true;
+  const A = taskWords(a.text), B = taskWords(b.text);
+  if (A.length < 2 || B.length < 2) return false;
+  const common = A.filter(w => B.includes(w)).length;
+  return A.slice(0, 2).join(' ') === B.slice(0, 2).join(' ') && common / Math.max(A.length, B.length) >= 0.6;
+}
+/** ancienne liste + mise à jour → liste complète : ordre du plan, états mis à jour, une étape cochée coche celles d'avant */
+export function mergeTaskList(old, upd) {
+  const out = old.map(t => ({ ...t }));
+  let lastDone = -1;
+  for (const t of upd) {
+    let i = out.findIndex(o => o.text.trim().toLowerCase() === t.text.trim().toLowerCase());
+    if (i < 0) i = out.findIndex(o => sameTask(o, t));
+    if (i >= 0) Object.assign(out[i], { text: t.text, state: t.state });
+    else { out.push({ ...t }); i = out.length - 1; }
+    if (t.state === 'done') lastDone = Math.max(lastDone, i);
+  }
+  for (let i = 0; i < lastDone; i++) if (out[i].state !== 'done') out[i].state = 'done';
+  return out;
+}
+
 export const tasks = {
   list: [], listeners: [], blocks: 0,                                   // blocks : nombre de listes écrites pendant la demande en cours
   set(list) { this.list = list; for (const fn of this.listeners) try { fn(list); } catch {} },
@@ -331,11 +357,12 @@ export class MdStream {
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { this.emit('  ' + c.dim('─'.repeat(Math.min(48, cols() - 6)))); return; }
     if ((m = line.match(/^(\s*)[-*+]\s+\[( |x|X|~|>|-)\]\s+(.*)$/))) {   // liste de tâches du modèle : ☐ à faire · ◐ en cours · ☑ fait
       const st = m[2] === ' ' ? 'todo' : /[xX]/.test(m[2]) ? 'done' : 'doing';
-      if (!this.inTasks) { this.inTasks = true; this.taskList = []; tasks.blocks++; }
+      // nouvelle liste : elle se fusionne avec celle d'avant dans la même demande (pas de remplacement : les étapes non répétées restent)
+      if (!this.inTasks) { this.inTasks = true; this.taskList = []; this.taskBase = tasks.blocks ? tasks.list.map(t => ({ ...t })) : []; tasks.blocks++; }
       // seule la 1re liste de la demande s'écrit dans le fil ; les mises à jour suivantes ne changent que le panneau épinglé
       if (tasks.blocks <= 1) this.emit(`  ${m[1]}${taskLine(st, inline(m[3]))}`);
       this.taskList.push({ text: m[3].replace(/[*_`]/g, '').trim(), state: st });
-      tasks.set(this.taskList.slice());
+      tasks.set(mergeTaskList(this.taskBase || [], this.taskList));
       return;
     }
     this.inTasks = false;

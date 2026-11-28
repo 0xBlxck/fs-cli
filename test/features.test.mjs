@@ -383,3 +383,22 @@ test('mode « tout autoriser » : plus aucune confirmation, mais les commandes c
   assert.match(panel, /label: '⚠ Tout autoriser…'/);
   assert.match(panel, /text: '\/mode tout'/, 'activation par la commande (avec confirmation), jamais directement');
 });
+
+test('liste de tâches (terminal) : mise à jour partielle FUSIONNÉE (vu : étapes non répétées disparues, étape reformulée en double) ; une étape cochée coche celles d\'avant', () => {
+  ui.tasks.clear();
+  const md = new ui.MdStream();
+  md.push('- [ ] Relire le code actuel et les guides de design\n- [ ] Définir une nouvelle direction artistique\n- [ ] Réécrire entièrement la vitrine\n- [ ] Tester les fonctions et inspecter les captures\n\nJe commence.\n');
+  md.push('- [x] Réécrire entièrement la vitrine\n- [x] Tester les fonctions et vérifier les captures\n\nC\'est fini.\n');
+  md.end?.();
+  assert.deepEqual(ui.tasks.list.map(t => `${t.state}:${t.text}`), [
+    'done:Relire le code actuel et les guides de design', 'done:Définir une nouvelle direction artistique',
+    'done:Réécrire entièrement la vitrine', 'done:Tester les fonctions et vérifier les captures']);
+  // étape en cours : celles d'après restent à faire ; deux étapes qui commencent pareil ne sont pas fusionnées
+  ui.tasks.clear();
+  const m2 = new ui.MdStream();
+  m2.push('- [ ] Tester le menu principal\n- [ ] Tester le paiement par carte bancaire\n- [ ] Publier\n\nok\n');
+  m2.push('- [~] Tester le paiement par carte bancaire\n\nok\n');
+  assert.deepEqual(ui.tasks.list.map(t => t.state), ['todo', 'doing', 'todo']);
+  ui.tasks.clear();
+  assert.equal(ui.sameTask({ text: 'Tester le menu principal' }, { text: 'Tester le paiement par carte' }), false);
+});

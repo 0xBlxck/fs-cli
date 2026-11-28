@@ -1,6 +1,9 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.15', items: [
+    'Terminal : la liste de tâches épinglée garde toutes les étapes du plan (fusion des mises à jour comme dans le panneau, étapes reformulées sans doublon, étapes d’avant cochées) et l’objectif /goal s’affiche dans la barre du bas (🎯 objectif 3/20, ou en pause)',
+  ] },
   { version: '3.56.14', items: [
     'Barre du bas mise à jour en direct : le contexte et le budget de chat bougent pendant la réponse, après chaque étape du modèle, plus seulement à la fin',
     'Panneau : la liste de tâches se termine bien cochée (les étapes d’avant une étape faite sont cochées, une étape reformulée par le modèle ne s’affiche plus en double)',

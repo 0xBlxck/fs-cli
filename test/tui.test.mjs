@@ -401,3 +401,19 @@ test('barre d\'état : demande programmée (/plus-tard) rappelée par « ⏰ heu
   assert.doesNotMatch(sim.screen(), /⏰/);
   tui.stop();
 });
+
+test('barre d\'état : objectif /goal en cours (étape n/max), en pause en orange, version courte si étroit', async () => {
+  const { sim, tui, tick } = make({ cols: 150 });
+  tui.setStatus({ ctx: 15, budget: 87.4, goal: { condition: 'tests verts', iterations: 3, max: 20, paused: false } }); await tick();
+  assert.match(sim.screen(), /🎯 objectif 3\/20 · budget restant : 87 % · contexte restant : 85 %/);
+  tui.setStatus({ goal: { condition: 'tests verts', iterations: 20, max: 20, paused: true } }); await tick();
+  assert.match(sim.screen(), /🎯 objectif en pause/);
+  tui.setStatus({ goal: null }); await tick();
+  assert.doesNotMatch(sim.screen(), /🎯/);
+  tui.stop();
+  const n = make({ cols: 64 });
+  n.tui.setStatus({ ctx: 15, budget: 50, goal: { condition: 'x', iterations: 2, max: 20 } }); await n.tick();
+  assert.match(n.sim.screen(), /🎯 2\/20 · budget 50 % · ctx 85 %/);
+  for (const l of n.sim.lines()) assert.ok(strWidth(l) <= 64, `ligne trop large: ${l}`);
+  n.tui.stop();
+});

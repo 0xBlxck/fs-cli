@@ -324,7 +324,10 @@ export class Tui {
     const budTxt = bud == null ? '' : bud > 0 && bud < 1 ? `${bud.toFixed(1).replace('.', ',')} %` : `${Math.round(bud)} %`;
     const budCol = bud == null ? c.dim : bud <= 10 ? c.red : bud <= 25 ? c.yellow : c.dim;
     const ctxCol = ctxLeft != null && ctxLeft < 25 ? c.yellow : c.dim;
-    const statusRight = (long) => [st.scheduled ? c.accent(`⏰ ${st.scheduled}`) : '', bud != null ? budCol(long ? `budget restant : ${budTxt}` : `budget ${budTxt}`) : '',
+    // /goal en cours : étape et maximum (« en pause » en orange)
+    const goalPart = long => (!st.goal || !st.goal.condition ? '' : st.goal.paused ? c.yellow(long ? '🎯 objectif en pause' : '🎯 pause')
+      : c.accent(st.goal.iterations ? `🎯 ${long ? 'objectif ' : ''}${st.goal.iterations}/${st.goal.max || 20}` : `🎯${long ? ' objectif' : ''}`));
+    const statusRight = (long) => [goalPart(long), st.scheduled ? c.accent(`⏰ ${st.scheduled}`) : '', bud != null ? budCol(long ? `budget restant : ${budTxt}` : `budget ${budTxt}`) : '',
       ctxLeft != null ? ctxCol(long ? `contexte restant : ${ctxLeft} %` : `ctx ${ctxLeft} %`) : ''].filter(Boolean).join(c.dim(' · '));
     let rightStatus = statusRight(true);
     if (W - 2 - strWidth(leftStatus) - strWidth(rightStatus) - 1 <= 1) rightStatus = statusRight(false);   // terminal étroit : version courte
