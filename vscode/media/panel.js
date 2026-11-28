@@ -403,9 +403,27 @@
   const TASK_ITEM = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX~>-])\][ \t]+(.*)$/;
   /** liste à jour = ancienne liste, statuts mis à jour par la nouvelle, étapes nouvelles à la fin
    *  (GPT ne réécrit souvent que les étapes qui changent : « [x] B, [~] C » sans A → A doit rester affichée) */
+  const taskWords = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  /** même étape reformulée (« Tester … et inspecter les captures » → « Tester … et vérifier les captures ») */
+  function sameTask(a, b) {
+    if (a.key === b.key) return true;
+    const A = taskWords(a.text), B = taskWords(b.text);
+    if (A.length < 2 || B.length < 2) return false;
+    const common = A.filter(w => B.includes(w)).length;
+    return A.slice(0, 2).join(' ') === B.slice(0, 2).join(' ') && common / Math.max(A.length, B.length) >= 0.6;
+  }
   function mergeTasks(old, upd) {
     const out = old.map(t => ({ ...t }));
-    for (const t of upd) { const hit = out.find(o => o.key === t.key); if (hit) hit.mark = t.mark; else out.push({ ...t }); }
+    let lastDone = -1;
+    for (const t of upd) {
+      let i = out.findIndex(o => o.key === t.key);
+      if (i < 0) i = out.findIndex(o => sameTask(o, t));
+      if (i >= 0) Object.assign(out[i], { mark: t.mark, text: t.text, key: t.key });   // reformulée : le nouveau texte remplace l'ancien
+      else { out.push({ ...t }); i = out.length - 1; }
+      if (/[xX]/.test(t.mark)) lastDone = Math.max(lastDone, i);
+    }
+    // une étape cochée → celles d'avant aussi (vu : GPT ne recoche pas les premières, la carte finissait à moitié vide)
+    for (let i = 0; i < lastDone; i++) if (!/[xX-]/.test(out[i].mark)) out[i].mark = 'x';
     return out;
   }
   function keepLastTaskCard(el, text) {

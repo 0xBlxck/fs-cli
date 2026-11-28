@@ -439,6 +439,8 @@ let holdInput = !!opts.stdio;                                          // démar
 const ask = query => input.askLine(query);
 const refreshStatus = () => input.setStatus({ model: modelName(), mode: cfg.mode, cwd: S.cwd, ctx: S.ctxPercent, budget: S.budget ? S.budget.left : null, goal: S.goal ? { condition: S.goal.condition, iterations: S.goal.iterations, paused: !!S.goal.paused, max: GOAL_MAX_TURNS } : null, scheduled: SCHEDULED.next() ? SCHEDULED.next().at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + (SCHEDULED.list().length > 1 ? ` +${SCHEDULED.list().length - 1}` : '') : null, ...(opts.stdio ? { modelId: S.agentId, chatId: S.chatId || null, title: S.title || '', project: S.projectName !== undefined ? S.projectName : (cfg.fsProject && cfg.fsProject.name ? cfg.fsProject.name : ''), target: S.targetDir || '' } : {}) });
 const refreshPrompt = () => { input.setPrompt(promptStr()); refreshStatus(); };
+// contexte et budget relus PENDANT la réponse (après chaque étape) : la barre du bas bouge en direct, au plus 2 fois par seconde
+{ let t = null; S.onLive = () => { if (t) return; t = setTimeout(() => { t = null; refreshStatus(); }, 500); t.unref?.(); }; }
 // budget de chat du compte dans la barre d'état dès l'ouverture (sans attendre ; mis à jour après chaque réponse)
 if (!opts.print && agents) chatBudget(8000).then(b => { if (b) { S.budget = b; refreshStatus(); } }).catch(() => {});
 

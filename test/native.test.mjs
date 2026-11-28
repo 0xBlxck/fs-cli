@@ -418,3 +418,26 @@ test('tokens relus : vrai chiffre mesuré (/context − tokens écrits) au lieu 
     assert.match(done, /· 100↓ tok/); assert.doesNotMatch(done, /↑/);
   } finally { ui.attachSink(null); }
 });
+
+test('barre du bas en direct : contexte et budget relus après CHAQUE étape (pas seulement à la fin) ; budget au plus toutes les 8 s', async () => {
+  const { S } = mk({ chatId: 'chat-1' });
+  const seen = [];
+  S.onLive = () => seen.push({ ctx: S.ctxPercent, budget: S.budget?.left });
+  let step = 0, budgetCalls = 0;
+  const f = fakeFs([
+    { calls: [{ callId: 'a', name: 'list_directory', arguments: { path: '.' } }] },
+    { calls: [{ callId: 'b', name: 'list_directory', arguments: { path: '.' } }] },
+    { text: 'fini' },
+  ]);
+  const stream = async o => { const r = await f.stream(o); step++; return r; };
+  await runNative(S, 'regarde le dossier', { ...io(), stream,
+    ctxOf: async () => ({ usedTokens: 1000 * step, usagePercent: 10 * step }),
+    budget: async () => { budgetCalls++; return { left: 90 - budgetCalls } },
+    ctxPct: async () => null,
+  });
+  assert.ok(seen.length >= 2, 'mises à jour pendant la réponse : ' + seen.length);
+  const ctxs = [...new Set(seen.map(x => x.ctx))];
+  assert.deepEqual(ctxs.slice(0, 2), [10, 20], 'contexte de chaque étape, dans l\'ordre');
+  assert.ok(seen.some(x => x.budget === 89), 'budget relu pendant la réponse');
+  assert.equal(budgetCalls, 2, 'une fois en cours de route (8 s), une fois à la fin');
+});

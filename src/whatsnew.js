@@ -1,6 +1,10 @@
 // « Quoi de neuf » : affiché à l'accueil du terminal et du panneau, en entier avec /nouveautes.
 // Une ligne = une nouveauté visible, en mots simples. La version la plus récente en premier.
 export const WHATS_NEW = [
+  { version: '3.56.14', items: [
+    'Barre du bas mise à jour en direct : le contexte et le budget de chat bougent pendant la réponse, après chaque étape du modèle, plus seulement à la fin',
+    'Panneau : la liste de tâches se termine bien cochée (les étapes d’avant une étape faite sont cochées, une étape reformulée par le modèle ne s’affiche plus en double)',
+  ] },
   { version: '3.56.13', items: [
     'Nouveau : /goal <condition> (comme Claude Code). Le modèle travaille tout seul jusqu’à ce que la condition soit remplie, par exemple « /goal tous les tests passent ». Il vérifie avec ses outils (relit les fichiers, relance les tests) avant de dire que c’est fait, et repart sinon. /goal montre l’état, /goal clear arrête ; 20 étapes au plus, Échap met en pause',
     '`fs claude` : /goal de Claude Code fonctionne maintenant (avant, sa vérification recevait une réponse vide). Aucune conversation en plus n’est utilisée',

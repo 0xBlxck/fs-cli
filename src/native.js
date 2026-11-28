@@ -227,6 +227,9 @@ export const isOpenAiModel = (S, id = S.agentId) => {
   return p ? p === 'openai' : !(Number(id) <= -2000 && Number(id) > -3000);
 };
 
+/** barre d'état (terminal et panneau) mise à jour pendant la réponse ; S.onLive est posé par cli.js */
+const liveStatus = S => { try { S.onLive?.(); } catch {} };
+
 export async function runNative(S, userText, opts) {
   const { signal, ask, stream = streamChat, ctxPct = contextPercent } = opts;
   const ctxOf = opts.ctxOf !== undefined ? opts.ctxOf : (opts.stream ? null : fetchChatContext);   // contexte mesuré par FS (vrai chiffre d'entrée)
@@ -359,7 +362,16 @@ export async function runNative(S, userText, opts) {
       if (/prompt|input/i.test(k)) { tokensIn += v; reqIn += v; } else if (/candidate|compl|output/i.test(k)) { tokensOut += v; reqOut += v; }
     }
     // vrai chiffre d'entrée de cette requête (Claude : promptTokenCount ne compte que la partie hors cache) ; lu pendant que les outils tournent
-    if (ctxOf && S.chatId) measures.push(Promise.resolve(ctxOf(S.chatId)).then(m => (m ? Math.max(0, m.usedTokens - reqOut) : null)).catch(() => null));
+    if (ctxOf && S.chatId) measures.push(Promise.resolve(ctxOf(S.chatId)).then(m => {
+      // barre du bas en direct : le contexte mesuré par FS à chaque étape, plus seulement en fin de réponse
+      if (m && Number.isFinite(m.usagePercent)) { S.ctxPercent = Math.min(100, Math.max(0, m.usagePercent)); liveStatus(S); }
+      return m ? Math.max(0, m.usedTokens - reqOut) : null;
+    }).catch(() => null));
+    // budget de chat en direct : relu après une étape, au plus toutes les 8 s (petite requête, sans attendre)
+    if (budgetOf && Date.now() - (S.budgetReadAt || 0) > 8000) {
+      S.budgetReadAt = Date.now();
+      Promise.resolve(budgetOf()).then(b => { if (b) { S.budget = b; liveStatus(S); } }).catch(() => {});
+    }
     if (reqIn) S.lastPromptTokens = reqIn;                              // taille du contexte envoyé à cette requête (résumé auto au-delà du seuil)
     visible = cleanText(res.text)?.trim() || visible;
     if (res.sawImage && S.chatId) {                                     // image générée par France Student : enregistrée sur le PC et montrée

@@ -688,3 +688,31 @@ test('panneau /goal : indicateur en bas (étape, en pause), bandeaux colorés se
   }
   assert.deepEqual(kinds, ['info', 'info', 'ok', 'warn', 'warn']);
 });
+
+test('panneau : liste de tâches finie (vu : 2 étapes restées « à faire » et une étape reformulée en double) → étapes d\'avant cochées, reformulation fusionnée', () => {
+  const D = makeDom();
+  const say = t => { D.event({ type: 'text', delta: t }); D.event({ type: 'textEnd' }); D.flushFrames(); };
+  say('- [ ] Relire le code actuel et les guides de design\n- [ ] Définir une nouvelle direction artistique\n- [ ] Réécrire entièrement la vitrine\n- [ ] Tester les fonctions et inspecter les captures\n');
+  say('- [x] Réécrire entièrement la vitrine\n- [x] Tester les fonctions et vérifier les captures\n\nLa refonte est terminée.');
+  const html = D.log.querySelectorAll('.msg-ai').map(e => e.innerHTML).join('');
+  assert.equal(html.split('class="task-card"').length - 1, 1);
+  assert.equal((html.match(/<li class="task tk /g) || []).length, 4, 'étape reformulée : pas de doublon');
+  assert.equal((html.match(/tk done/g) || []).length, 4, 'toutes cochées');
+  assert.match(html, /vérifier les captures/);
+  assert.doesNotMatch(html, /inspecter les captures/, 'le nouveau texte remplace l\'ancien');
+  // une étape en cours après les étapes faites reste en cours, et la suivante reste à faire
+  const L = makeDom();
+  const say2 = t => { L.event({ type: 'text', delta: t }); L.event({ type: 'textEnd' }); L.flushFrames(); };
+  say2('- [ ] A un\n- [ ] B deux\n- [ ] C trois\n');
+  say2('- [x] B deux\n- [~] C trois\n');
+  const h2 = L.log.querySelectorAll('.msg-ai').map(e => e.innerHTML).join('');
+  assert.match(h2, /tk done[\s\S]*A un[\s\S]*tk done[\s\S]*B deux[\s\S]*tk doing[\s\S]*C trois/);
+  // deux étapes différentes qui commencent pareil ne sont pas fusionnées
+  const M = makeDom();
+  const say3 = t => { M.event({ type: 'text', delta: t }); M.event({ type: 'textEnd' }); M.flushFrames(); };
+  say3('- [ ] Tester le menu principal\n- [ ] Tester le paiement par carte bancaire\n');
+  say3('- [x] Tester le menu principal\n');
+  const h3 = M.log.querySelectorAll('.msg-ai').map(e => e.innerHTML).join('');
+  assert.equal((h3.match(/<li class="task tk /g) || []).length, 2);
+  assert.match(h3, /tk todo[\s\S]*paiement/);
+});
